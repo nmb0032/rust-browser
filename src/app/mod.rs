@@ -1,12 +1,12 @@
 use crate::html::parser;
+use crate::net::fetch_html;
 
 // First path: app → engine → navigation/net → html → dom → css/style → layout → paint/render
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "{:#?}",
-        parser::parse(
-            r#"<html><body><main><h1>Hello, browser!</h1><p>Welcome to our page.</p><ul><li>Parse elements</li><li>Parse nested content</li></ul></main></body></html>"#
-        )
-    );
+    let html = fetch_html("https://example.com")?;
+    let document = parser::parse(&html)
+        .map_err(|error| std::io::Error::other(format!("HTML parse failed: {error:?}")))?;
+
+    println!("{document:#?}");
     Ok(())
 }
