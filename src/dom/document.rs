@@ -4,6 +4,7 @@
 
 use super::node::{ElementData, Node, NodeId, NodeKind};
 
+#[derive(Debug)]
 pub struct Document {
     root: NodeId,
     nodes: Vec<Node>,
