@@ -7,3 +7,6 @@ edition = "2024"
 ureq = "3"
 url = "2"
 clap = { version = "4", features = ["derive"] }
+winit = "0.30.13"
+softbuffer = "0.4.8"
+fontdue = "0.9.4"

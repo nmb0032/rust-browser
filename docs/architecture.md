@@ -186,10 +186,10 @@ Milestones 6, 7, and 8 are independent and can be interleaved.
 
 **Goal:** See the page's words in a real window as early as possible.
 
-- [ ] **1.1 Open a window.** Use `winit` for the window and `softbuffer` for a
+- [x] **1.1 Open a window.** Use `winit` for the window and `softbuffer` for a
   CPU framebuffer. Fill it with white.
   *You'll see:* an empty browser window that closes cleanly.
-- [ ] **1.2 Draw one string.** Bundle an open-licensed font (for example Noto
+- [x] **1.2 Draw one string.** Bundle an open-licensed font (for example Noto
   Sans, under `assets/fonts/`) and rasterize glyphs with `fontdue` or
   `ab_glyph`. **(naive)** No shaping yet; replaced in 8.6.
   *You'll see:* "Hello, browser" rendered in the window.
