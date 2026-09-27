@@ -1,0 +1,39 @@
+#document
+  "\r\n"
+  <html lang="en">
+    "\r\n"
+    <head>
+      "\r\n    "
+      <meta charset="UTF-8">
+      "\r\n    "
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      "\r\n    "
+      <title>
+        "My Simple Page"
+      "\r\n"
+    "\r\n"
+    <body>
+      "\r\n\r\n    "
+      <h1>
+        "Welcome to My Website"
+      "\r\n    "
+      <p>
+        "This is a simple paragraph of text on my basic HTML page."
+      "\r\n\r\n    "
+      <ul>
+        "\r\n        "
+        <li>
+          "First item"
+        "\r\n        "
+        <li>
+          "Second item"
+        "\r\n        "
+        <li>
+          "Third item"
+        "\r\n    "
+      "\r\n\r\n    "
+      <a href="https://example.com">
+        "Visit Example Link"
+      "\r\n\r\n"
+    "\r\n"
+  "\r\n"

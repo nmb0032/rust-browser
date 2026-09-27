@@ -1,0 +1,6 @@
+#document
+  <section id="root">
+    <input disabled="" value="hello">
+    <br>
+    "after"
+  "\r\n"
