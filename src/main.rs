@@ -1,4 +1,5 @@
-use clap::{Parser, ValueEnum};
+use clap::Parser;
+use rust_browser::app::DumpFormat;
 
 #[derive(Parser)]
 struct Args {
@@ -9,12 +10,7 @@ struct Args {
     dump: Option<DumpFormat>,
 }
 
-#[derive(Clone, ValueEnum)]
-enum DumpFormat {
-    Dom,
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    rust_browser::app::run(&args.location, args.dump.is_some())
+    rust_browser::app::run(&args.location, args.dump)
 }

@@ -1,7 +1,12 @@
 use crate::dom::{Document, NodeId, NodeKind};
+use crate::paint::DisplayItem;
 
 pub fn dump_dom(document: &Document) {
     dump_node(document, document.root_id(), 0);
+}
+
+pub fn dump_display_list(display_list: &[DisplayItem]) {
+    println!("{display_list:#?}");
 }
 
 fn dump_node(document: &Document, id: NodeId, depth: usize) {

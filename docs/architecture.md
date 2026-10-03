@@ -193,21 +193,21 @@ Milestones 6, 7, and 8 are independent and can be interleaved.
   Sans, under `assets/fonts/`) and rasterize glyphs with `fontdue` or
   `ab_glyph`. **(naive)** No shaping yet; replaced in 8.6.
   *You'll see:* "Hello, browser" rendered in the window.
-- [ ] **1.3 Draw the document's text.** Walk the DOM, collect text nodes, and
+- [x] **1.3 Draw the document's text.** Walk the DOM, collect text nodes, and
   skip `head`, `script`, and `style`. Draw them one after another on a single
   line. **(naive)** Replaced by layout in Milestone 2.
   *You'll see:* example.com's words in the window.
-- [ ] **1.4 Wrap words.** Split text on whitespace and start a new line when
+- [x] **1.4 Wrap words.** Split text on whitespace and start a new line when
   the next word would overflow the window width. **(naive)** Replaced by
   inline layout in 8.4.
   *You'll see:* readable paragraphs.
-- [ ] **1.5 Re-wrap on resize.** Recompute line positions on window resize.
+- [x] **1.5 Re-wrap on resize.** Recompute line positions on window resize.
   *You'll see:* text reflowing as you drag the window edge, which is layout
   reacting to viewport changes.
-- [ ] **1.6 Scroll.** Offset drawing by a scroll position controlled by the
+- [x] **1.6 Scroll.** Offset drawing by a scroll position controlled by the
   mouse wheel and arrow keys. Draw only lines that are visible.
   *You'll see:* long pages that you can scroll.
-- [ ] **1.7 Introduce a display list.** Have text placement produce
+- [x] **1.7 Introduce a display list.** Have text placement produce
   `Vec<DisplayItem>` values such as `Text { x, y, text, size }` and
   `Rect { x, y, w, h, color }`, then have a separate rasterizer draw them.
   *You'll see:* the same output, now with the paint/raster separation real
