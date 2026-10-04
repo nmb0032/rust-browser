@@ -1,39 +1,39 @@
 #document
-  "\r\n"
+  "\n"
   <html lang="en">
-    "\r\n"
+    "\n"
     <head>
-      "\r\n    "
+      "\n    "
       <meta charset="UTF-8">
-      "\r\n    "
+      "\n    "
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      "\r\n    "
+      "\n    "
       <title>
         "My Simple Page"
-      "\r\n"
-    "\r\n"
+      "\n"
+    "\n"
     <body>
-      "\r\n\r\n    "
+      "\n\n    "
       <h1>
         "Welcome to My Website"
-      "\r\n    "
+      "\n    "
       <p>
         "This is a simple paragraph of text on my basic HTML page."
-      "\r\n\r\n    "
+      "\n\n    "
       <ul>
-        "\r\n        "
+        "\n        "
         <li>
           "First item"
-        "\r\n        "
+        "\n        "
         <li>
           "Second item"
-        "\r\n        "
+        "\n        "
         <li>
           "Third item"
-        "\r\n    "
-      "\r\n\r\n    "
+        "\n    "
+      "\n\n    "
       <a href="https://example.com">
         "Visit Example Link"
-      "\r\n\r\n"
-    "\r\n"
-  "\r\n"
+      "\n\n"
+    "\n"
+  "\n"

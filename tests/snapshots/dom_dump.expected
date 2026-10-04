@@ -3,4 +3,4 @@
     <input disabled="" value="hello">
     <br>
     "after"
-  "\r\n"
+  "\n"

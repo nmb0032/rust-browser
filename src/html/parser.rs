@@ -42,7 +42,8 @@ impl From<DomError> for HtmlError {
 }
 
 pub fn parse(source: &str) -> Result<Document, HtmlError> {
-    let tokens = tokenize(source)?;
+    let normalized_source = source.replace("\r\n", "\n").replace('\r', "\n");
+    let tokens = tokenize(&normalized_source)?;
     build_document(tokens)
 }
 
@@ -395,6 +396,18 @@ mod tests {
         assert!(matches!(
             document.node(link.children()[0]).unwrap().kind(),
             NodeKind::Text(text) if text == "there"
+        ));
+    }
+
+    #[test]
+    fn normalizes_html_newlines_in_text() {
+        let document = parse("<p>one\r\ntwo\rthree\nfour</p>").unwrap();
+        let root = document.node(document.root_id()).unwrap();
+        let paragraph = document.node(root.children()[0]).unwrap();
+
+        assert!(matches!(
+            document.node(paragraph.children()[0]).unwrap().kind(),
+            NodeKind::Text(text) if text == "one\ntwo\nthree\nfour"
         ));
     }
 
