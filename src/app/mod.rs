@@ -8,6 +8,7 @@ pub enum DumpFormat {
     Layout,
     DisplayList,
     Stylesheets,
+    CssTokens,
     ParseErrors,
 }
 
@@ -30,7 +31,10 @@ pub fn run(
 }
 
 fn dump_frame(frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
-    if matches!(dump, DumpFormat::Dom | DumpFormat::Stylesheets) {
+    if matches!(
+        dump,
+        DumpFormat::Dom | DumpFormat::Stylesheets | DumpFormat::CssTokens
+    ) {
         for diagnostic in &frame.stylesheets.diagnostics {
             eprintln!(
                 "CSS/resource at {:?}: {}",
@@ -39,6 +43,9 @@ fn dump_frame(frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
         }
     }
     match dump {
+        DumpFormat::CssTokens => {
+            print!("{}", crate::devtools::format_document_css_tokens(&frame));
+        }
         DumpFormat::Stylesheets => {
             crate::devtools::dump_stylesheets(&frame.stylesheets.stylesheets);
         }

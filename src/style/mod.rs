@@ -13,7 +13,7 @@ pub use cascade::{StyleResolution, resolve, resolve_with_stylesheets};
 pub use computed::{ComputedStyle, ComputedStyles, Display};
 pub use stylesheets::{
     AuthorStylesheet, Diagnostic, StylesheetCollection, collect_stylesheets,
-    collect_stylesheets_with_external,
+    collect_stylesheets_with_external, embedded_stylesheet_source,
 };
 
 #[cfg(test)]

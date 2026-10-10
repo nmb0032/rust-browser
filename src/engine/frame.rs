@@ -1,3 +1,5 @@
+use std::{collections::HashMap, sync::Arc};
+
 use url::Url;
 
 use crate::{
@@ -8,10 +10,17 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+pub struct StylesheetSource {
+    pub source: Arc<str>,
+    pub url: Url,
+}
+
+#[derive(Clone, Debug)]
 pub struct Frame {
     pub url: Url,
     pub document: Document,
     pub stylesheets: StylesheetCollection,
+    pub external_stylesheet_sources: HashMap<NodeId, StylesheetSource>,
     pub styles: ComputedStyles,
     pub images: ImageMap,
     pub error: Option<String>,
@@ -32,6 +41,7 @@ impl Frame {
             url,
             document,
             stylesheets: resolution.stylesheets,
+            external_stylesheet_sources: HashMap::new(),
             styles: resolution.styles,
             images: ImageMap::new(),
             error: None,

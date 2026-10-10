@@ -2,6 +2,74 @@ use crate::dom::{Document, NodeKind};
 use crate::layout::{BoxKind, LayoutBox, LayoutTree};
 use crate::paint::DisplayItem;
 
+pub fn format_css_tokens(source: &str) -> String {
+    use crate::css::tokenizer::Tokenizer;
+    use std::fmt::Write;
+
+    let mut tokenizer = Tokenizer::default();
+    tokenizer.feed(source);
+    tokenizer.finish();
+    let mut output = String::new();
+    while let Some(token) = tokenizer.next_token() {
+        writeln!(
+            output,
+            "  {}:{} (bytes {}..{}): {:?}",
+            token.span.start.line,
+            token.span.start.column,
+            token.span.start.byte_offset,
+            token.span.end.byte_offset,
+            token.kind
+        )
+        .expect("writing a string cannot fail");
+    }
+    for error in tokenizer.errors() {
+        writeln!(
+            output,
+            "  error {}:{} (byte {}): {}",
+            error.position.line, error.position.column, error.position.byte_offset, error.code
+        )
+        .expect("writing a string cannot fail");
+    }
+    if tokenizer.dropped_errors() > 0 {
+        writeln!(
+            output,
+            "  {} additional CSS tokenization errors omitted",
+            tokenizer.dropped_errors()
+        )
+        .expect("writing a string cannot fail");
+    }
+    output
+}
+
+pub fn format_document_css_tokens(frame: &crate::engine::Frame) -> String {
+    use std::fmt::Write;
+
+    let mut output = String::new();
+    for node_id in frame.document.preorder() {
+        if let Some(sheet) = frame.external_stylesheet_sources.get(&node_id) {
+            writeln!(output, "Stylesheet ({}, node {node_id:?})", sheet.url)
+                .expect("writing a string cannot fail");
+            output.push_str(&format_css_tokens(&sheet.source));
+        }
+        if let Some(source) = crate::style::embedded_stylesheet_source(&frame.document, node_id) {
+            writeln!(output, "Stylesheet (<style>, node {node_id:?})")
+                .expect("writing a string cannot fail");
+            output.push_str(&format_css_tokens(&source));
+        }
+        if let Some(source) = frame
+            .document
+            .node(node_id)
+            .and_then(|node| node.as_element())
+            .and_then(|element| element.attribute("style"))
+        {
+            writeln!(output, "Inline style (node {node_id:?})")
+                .expect("writing a string cannot fail");
+            output.push_str(&format_css_tokens(source));
+        }
+    }
+    output
+}
+
 pub fn dump_stylesheets(stylesheets: &[crate::style::AuthorStylesheet]) {
     print!("{}", format_stylesheets(stylesheets));
 }

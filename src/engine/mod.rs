@@ -7,7 +7,7 @@ mod navigation;
 mod resources;
 mod urls;
 
-pub use frame::{FragmentTarget, Frame};
+pub use frame::{FragmentTarget, Frame, StylesheetSource};
 pub use history::{History, HistoryEntry};
 pub use loader::{LoadOptions, load_page};
 pub use navigation::{LoadEvent, Navigation};

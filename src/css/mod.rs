@@ -7,11 +7,13 @@
 //! not implemented yet.
 //!
 //! This parser is not yet the full CSS Syntax specification: it does not
-//! tokenize selector/value grammars or perform browser-style error recovery.
+//! consume the spec tokenizer or perform browser-style error recovery.
+//! `tokenizer` independently implements the CSS Syntax lexical stage.
 
 mod ast;
 mod parser;
 pub mod selectors;
+pub mod tokenizer;
 pub mod values;
 
 pub use ast::{AtRule, BlockItem, Declaration, QualifiedRule, Rule, Stylesheet};

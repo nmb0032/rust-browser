@@ -58,12 +58,12 @@ keeping the codebase small enough to learn from.
 
 | Area | Location | Status |
 | --- | --- | --- |
-| App entry | `src/app` | Starts interactive browsing or resource-aware DOM/stylesheet/layout/display-list dumps. |
+| App entry | `src/app` | Starts interactive browsing or resource-aware DOM/stylesheet/CSS-token/layout/display-list dumps. |
 | Engine | `src/engine` | Owns document snapshots, final/base URLs, external resources, cancellable loading, and bounded back/forward history. |
 | Networking | `src/net` | Bounded HTTP/file bodies, GET redirects, response metadata, raw document-byte streaming, and explicit UTF-8 text utilities. |
 | HTML/XML | `src/html`, `src/xml` | Resumable UTF-8/lossless UTF-16 tokenization, insertion-mode tree construction, contextual fragments, encoding sniffing/restarts, and bounded XML parsing; all applicable current-WHATWG fixture outputs and diagnostics pass. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
-| CSS | `src/css` | Rule-level syntax tree, simple selector matching/specificity, and color/length value parsers. |
+| CSS | `src/css` | Resumable CSS Syntax tokenizer with diagnostics; existing rule-level syntax tree, simple selector matching/specificity, and color/length value parsers. |
 | Style | `src/style` | Embedded/external sheets in document order, inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
 | Layout | `src/layout` | Block/inline boxes, image sizing, spacing, text, list markers, and naive fragment-aware hit testing. |
 | Paint | `src/paint` | Rasterizes text, backgrounds, borders, and shared RGBA images with clipping, scaling, alpha blending, and scrolling. |
@@ -875,10 +875,37 @@ not comparisons of encoding throughput on equivalent trees.
 
 **Goal:** Parse and cascade CSS as the CSS specifications define.
 
-- [ ] **7.1 Add a CSS tokenizer.** Implement CSS Syntax Level 3 tokens:
+- [x] **7.1 Add a CSS tokenizer.** Implement CSS Syntax Level 3 tokens:
   identifiers, functions, hashes, strings, numbers, dimensions, and
   percentages.
   *You'll see:* `--dump=css-tokens` and passing css-parsing-tests token cases.
+
+  `src/css/tokenizer/` implements the default CSS Syntax token stream:
+  preprocessing, comments, escapes, numeric type/sign/source spelling, hashes,
+  strings, URLs, functions, delimiters, and punctuation. Feed decoded UTF-8
+  chunks with `feed()`, drain `next_token()`, then call `finish()` and drain
+  through EOF. Token spans retain original UTF-8 byte offsets and normalized
+  line/column positions. Recoverable lexical diagnostics are capped at 256,
+  with an explicit omitted-error count. Unicode-range descriptors require a
+  later parser-level opt-in rather than changing default tokenization.
+
+  Run `cargo run -- tests/pages/styles.html --dump=css-tokens` to inspect
+  embedded, external, and inline CSS in document order, including source text
+  rejected by the existing rule parser. External sources retain final redirect
+  URLs and share cached text. The rule parser and rendering behavior are
+  unchanged; consuming these tokens and recovering rules is step 7.2.
+
+  **Token conformance:** all 44 pinned css-parsing-tests component-value cases
+  pass with current-spec expectations; 43/44 match the historical expectations.
+  The single audited update follows the current non-ASCII ident code point
+  ranges (U+0080/U+0081 are delimiters). Original fixtures remain unchanged,
+  and no cases are skipped. The harness compares numeric values/type flags
+  rather than serializer spelling and expands legacy match operators into
+  current delimiter tokens. Every UTF-8 chunk boundary is checked for identical
+  tokens, positions, and diagnostics; regressions also cover long tokens,
+  input compaction, error limits, and EOF recovery. See
+  `tests/fixtures/css-parsing/README.md` for provenance and adaptation details.
+
 - [ ] **7.2 Rebuild the rule parser on tokens.** Keep the current AST, and use
   spec error recovery so an invalid declaration or rule drops only itself.
   *You'll see:* broken CSS no longer discards the rest of the stylesheet.

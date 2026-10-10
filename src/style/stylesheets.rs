@@ -34,32 +34,12 @@ pub fn collect_stylesheets_with_external(
 ) -> StylesheetCollection {
     let mut result = StylesheetCollection::default();
     for node_id in document.preorder() {
-        let Some(node) = document.node(node_id) else {
-            continue;
-        };
         if let Some(sheet) = external.get(&node_id) {
             result.stylesheets.push(sheet.clone());
         }
-        let Some(element) = node.as_element() else {
+        let Some(source) = embedded_stylesheet_source(document, node_id) else {
             continue;
         };
-        if !element.tag_name().eq_ignore_ascii_case("style")
-            || element.attribute("type").is_some_and(|value| {
-                !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("text/css")
-            })
-        {
-            continue;
-        }
-        let mut source = String::new();
-        let mut children = node.children().iter().rev().copied().collect::<Vec<_>>();
-        while let Some(child) = children.pop() {
-            if let Some(node) = document.node(child) {
-                match node.kind() {
-                    NodeKind::Text(text) => source.push_str(text),
-                    _ => children.extend(node.children().iter().rev().copied()),
-                }
-            }
-        }
         match css::parse(&source) {
             Ok(stylesheet) => result.stylesheets.push(AuthorStylesheet {
                 node_id,
@@ -73,4 +53,27 @@ pub fn collect_stylesheets_with_external(
         }
     }
     result
+}
+
+pub fn embedded_stylesheet_source(document: &Document, node_id: NodeId) -> Option<String> {
+    let node = document.node(node_id)?;
+    let element = node.as_element()?;
+    if !element.tag_name().eq_ignore_ascii_case("style")
+        || element.attribute("type").is_some_and(|value| {
+            !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("text/css")
+        })
+    {
+        return None;
+    }
+    let mut source = String::new();
+    let mut children = node.children().iter().rev().copied().collect::<Vec<_>>();
+    while let Some(child) = children.pop() {
+        if let Some(node) = document.node(child) {
+            match node.kind() {
+                NodeKind::Text(text) => source.push_str(text),
+                _ => children.extend(node.children().iter().rev().copied()),
+            }
+        }
+    }
+    Some(source)
 }

@@ -8,7 +8,9 @@ use crate::{
     style::{self, AuthorStylesheet, Diagnostic},
 };
 
-use super::{Frame, document_base_url, loader::check_cancelled, urls::check_page_reference};
+use super::{
+    Frame, StylesheetSource, document_base_url, loader::check_cancelled, urls::check_page_reference,
+};
 
 const MAX_RESOURCES: usize = 128;
 const MAX_PAGE_IMAGE_BYTES: usize = 128 * 1024 * 1024;
@@ -111,11 +113,30 @@ pub(super) fn load_resources(
                         return Err(io::Error::other("page CSS exceeds 16 MiB").into());
                     }
                     let source = std::str::from_utf8(&resource.bytes)?;
-                    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-                    let sheet = Arc::new((Arc::new(css::parse(source)?), resource.metadata.url));
+                    let source: Arc<str> =
+                        Arc::from(source.strip_prefix('\u{feff}').unwrap_or(source));
+                    frame.external_stylesheet_sources.insert(
+                        id,
+                        StylesheetSource {
+                            source: Arc::clone(&source),
+                            url: resource.metadata.url.clone(),
+                        },
+                    );
+                    let sheet = Arc::new((
+                        Arc::new(css::parse(&source)?),
+                        resource.metadata.url,
+                        source,
+                    ));
                     css_cache.insert(url, Arc::clone(&sheet));
                     sheet
                 };
+                frame.external_stylesheet_sources.insert(
+                    id,
+                    StylesheetSource {
+                        source: Arc::clone(&sheet.2),
+                        url: sheet.1.clone(),
+                    },
+                );
                 external.insert(
                     id,
                     AuthorStylesheet {
