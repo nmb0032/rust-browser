@@ -213,6 +213,79 @@ fn redirected_url_without_base_is_used_for_relative_resources() {
 }
 
 #[test]
+fn malformed_external_css_is_recovered_cached_and_applied_at_each_document_slot() {
+    let server = Server::new(
+        vec![
+            (
+                "/",
+                Reply::ok(
+                    "text/html",
+                    b"<style>p {color:red; broken; margin:1px}</style>\
+                    <link rel='stylesheet' href='recover.css'>\
+                    <style>p {padding:8px}</style>\
+                    <link rel='stylesheet' href='recover.css'>\
+                    <p id='target' style='color:green; broken; width:4px'>text</p>\
+                    <h1 id='heading'>heading</h1>"
+                        .to_vec(),
+                ),
+            ),
+            ("/recover.css", Reply::redirect("/final.css")),
+            (
+                "/final.css",
+                Reply::ok(
+                    "text/css",
+                    b"p {color:blue; broken; width:2px} h1 {color:gold} p {padding:3px".to_vec(),
+                ),
+            ),
+        ],
+        3,
+    );
+    let frame = load_page(&server.url, LoadOptions::default(), |_| Ok(()), || false).unwrap();
+    assert_eq!(frame.stylesheets.stylesheets.len(), 4);
+    assert_eq!(frame.stylesheets.diagnostics.len(), 6);
+    let first = &frame.stylesheets.stylesheets[1];
+    let last = &frame.stylesheets.stylesheets[3];
+    assert!(Arc::ptr_eq(&first.stylesheet, &last.stylesheet));
+    assert_eq!(first.url, Some(server.url.join("final.css").unwrap()));
+    assert_eq!(last.url, first.url);
+    assert!(Arc::ptr_eq(
+        &frame.external_stylesheet_sources[&first.node_id].source,
+        &frame.external_stylesheet_sources[&last.node_id].source,
+    ));
+    for sheet in [first, last] {
+        let errors = frame
+            .stylesheets
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.node_id == Some(sheet.node_id))
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().all(|diagnostic| {
+            diagnostic.message.contains("recover.css") && diagnostic.message.contains("final.css")
+        }));
+    }
+    let target = frame.styles.get(id(&frame, "target")).unwrap();
+    assert_eq!(target.color, Some(0x008000));
+    assert_eq!(
+        target.width,
+        Some(rust_browser::css::values::Length::Px(4.0))
+    );
+    assert_eq!(
+        target.margin,
+        rust_browser::css::values::Edges::all(rust_browser::css::values::Length::Px(1.0))
+    );
+    assert_eq!(
+        target.padding,
+        rust_browser::css::values::Edges::all(rust_browser::css::values::Length::Px(3.0))
+    );
+    assert_eq!(
+        frame.styles.get(id(&frame, "heading")).unwrap().color,
+        Some(0xFFD700)
+    );
+    assert_eq!(server.finish(), ["/", "/recover.css", "/final.css"]);
+}
+
+#[test]
 fn redirect_fragment_overrides_the_requested_fragment() {
     let server = Server::new(
         vec![
@@ -316,7 +389,11 @@ fn failed_css_images_and_wrong_mime_are_diagnostic_without_failing_the_page() {
     let frame = load_page(&server.url, LoadOptions::default(), |_| Ok(()), || false).unwrap();
     assert!(frame.error.is_none());
     assert!(frame.images.is_empty());
-    assert!(frame.stylesheets.stylesheets.is_empty());
+    assert_eq!(frame.stylesheets.stylesheets.len(), 1);
+    let rules = frame.stylesheets.stylesheets[0].stylesheet.rules();
+    assert!(
+        matches!(rules, [rust_browser::css::Rule::Qualified(rule)] if rule.prelude() == "p" && rule.items().is_empty())
+    );
     let messages = frame
         .stylesheets
         .diagnostics

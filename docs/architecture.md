@@ -63,15 +63,15 @@ keeping the codebase small enough to learn from.
 | Networking | `src/net` | Bounded HTTP/file bodies, GET redirects, response metadata, raw document-byte streaming, and explicit UTF-8 text utilities. |
 | HTML/XML | `src/html`, `src/xml` | Resumable UTF-8/lossless UTF-16 tokenization, insertion-mode tree construction, contextual fragments, encoding sniffing/restarts, and bounded XML parsing; all applicable current-WHATWG fixture outputs and diagnostics pass. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
-| CSS | `src/css` | Resumable CSS Syntax tokenizer with diagnostics; existing rule-level syntax tree, simple selector matching/specificity, and color/length value parsers. |
+| CSS | `src/css` | Resumable CSS Syntax tokenizer and token-based rule parsing with bounded diagnostics/recovery; source-retaining AST, simple selector matching/specificity, and color/length value parsers. |
 | Style | `src/style` | Embedded/external sheets in document order, inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
 | Layout | `src/layout` | Block/inline boxes, image sizing, spacing, text, list markers, and naive fragment-aware hit testing. |
 | Paint | `src/paint` | Rasterizes text, backgrounds, borders, and shared RGBA images with clipping, scaling, alpha blending, and scrolling. |
 | Media | `src/media` | Bounded PNG/JPEG/GIF/WebP decoding, with shared intrinsic-size image data. |
 | Window | `src/ui` | Click navigation, back/forward shortcuts, scroll restoration, and current URL/loading/error titles. |
 
-The DOM arena with stable IDs is a good foundation. The existing CSS rule
-parser is used in Milestone 4 and rebuilt on a tokenizer in Milestone 7.
+The DOM arena with stable IDs is a good foundation. The CSS rule parser used
+in Milestone 4 has been rebuilt on the tokenizer in steps 7.1 and 7.2.
 
 ## Target architecture
 
@@ -433,10 +433,10 @@ width, margin, and padding resolve against the containing block's width.
 
 **Naive limitations:** The HTML parser buffers `<style>` contents as raw text
 until its closing tag or EOF, including across chunk boundaries. This is not
-a complete raw-text tokenizer. A malformed CSS syntax tree rejects its
-entire sheet or inline declaration list; invalid/unsupported selectors and
-typed values are ignored with diagnostics. At-rules, media-query semantics,
-advanced selectors, alpha colors, margin collapsing,
+a complete raw-text tokenizer. The original whole-sheet/inline-list CSS
+rejection was replaced by token-based recovery in 7.2; invalid/unsupported
+selectors and typed values are still ignored with diagnostics. At-rules,
+media-query semantics, advanced selectors, alpha colors, margin collapsing,
 auto margins, and font-face selection are still deferred. `font-family` is
 computed and inherited, but rasterization uses the bundled face. Nonzero
 border widths paint solid rectangular strips without a `border-style`
@@ -892,8 +892,8 @@ not comparisons of encoding throughput on equivalent trees.
   Run `cargo run -- tests/pages/styles.html --dump=css-tokens` to inspect
   embedded, external, and inline CSS in document order, including source text
   rejected by the existing rule parser. External sources retain final redirect
-  URLs and share cached text. The rule parser and rendering behavior are
-  unchanged; consuming these tokens and recovering rules is step 7.2.
+  URLs and share cached text. Step 7.1 left the rule parser and rendering
+  unchanged; step 7.2 now consumes these tokens and recovers rules.
 
   **Token conformance:** all 44 pinned css-parsing-tests component-value cases
   pass with current-spec expectations; 43/44 match the historical expectations.
@@ -906,9 +906,43 @@ not comparisons of encoding throughput on equivalent trees.
   input compaction, error limits, and EOF recovery. See
   `tests/fixtures/css-parsing/README.md` for provenance and adaptation details.
 
-- [ ] **7.2 Rebuild the rule parser on tokens.** Keep the current AST, and use
+- [x] **7.2 Rebuild the rule parser on tokens.** Keep the current AST, and use
   spec error recovery so an invalid declaration or rule drops only itself.
   *You'll see:* broken CSS no longer discards the rest of the stylesheet.
+
+  `css::parse_recovering` and `css::parse_declarations_recovering` return the
+  existing AST plus lexical/syntax diagnostics and an exact omitted-error
+  count. Embedded sheets, cached external sheets, and inline styles use these
+  entry points, so valid declarations/rules before and after a bad construct
+  still reach the cascade. External diagnostics retain each link's node,
+  requested resource, and final redirect URL. `css::parse` and
+  `css::parse_declarations` remain strict compatibility wrappers for callers
+  such as the bundled user-agent sheet.
+
+  Parsing follows CSS Syntax component boundaries rather than source-character
+  delimiter scans. Names are decoded from identifier/at-keyword tokens;
+  selector preludes and declaration values retain source text. Strings, URLs,
+  functions, and simple blocks shield their internal delimiters. `!important`
+  is recognized from the last two non-whitespace top-level tokens, including
+  comments and escapes. Top-level CDO/CDC tokens are ignored; at-rules may end
+  at EOF or a containing block boundary, and EOF closes unfinished blocks
+  without discarding their completed contents.
+
+  Recovery is not a heuristic that searches for the next semicolon or brace:
+  an unclosed function or simple block can consume the remaining input, and
+  a semicolon in a top-level qualified-rule prelude does not terminate it.
+  Nested bad declarations stop at a top-level semicolon or the containing
+  block boundary. Bad strings/URLs and unmatched closing delimiters invalidate
+  their declaration or rule prelude, not an entire stylesheet.
+
+  Component indexing is iterative, including deeply nested function values.
+  Rule-block nesting is capped at 128; an over-limit rule is skipped with a
+  diagnostic. The earliest 256 combined lexical/syntax diagnostics are retained
+  in original UTF-8 byte order, with an explicit omitted count. Regressions cover
+  nested/custom-property blocks, malformed-token combinations, EOF recovery,
+  diagnostic limits, cascade/CLI behavior, and malformed external sheets reused
+  from cache at multiple document slots. Selector/property grammars and at-rule
+  semantics remain separate; this does not claim full CSS/WPT conformance.
 - [ ] **7.3 Complete selectors.** Add attribute selectors, child and sibling
   combinators, and pseudo-classes such as `:first-child` and `:not()`.
   *You'll see:* selector tests for each new form.

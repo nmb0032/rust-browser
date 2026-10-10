@@ -6,9 +6,10 @@
 //! nested blocks are represented in the tree even when their semantics are
 //! not implemented yet.
 //!
-//! This parser is not yet the full CSS Syntax specification: it does not
-//! consume the spec tokenizer or perform browser-style error recovery.
-//! `tokenizer` independently implements the CSS Syntax lexical stage.
+//! The rule parser consumes CSS Syntax tokens and recovers at component-value
+//! boundaries. Recovering entry points return the tree with bounded diagnostics;
+//! strict compatibility entry points return the first error instead.
+//! Property/selector grammars and at-rule semantics remain the style stage's job.
 
 mod ast;
 mod parser;
@@ -17,7 +18,10 @@ pub mod tokenizer;
 pub mod values;
 
 pub use ast::{AtRule, BlockItem, Declaration, QualifiedRule, Rule, Stylesheet};
-pub use parser::{CssError, CssErrorKind, parse, parse_declarations};
+pub use parser::{
+    CssError, CssErrorKind, MAX_RULE_NESTING, ParseOutput, parse, parse_declarations,
+    parse_declarations_recovering, parse_recovering,
+};
 
 pub(crate) fn without_comments(source: &str) -> Option<String> {
     let mut result = String::with_capacity(source.len());

@@ -40,19 +40,36 @@ pub fn collect_stylesheets_with_external(
         let Some(source) = embedded_stylesheet_source(document, node_id) else {
             continue;
         };
-        match css::parse(&source) {
-            Ok(stylesheet) => result.stylesheets.push(AuthorStylesheet {
-                node_id,
-                stylesheet: Arc::new(stylesheet),
-                url: None,
-            }),
-            Err(error) => result.diagnostics.push(Diagnostic {
-                node_id: Some(node_id),
-                message: error.to_string(),
-            }),
-        }
+        let parsed = css::parse_recovering(&source);
+        report_css_errors(&parsed, node_id, "", &mut result.diagnostics);
+        result.stylesheets.push(AuthorStylesheet {
+            node_id,
+            stylesheet: Arc::new(parsed.value),
+            url: None,
+        });
     }
     result
+}
+
+pub(crate) fn report_css_errors<T>(
+    parsed: &css::ParseOutput<T>,
+    node_id: NodeId,
+    context: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.extend(parsed.errors.iter().map(|error| Diagnostic {
+        node_id: Some(node_id),
+        message: format!("{context}{error}"),
+    }));
+    if parsed.dropped_errors > 0 {
+        diagnostics.push(Diagnostic {
+            node_id: Some(node_id),
+            message: format!(
+                "{context}{} additional CSS parse errors omitted",
+                parsed.dropped_errors
+            ),
+        });
+    }
 }
 
 pub fn embedded_stylesheet_source(document: &Document, node_id: NodeId) -> Option<String> {

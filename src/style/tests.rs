@@ -55,7 +55,7 @@ fn collects_style_text_in_document_order_and_reports_malformed_sheets() {
     )
     .unwrap();
     let result = collect_stylesheets(&document);
-    assert_eq!(result.stylesheets.len(), 2);
+    assert_eq!(result.stylesheets.len(), 3);
     assert_eq!(result.diagnostics.len(), 1);
     let style = styled(
         "<style>p {color:red}</style><style>p {color:blue}</style><p id='p'>text</p>",
@@ -112,6 +112,60 @@ fn invalid_values_do_not_displace_valid_declarations_and_errors_are_available() 
         Some(0xFF0000)
     );
     assert_eq!(result.stylesheets.diagnostics.len(), 5);
+}
+
+#[test]
+fn syntax_recovery_keeps_valid_embedded_and_inline_styles_and_rule_order() {
+    let document = parser::parse(
+        "<style>p {color:red; broken; width:1px}\
+         p, :bad {color:purple} p {color:blue; padding:2px; padding:bad}</style>\
+         <p id='p' style='margin:3px; broken; color:green; width:4px'>text</p>",
+    )
+    .unwrap();
+    let result = resolve(&document);
+    let style = result.styles.get(find(&document, "p")).unwrap();
+    assert_eq!(style.color, Some(0x008000));
+    assert_eq!(style.width, Some(Length::Px(4.0)));
+    assert_eq!(style.padding, Edges::all(Length::Px(2.0)));
+    assert_eq!(style.margin, Edges::all(Length::Px(3.0)));
+    assert_eq!(result.stylesheets.diagnostics.len(), 4);
+    assert!(result.stylesheets.diagnostics.iter().any(|diagnostic| {
+        diagnostic.node_id == Some(find(&document, "p"))
+            && diagnostic
+                .message
+                .starts_with("inline style: CSS parse error")
+    }));
+}
+
+#[test]
+fn recovered_styles_report_omitted_syntax_diagnostics() {
+    let limit = crate::css::tokenizer::MAX_PARSE_ERRORS;
+    let document = parser::parse(&format!(
+        "<style>p {{{}color:red}}</style><p id='p' style='{}width:2px'>text</p>",
+        "broken;".repeat(limit + 2),
+        "broken;".repeat(limit + 3)
+    ))
+    .unwrap();
+    let result = resolve(&document);
+    assert_eq!(result.stylesheets.diagnostics.len(), 2 * (limit + 1));
+    assert_eq!(
+        result.styles.get(find(&document, "p")).unwrap().color,
+        Some(0xFF0000)
+    );
+    assert_eq!(
+        result.styles.get(find(&document, "p")).unwrap().width,
+        Some(Length::Px(2.0))
+    );
+    assert!(
+        result
+            .stylesheets
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message == "2 additional CSS parse errors omitted" })
+    );
+    assert!(result.stylesheets.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message == "inline style: 3 additional CSS parse errors omitted"
+    }));
 }
 
 #[test]

@@ -12,6 +12,7 @@ use crate::{
 use super::{
     ComputedStyle, ComputedStyles, Diagnostic, Display, StylesheetCollection, collect_stylesheets,
     declarations::{self, Property, StyledDeclaration, Value, WideKeyword},
+    report_css_errors,
 };
 
 const MAX_FONT_SIZE: f32 = 512.0;
@@ -119,41 +120,36 @@ pub fn resolve_with_stylesheets(
                     apply_rules(document, node_id, rules, true, sheet, &mut winners);
                 }
                 if let Some(source) = element.attribute("style") {
-                    match css::parse_declarations(source) {
-                        Ok(declarations) => {
-                            for (order, declaration) in declarations.iter().enumerate() {
-                                match declarations::parse(declaration, order) {
-                                    Ok(declarations) => {
-                                        for declaration in &declarations {
-                                            insert(
-                                                &mut winners,
-                                                declaration,
-                                                Priority {
-                                                    origin: if declaration.important {
-                                                        2
-                                                    } else {
-                                                        1
-                                                    },
-                                                    inline: true,
-                                                    specificity: Specificity::default(),
-                                                    sheet: 0,
-                                                    rule: 0,
-                                                    declaration: order,
-                                                },
-                                            );
-                                        }
-                                    }
-                                    Err(message) => stylesheets.diagnostics.push(Diagnostic {
-                                        node_id: Some(node_id),
-                                        message,
-                                    }),
+                    let parsed = css::parse_declarations_recovering(source);
+                    report_css_errors(
+                        &parsed,
+                        node_id,
+                        "inline style: ",
+                        &mut stylesheets.diagnostics,
+                    );
+                    for (order, declaration) in parsed.value.iter().enumerate() {
+                        match declarations::parse(declaration, order) {
+                            Ok(declarations) => {
+                                for declaration in &declarations {
+                                    insert(
+                                        &mut winners,
+                                        declaration,
+                                        Priority {
+                                            origin: if declaration.important { 2 } else { 1 },
+                                            inline: true,
+                                            specificity: Specificity::default(),
+                                            sheet: 0,
+                                            rule: 0,
+                                            declaration: order,
+                                        },
+                                    );
                                 }
                             }
+                            Err(message) => stylesheets.diagnostics.push(Diagnostic {
+                                node_id: Some(node_id),
+                                message,
+                            }),
                         }
-                        Err(error) => stylesheets.diagnostics.push(Diagnostic {
-                            node_id: Some(node_id),
-                            message: format!("inline style: {error}"),
-                        }),
                     }
                 }
                 compute(parent, &winners, node_id, &mut stylesheets.diagnostics)

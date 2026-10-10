@@ -122,8 +122,13 @@ pub(super) fn load_resources(
                             url: resource.metadata.url.clone(),
                         },
                     );
+                    let parsed = css::parse_recovering(&source);
                     let sheet = Arc::new((
-                        Arc::new(css::parse(&source)?),
+                        css::ParseOutput {
+                            value: Arc::new(parsed.value),
+                            errors: parsed.errors,
+                            dropped_errors: parsed.dropped_errors,
+                        },
                         resource.metadata.url,
                         source,
                     ));
@@ -137,11 +142,17 @@ pub(super) fn load_resources(
                         url: sheet.1.clone(),
                     },
                 );
+                style::report_css_errors(
+                    &sheet.0,
+                    id,
+                    &format!("resource {reference:?} ({}): ", sheet.1),
+                    &mut diagnostics,
+                );
                 external.insert(
                     id,
                     AuthorStylesheet {
                         node_id: id,
-                        stylesheet: Arc::clone(&sheet.0),
+                        stylesheet: Arc::clone(&sheet.0.value),
                         url: Some(sheet.1.clone()),
                     },
                 );

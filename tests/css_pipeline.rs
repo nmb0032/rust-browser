@@ -56,7 +56,7 @@ fn css_token_dump_reports_the_exact_omitted_diagnostic_count() {
 }
 
 #[test]
-fn css_token_dump_retains_rejected_sources_redirect_urls_and_cached_sheets() {
+fn css_token_dump_retains_recovered_sources_redirect_urls_and_cached_sheets() {
     let server = Server::new(
         vec![
             (
