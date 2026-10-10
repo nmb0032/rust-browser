@@ -10,7 +10,8 @@ pub fn format_stylesheets(stylesheets: &[crate::style::AuthorStylesheet]) -> Str
     use std::fmt::Write;
     let mut output = String::new();
     for (index, sheet) in stylesheets.iter().enumerate() {
-        writeln!(output, "Stylesheet {} (<style>)", index + 1)
+        let source = sheet.url.as_ref().map_or("<style>", |url| url.as_str());
+        writeln!(output, "Stylesheet {} ({source})", index + 1)
             .expect("writing a string cannot fail");
         for rule in sheet.stylesheet.rules() {
             format_rule(rule, 1, &mut output);

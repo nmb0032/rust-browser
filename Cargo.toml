@@ -10,6 +10,8 @@ clap = { version = "4", features = ["derive"] }
 winit = "0.30.13"
 softbuffer = "0.4.8"
 fontdue = "0.9.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+percent-encoding = "2"
 
 [[bench]]
 name = "streaming"
@@ -17,4 +19,8 @@ harness = false
 
 [[bench]]
 name = "styling"
+harness = false
+
+[[bench]]
+name = "images"
 harness = false

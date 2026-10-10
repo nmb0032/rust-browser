@@ -45,6 +45,15 @@ impl Document {
         self.nodes.len()
     }
 
+    pub fn preorder(&self) -> impl Iterator<Item = NodeId> + '_ {
+        let mut pending = vec![self.root];
+        std::iter::from_fn(move || {
+            let id = pending.pop()?;
+            pending.extend(self.nodes[id.index()].children().iter().rev().copied());
+            Some(id)
+        })
+    }
+
     pub fn append_element(
         &mut self,
         parent: NodeId,

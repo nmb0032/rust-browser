@@ -1,7 +1,7 @@
 use std::{
     num::NonZeroU32,
     rc::Rc,
-    sync::mpsc::{Receiver, TryRecvError},
+    sync::{Arc, mpsc::TryRecvError},
     time::{Duration, Instant},
 };
 
@@ -9,30 +9,28 @@ use softbuffer::{Context, Surface};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::{ElementState, MouseScrollDelta, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, OwnedDisplayHandle},
-    keyboard::{Key, NamedKey},
-    window::{Window, WindowId},
+    keyboard::{Key, ModifiersState, NamedKey},
+    window::{CursorIcon, Window, WindowId},
 };
 
+use super::input::{self, HistoryDirection};
 use crate::paint::{self, DisplayItem};
 use crate::{
     dom::Document,
-    layout::{self, LayoutTree},
+    engine::{FragmentTarget, Frame, LoadEvent, Navigation, link_url},
+    layout::LayoutTree,
 };
 
-pub enum LoadEvent {
-    Progress(Document),
-    Finished(Result<(), String>),
-}
-
-pub fn run(
-    receiver: Receiver<LoadEvent>,
-    font: fontdue::Font,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(navigation: Navigation, font: fontdue::Font) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
     let context = Context::new(event_loop.owned_display_handle())?;
-    let layout_tree = layout::build_layout_tree(&Document::new());
+    let frame = Arc::new(Frame::new(
+        navigation.history.current().url.clone(),
+        Document::new(),
+    ));
+    let layout_tree = frame.layout_tree();
 
     let mut app = BrowserWindow {
         context,
@@ -43,7 +41,13 @@ pub fn run(
         display_list: Vec::new(),
         scroll_offset: 0.0,
         show_layout_outlines: false,
-        receiver,
+        navigation,
+        frame,
+        cursor: None,
+        pressed_link: None,
+        modifiers: ModifiersState::empty(),
+        restore_scroll: None,
+        fragment_scroll_pending: true,
         is_loading: true,
     };
 
@@ -60,7 +64,13 @@ struct BrowserWindow {
     display_list: Vec<DisplayItem>,
     scroll_offset: f32,
     show_layout_outlines: bool,
-    receiver: Receiver<LoadEvent>,
+    navigation: Navigation,
+    frame: Arc<Frame>,
+    cursor: Option<(f64, f64)>,
+    pressed_link: Option<url::Url>,
+    modifiers: ModifiersState,
+    restore_scroll: Option<f32>,
+    fragment_scroll_pending: bool,
     is_loading: bool,
 }
 
@@ -98,6 +108,7 @@ impl BrowserWindow {
             &self.layout_tree,
             logical_size.height,
         ));
+        self.update_cursor();
     }
 
     fn scroll_by(&mut self, delta: f32) {
@@ -110,7 +121,9 @@ impl BrowserWindow {
         let next_offset = (self.scroll_offset + delta).clamp(0.0, max_scroll);
 
         if next_offset != self.scroll_offset {
+            self.fragment_scroll_pending = false;
             self.scroll_offset = next_offset;
+            self.update_cursor();
             self.request_redraw();
         }
     }
@@ -131,26 +144,30 @@ impl BrowserWindow {
         let mut document_changed = false;
 
         loop {
-            match self.receiver.try_recv() {
-                Ok(LoadEvent::Progress(document)) => {
-                    self.layout_tree = layout::build_layout_tree(&document);
+            match self.navigation.try_recv() {
+                Ok(LoadEvent::Progress(frame)) => {
+                    self.layout_tree = frame.layout_tree();
+                    self.frame = frame;
+                    self.update_title();
                     document_changed = true;
                     // Give redraws a turn even when the loader keeps sending snapshots.
                     break;
                 }
-                Ok(LoadEvent::Finished(Ok(()))) => self.is_loading = false,
-                Ok(LoadEvent::Finished(Err(error))) => {
+                Ok(LoadEvent::Finished) => {
                     self.is_loading = false;
-                    eprintln!("page load failed: {error}");
-                    if let Some(window) = &self.window {
-                        window.set_title("rust-browser - load failed");
+                    if let Some(scroll) = self.restore_scroll.take() {
+                        self.set_scroll(scroll);
+                    } else if self.fragment_scroll_pending {
+                        self.scroll_to_fragment();
                     }
+                    self.fragment_scroll_pending = false;
+                    self.update_title();
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     if self.is_loading {
                         self.is_loading = false;
-                        eprintln!("page load worker disconnected before completion");
+                        self.show_load_error("Page loader disconnected before completion".into());
                     }
                     break;
                 }
@@ -159,8 +176,131 @@ impl BrowserWindow {
 
         if document_changed {
             self.rebuild_display_list();
+            if self.restore_scroll.is_none() && self.fragment_scroll_pending {
+                self.scroll_to_fragment();
+            }
             self.request_redraw();
         }
+    }
+
+    fn update_title(&self) {
+        if let Some(window) = &self.window {
+            window.set_title(&input::window_title(
+                &self.navigation.history.current().url,
+                self.is_loading,
+                self.frame.error.is_some(),
+            ));
+        }
+    }
+
+    fn cursor_link(&self) -> Result<Option<url::Url>, Box<dyn std::error::Error>> {
+        let (Some(window), Some((x, y))) = (&self.window, self.cursor) else {
+            return Ok(None);
+        };
+        let (x, y) = input::document_point(x, y, window.scale_factor(), self.scroll_offset);
+        let Some(node) = self.layout_tree.hit_test(x, y) else {
+            return Ok(None);
+        };
+        link_url(&self.frame.document, node, &self.frame.url)
+    }
+
+    fn update_cursor(&self) {
+        if let Some(window) = &self.window {
+            window.set_cursor(if matches!(self.cursor_link(), Ok(Some(_))) {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Default
+            });
+        }
+    }
+
+    fn set_scroll(&mut self, offset: f32) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        let height = window
+            .inner_size()
+            .to_logical::<f32>(window.scale_factor())
+            .height;
+        self.scroll_offset = offset.clamp(0.0, paint::max_scroll_offset(&self.layout_tree, height));
+        self.update_cursor();
+        self.request_redraw();
+    }
+
+    fn scroll_to_fragment(&mut self) {
+        let Some(fragment) = self.navigation.history.current().url.fragment() else {
+            return;
+        };
+        match self.frame.fragment_target(fragment) {
+            Some(FragmentTarget::Top) => self.set_scroll(0.0),
+            Some(FragmentTarget::Node(id)) => {
+                if let Some(rect) = self.layout_tree.node_rect(id) {
+                    self.set_scroll(rect.y);
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn navigate(&mut self, url: url::Url) {
+        self.navigation.history.current_mut().scroll_offset = self.scroll_offset;
+        let same_document =
+            self.frame.is_same_document(&url) && url.fragment().is_some() && !self.is_loading;
+        if self.navigation.history.current().url != url || !same_document {
+            self.navigation.history.push(url.clone());
+        }
+        if same_document {
+            Arc::make_mut(&mut self.frame).url = url;
+            self.scroll_to_fragment();
+            self.fragment_scroll_pending = false;
+            self.update_title();
+        } else {
+            self.begin_navigation(None);
+        }
+    }
+
+    fn traverse_history(&mut self, direction: HistoryDirection) {
+        self.navigation.history.current_mut().scroll_offset = self.scroll_offset;
+        let entry = match direction {
+            HistoryDirection::Back => self.navigation.history.back(),
+            HistoryDirection::Forward => self.navigation.history.forward(),
+        };
+        if let Some(entry) = entry {
+            let scroll = entry.scroll_offset;
+            self.begin_navigation(Some(scroll));
+        }
+    }
+
+    fn begin_navigation(&mut self, restore_scroll: Option<f32>) {
+        self.restore_scroll = restore_scroll;
+        self.fragment_scroll_pending = restore_scroll.is_none();
+        self.scroll_offset = 0.0;
+        self.pressed_link = None;
+        self.frame = Arc::new(Frame::new(
+            self.navigation.history.current().url.clone(),
+            Document::new(),
+        ));
+        self.layout_tree = self.frame.layout_tree();
+        self.is_loading = true;
+        self.rebuild_display_list();
+        self.update_title();
+        self.request_redraw();
+        if let Err(error) = self.navigation.start_load() {
+            self.is_loading = false;
+            self.show_load_error(format!("Could not start page loader: {error}"));
+        }
+    }
+
+    fn show_load_error(&mut self, error: String) {
+        eprintln!("{error}");
+        self.frame = Arc::new(Frame::error_page(
+            self.navigation.history.current().url.clone(),
+            error,
+        ));
+        self.layout_tree = self.frame.layout_tree();
+        self.rebuild_display_list();
+        self.update_title();
+        self.request_redraw();
     }
 }
 
@@ -191,6 +331,7 @@ impl ApplicationHandler for BrowserWindow {
         self.window = Some(window);
         self.surface = Some(surface);
         self.resize_surface(size.width, size.height);
+        self.update_title();
     }
 
     fn window_event(
@@ -204,6 +345,31 @@ impl ApplicationHandler for BrowserWindow {
         }
 
         match event {
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = Some((position.x, position.y));
+                self.update_cursor();
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor = None;
+                self.pressed_link = None;
+                self.update_cursor();
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => match self.cursor_link() {
+                Ok(link) if state == ElementState::Pressed => self.pressed_link = link,
+                Ok(Some(link)) if self.pressed_link.take().as_ref() == Some(&link) => {
+                    self.navigate(link)
+                }
+                Ok(_) => self.pressed_link = None,
+                Err(error) => {
+                    self.pressed_link = None;
+                    eprintln!("link navigation failed: {error}");
+                }
+            },
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => self.resize_surface(size.width, size.height),
             WindowEvent::ScaleFactorChanged { .. } => {
@@ -227,6 +393,11 @@ impl ApplicationHandler for BrowserWindow {
                 self.scroll_by(scroll_delta);
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if let Some(direction) = input::history_shortcut(&event.logical_key, self.modifiers)
+                {
+                    self.traverse_history(direction);
+                    return;
+                }
                 match &event.logical_key {
                     Key::Named(NamedKey::F12) => self.toggle_layout_outlines(),
                     Key::Character(key) if key.eq_ignore_ascii_case("o") => {

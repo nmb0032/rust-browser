@@ -40,7 +40,13 @@ pub struct StyleResolution {
 }
 
 pub fn resolve(document: &Document) -> StyleResolution {
-    let mut stylesheets = collect_stylesheets(document);
+    resolve_with_stylesheets(document, collect_stylesheets(document))
+}
+
+pub fn resolve_with_stylesheets(
+    document: &Document,
+    mut stylesheets: StylesheetCollection,
+) -> StyleResolution {
     let author_rules = stylesheets
         .stylesheets
         .iter()
@@ -80,6 +86,29 @@ pub fn resolve(document: &Document) -> StyleResolution {
                     0,
                     &mut winners,
                 );
+                if element.tag_name().eq_ignore_ascii_case("img")
+                    && let Some(width) = element
+                        .attribute("width")
+                        .and_then(crate::html::attributes::image_dimension)
+                {
+                    insert(
+                        &mut winners,
+                        &StyledDeclaration {
+                            property: Property::Width,
+                            value: Value::Length(Length::Px(width)),
+                            important: false,
+                            order: 0,
+                        },
+                        Priority {
+                            origin: 1,
+                            inline: false,
+                            specificity: Specificity::default(),
+                            sheet: 0,
+                            rule: 0,
+                            declaration: 0,
+                        },
+                    );
+                }
                 for (sheet, rules) in author_rules.iter().enumerate() {
                     apply_rules(document, node_id, rules, true, sheet, &mut winners);
                 }

@@ -3,7 +3,8 @@
 address, article, aside, blockquote, body, dd, div, dl, dt, fieldset,
 figcaption, figure, footer, form, h1, h2, h3, h4, h5, h6, header, hr,
 html, main, nav, ol, p, pre, section, ul { display: block; }
-head, script, style, title { display: none; }
+base, head, link, meta, script, style, title { display: none; }
+a { color: #0000ee; }
 li { display: list-item; }
 p, ul, ol { margin: 1em 0; }
 ul, ol { padding-left: 32px; }

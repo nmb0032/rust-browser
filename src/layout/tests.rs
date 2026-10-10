@@ -19,6 +19,46 @@ fn find<'a>(layout_box: &'a LayoutBox, tag: &str) -> Option<&'a LayoutBox> {
 }
 
 #[test]
+fn wrapped_link_hit_testing_uses_fragments_not_whitespace_between_lines() {
+    let document =
+        parser::parse("<p><a href='next'><b>one two three four five six seven</b></a></p>")
+            .unwrap();
+    let mut tree = build_layout_tree(&document);
+    tree.layout(160.0, &load_bundled_font().unwrap());
+    let text = find(tree.root(), "#text").unwrap();
+    let fragments = text.text_fragments();
+    assert!(fragments.iter().any(|fragment| fragment.y > fragments[0].y));
+    for fragment in fragments {
+        let hit = tree
+            .hit_test(fragment.x + fragment.width / 2.0, fragment.y + 1.0)
+            .unwrap();
+        assert_eq!(hit, text.dom_node_id());
+        assert!(
+            crate::engine::link_url(
+                &document,
+                hit,
+                &url::Url::parse("https://example.org/").unwrap()
+            )
+            .unwrap()
+            .is_some()
+        );
+    }
+    let last = fragments.last().unwrap();
+    let hit = tree
+        .hit_test(last.x + last.width + 3.0, last.y + 1.0)
+        .unwrap();
+    assert!(
+        crate::engine::link_url(
+            &document,
+            hit,
+            &url::Url::parse("https://example.org/").unwrap()
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
 fn builds_block_and_inline_boxes_and_skips_non_rendered_elements() {
     let tree = layout(
         "<head><title>hidden</title></head><div>shown <em>emphasis</em></div>\

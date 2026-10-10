@@ -58,14 +58,17 @@ keeping the codebase small enough to learn from.
 
 | Area | Location | Status |
 | --- | --- | --- |
-| App entry | `src/app` | Loads a page progressively and supports DOM/stylesheet/layout/display-list dumps. |
-| Networking | `src/net` | Streams HTTP and file bodies with incremental UTF-8 decoding. |
+| App entry | `src/app` | Starts interactive browsing or resource-aware DOM/stylesheet/layout/display-list dumps. |
+| Engine | `src/engine` | Owns document snapshots, final/base URLs, external resources, cancellable loading, and bounded back/forward history. |
+| Networking | `src/net` | Bounded HTTP/file bodies, GET redirects and response metadata, with incremental UTF-8 decoding. |
 | HTML | `src/html` | Resumable parser for a limited HTML subset; not WHATWG-compliant. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
 | CSS | `src/css` | Rule-level syntax tree, simple selector matching/specificity, and color/length value parsers. |
-| Style | `src/style` | Embedded and inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
-| Layout | `src/layout` | Computed-style-driven block/inline boxes, content-box sizing, spacing, text, and list markers. |
-| Paint | `src/paint` | Builds and rasterizes styled text, backgrounds, and borders; document rectangles scroll with content. |
+| Style | `src/style` | Embedded/external sheets in document order, inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
+| Layout | `src/layout` | Block/inline boxes, image sizing, spacing, text, list markers, and naive fragment-aware hit testing. |
+| Paint | `src/paint` | Rasterizes text, backgrounds, borders, and shared RGBA images with clipping, scaling, alpha blending, and scrolling. |
+| Media | `src/media` | Bounded PNG/JPEG/GIF/WebP decoding, with shared intrinsic-size image data. |
+| Window | `src/ui` | Click navigation, back/forward shortcuts, scroll restoration, and current URL/loading/error titles. |
 
 The DOM arena with stable IDs is a good foundation. The existing CSS rule
 parser is used in Milestone 4 and rebuilt on a tokenizer in Milestone 7.
@@ -431,7 +434,7 @@ until its closing tag or EOF, including across chunk boundaries. This is not
 a complete raw-text tokenizer. A malformed CSS syntax tree rejects its
 entire sheet or inline declaration list; invalid/unsupported selectors and
 typed values are ignored with diagnostics. At-rules, media-query semantics,
-external sheets, advanced selectors, alpha colors, margin collapsing,
+advanced selectors, alpha colors, margin collapsing,
 auto margins, and font-face selection are still deferred. `font-family` is
 computed and inherited, but rasterization uses the bundled face. Nonzero
 border widths paint solid rectangular strips without a `border-style`
@@ -439,6 +442,7 @@ model. Wrapped inline backgrounds/borders use a single bounding rectangle
 rather than per-line fragments. The browser's existing 24px viewport gutter
 remains separate from element CSS. Font sizes are capped at 512 CSS px with
 a diagnostic to bound glyph rasterization.
+External stylesheets and raster images are added in Milestone 5.
 
 **Measure styling:** `cargo bench --bench styling` reports median CSS
 syntax parsing, full style resolution, and styled box generation/layout
@@ -459,28 +463,109 @@ Example measurements on ARM64 macOS with Rust 1.98.0 (2026-10-10):
 
 **Goal:** Browse between real pages.
 
-- [ ] **5.1 Resolve URLs.** Use the `url` crate to resolve relative URLs
+- [x] **5.1 Resolve URLs.** Use the `url` crate to resolve relative URLs
   against the document URL and `<base href>`.
   *You'll see:* unit tests for relative, absolute, and fragment URLs.
-- [ ] **5.2 Load external stylesheets.** Fetch `<link rel=stylesheet>` files
+- [x] **5.2 Load external stylesheets.** Fetch `<link rel=stylesheet>` files
   and add them to the cascade in document order.
   *You'll see:* sites with external CSS render with their styles.
-- [ ] **5.3 Make links clickable.** Hit-test a click to a layout box, find
+- [x] **5.3 Make links clickable.** Hit-test a click to a layout box, find
   the enclosing `<a href>`, and navigate. **(naive)** Replaced by full hit
   testing and DOM events in Milestone 9.
   *You'll see:* clicking a link loads the next page.
-- [ ] **5.4 Add back and forward.** Keep a history stack with keyboard
+- [x] **5.4 Add back and forward.** Keep a history stack with keyboard
   shortcuts. **(naive)** Replaced by navigables and session history in 13.7.
   *You'll see:* navigation back and forth between pages.
-- [ ] **5.5 Show the URL in the title bar.** Also show a loading indicator.
+- [x] **5.5 Show the URL in the title bar.** Also show a loading indicator.
   *You'll see:* the current page and loading state.
-- [ ] **5.6 Render images.** Fetch `<img>` sources, decode them with the
+- [x] **5.6 Render images.** Fetch `<img>` sources, decode them with the
   `image` crate, and lay them out using their intrinsic size and `width` and
   `height` attributes.
   *You'll see:* images on pages.
-- [ ] **5.7 Handle redirects and errors.** Follow redirects and show an error
+- [x] **5.7 Handle redirects and errors.** Follow redirects and show an error
   page for failed loads. **(naive)** Replaced by Fetch redirects in 13.2.
   *You'll see:* failed loads produce a helpful page instead of a crash.
+
+**Try it:** `cargo run -- tests/pages/navigation/index.html`. Click the
+next-page, missing-page, and fragment links. Back/forward use `Alt+Left` /
+`Alt+Right`, or `Command+[` / `Command+]` on macOS. History traversal restores
+the saved scroll offset after reloading; a new navigation discards forward
+entries. The title shows the current URL and `Loading` or `Load failed`.
+Error pages show the address, failure details, and a clickable `Try again`
+link. Dump modes fetch the same external resources as the window, but return
+a nonzero exit status for a failed document load.
+
+**Implementation boundaries:** `engine/frame.rs` owns the DOM, final URL,
+parsed stylesheets, computed styles, and images for one snapshot.
+`engine/urls.rs` implements relative resolution and the first `<base href>`
+rule; invalid or forbidden base URLs fall back to the document URL.
+`engine/loader.rs` streams HTML snapshots before loading discovered resources.
+`engine/resources.rs` loads sheets and images, caches repeated URLs within a
+load, and records failures without replacing otherwise usable content.
+Stylesheet slots follow DOM preorder, not response order; repeated sheet
+references still occupy separate cascade slots. Parsed sheets and decoded
+images are shared with `Arc` rather than copied into each snapshot.
+Networking, HTML/CSS parsing, image decoding, and style resolution run on the
+page-loader thread. Layout and rasterization remain on the window thread.
+Replacing navigation drops its old receiver and signals cancellation, so an
+old worker cannot overwrite the new page.
+
+Images use intrinsic dimensions unless HTML `width` / `height` attributes
+specify them. Specifying only one dimension preserves the intrinsic aspect
+ratio. HTML width is a presentational hint below author CSS, including
+`width: auto`; CSS widths also support the existing `px` / `em` / `%` values.
+Failed or not-yet-decoded images render their `alt` text. Display lists retain
+shared image data; nearest-neighbor rasterization clips to the viewport and
+alpha-blends onto the existing destination pixels.
+Text hit testing uses individual line fragments instead of treating the
+whitespace inside a wrapped link's bounding rectangle as clickable. Clicks
+convert device pixels to CSS coordinates and add the scroll offset before
+walking to the enclosing anchor. Same-document fragment clicks scroll without
+refetching; fragment lookup decodes percent escapes and prefers IDs over
+legacy named anchors.
+
+**Limits and recovery:** HTTP GET follows 301/302/303/307/308, resolves relative
+`Location` values, inherits a fragment only when the redirect has none, and
+keeps the final URL even on an HTTP/body error. Redirects are capped at ten
+with a fifteen-second chain timeout. Redirects to non-HTTP(S) URLs are
+rejected. HTTP pages cannot load or navigate to local files.
+HTML is capped at 16 MiB, each stylesheet at 4 MiB, and each encoded image
+body at 16 MiB. Each page processes at most 128 resource elements, 16 MiB of
+external CSS source fetched for parsing, and 128 MiB of retained decoded images. Image
+dimensions are limited to 4096 pixels per axis with a 64 MiB decoder allocation
+budget; the image crate's allocation limit is best-effort, while dimension
+limits are strict. HTML image dimension hints above 1,000,000 CSS pixels are
+ignored. History retains at most 256 entries. Resource limit failures are
+diagnostics; document failures become error pages, not crashes.
+
+**Naive limitations:** Resources load sequentially after HTML finishes, not
+through a preload scanner or concurrent Fetch scheduler. Failed URLs may be
+retried by separate resource elements. Only HTTP(S) and local-file URLs are
+supported; `data:`, `blob:`, SVG, responsive `srcset` / `<picture>`, animation,
+and CSS `height` sizing remain deferred. Images share a top-aligned inline
+line model rather than full replaced-element baseline layout.
+External CSS requires `text/css` for HTTP responses, accepts a UTF-8 BOM, and
+otherwise uses the existing strict UTF-8 decoding policy; Encoding sniffing
+comes later. Alternate/disabled external sheets are skipped. External
+`media` accepts empty, `all`, or `screen`; media queries and `@import` remain
+unsupported. Embedded-sheet media semantics still await Milestone 7.
+Link appearance uses a simple blue user-agent `a` rule rather than
+`:link` / `:visited` or text-decoration support. Hit testing is not a stacking
+context, clipping, pointer-events, or DOM-event implementation. Back/forward
+reload documents rather than retaining a back-forward cache or implementing
+the HTML navigable/session-history model. Existing HTML/CSS parser limitations
+still apply, including undecoded character references in URL attributes.
+
+**Coverage and measurement:** Unit and localhost HTTP integration tests cover
+relative/base/final URLs, redirect fragments and limits, external cascade
+order, file loading and CLI paint dumps, failed resources, image intrinsic and
+attribute/CSS sizing, repeated-resource sharing, paint order, alpha/scaled/
+clipped/scrolled image pixels, wrapped links, history branching, modifier
+shortcuts, titles, cancellation, and renderable error/retry pages.
+`cargo bench --bench images` reports nine-sample median PNG decoding time,
+including RGBA conversion but excluding source encoding, networking, and final
+result destruction. On ARM64 macOS with Rust 1.98.0 (2026-10-10), the medians
+were 0.029 ms for 64x64 and 4.906 ms for 1024x768.
 
 **Checkpoint:** You now have a small working browser. Milestones 6–8 make its
 stages spec-correct one at a time.

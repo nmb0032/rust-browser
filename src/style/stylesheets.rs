@@ -1,3 +1,5 @@
+use std::{collections::HashMap, sync::Arc};
+
 use crate::{
     css::{self, Stylesheet},
     dom::{Document, NodeId, NodeKind},
@@ -12,7 +14,8 @@ pub struct Diagnostic {
 #[derive(Clone, Debug)]
 pub struct AuthorStylesheet {
     pub node_id: NodeId,
-    pub stylesheet: Stylesheet,
+    pub stylesheet: Arc<Stylesheet>,
+    pub url: Option<url::Url>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -22,13 +25,21 @@ pub struct StylesheetCollection {
 }
 
 pub fn collect_stylesheets(document: &Document) -> StylesheetCollection {
+    collect_stylesheets_with_external(document, &HashMap::new())
+}
+
+pub fn collect_stylesheets_with_external(
+    document: &Document,
+    external: &HashMap<NodeId, AuthorStylesheet>,
+) -> StylesheetCollection {
     let mut result = StylesheetCollection::default();
-    let mut pending = vec![document.root_id()];
-    while let Some(node_id) = pending.pop() {
+    for node_id in document.preorder() {
         let Some(node) = document.node(node_id) else {
             continue;
         };
-        pending.extend(node.children().iter().rev().copied());
+        if let Some(sheet) = external.get(&node_id) {
+            result.stylesheets.push(sheet.clone());
+        }
         let Some(element) = node.as_element() else {
             continue;
         };
@@ -52,7 +63,8 @@ pub fn collect_stylesheets(document: &Document) -> StylesheetCollection {
         match css::parse(&source) {
             Ok(stylesheet) => result.stylesheets.push(AuthorStylesheet {
                 node_id,
-                stylesheet,
+                stylesheet: Arc::new(stylesheet),
+                url: None,
             }),
             Err(error) => result.diagnostics.push(Diagnostic {
                 node_id: Some(node_id),

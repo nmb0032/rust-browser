@@ -23,6 +23,10 @@ pub(super) fn layout_inline(
         layout_box.content_rect = layout_box.rect;
         return;
     }
+    if layout_box.image.is_some() {
+        layout_image(layout_box, flow, font);
+        return;
+    }
     if layout_box.kind == BoxKind::Text {
         let fragments = flow.add_text(
             layout_box.text.as_deref().unwrap_or_default(),
@@ -80,6 +84,66 @@ pub(super) fn layout_inline(
         height: content.height + extra_height,
     };
     flow.advance(right + margin.right, style.font_size * 1.25 + extra_height);
+}
+
+fn layout_image(layout_box: &mut LayoutBox, flow: &mut InlineFlow, font: &fontdue::Font) {
+    let image = layout_box
+        .image
+        .as_ref()
+        .expect("image layout has image content");
+    let style = &layout_box.style;
+    let (width, height) = image.size(style, flow.width, font);
+    let padding = style
+        .padding
+        .map(|length| length.resolve(style.font_size, flow.width));
+    let margin = style
+        .margin
+        .map(|length| length.resolve(style.font_size, flow.width));
+    let border = style.border_width;
+    let box_width = width + padding.left + padding.right + border.left + border.right;
+    let box_height = height + padding.top + padding.bottom + border.top + border.bottom;
+    let separator = if flow.pending_space && flow.line_has_content {
+        font.metrics(' ', style.font_size).advance_width
+    } else {
+        0.0
+    };
+    if flow.line_has_content
+        && flow.current_x + separator + margin.left + box_width + margin.right
+            > flow.start_x + flow.width
+    {
+        flow.next_line();
+    } else {
+        flow.current_x += separator;
+    }
+    let x = flow.current_x + margin.left;
+    let y = flow.y + margin.top;
+    layout_box.padding = padding;
+    layout_box.rect = Rect {
+        x,
+        y,
+        width: box_width,
+        height: box_height,
+    };
+    layout_box.content_rect = Rect {
+        x: x + border.left + padding.left,
+        y: y + border.top + padding.top,
+        width,
+        height,
+    };
+    if let Some(fragment) = image.alt_fragment(layout_box.content_rect, style) {
+        layout_box.text_fragments.push(fragment);
+    }
+    flow.advance(
+        margin.left + box_width + margin.right,
+        margin.top + box_height + margin.bottom,
+    );
+    if box_height > 0.0 {
+        flow.line_height = flow
+            .line_height
+            .max(margin.top + box_height + margin.bottom);
+        flow.has_line = true;
+    }
+    flow.pending_space = false;
 }
 
 pub(super) struct InlineFlow {

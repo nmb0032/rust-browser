@@ -21,16 +21,42 @@ pub(super) fn layout_block(
         .map(|length| length.resolve(style.font_size, available_width));
     let border = style.border_width;
     let horizontal = padding.left + padding.right + border.left + border.right;
-    let width = style.width.map_or(
-        (available_width - margin.left - margin.right - horizontal).max(0.0),
-        |length| length.resolve(style.font_size, available_width).max(0.0),
+    let replaced_size = layout_box
+        .image
+        .as_ref()
+        .map(|image| image.size(style, available_width, font));
+    let width = replaced_size.map_or_else(
+        || {
+            style.width.map_or(
+                (available_width - margin.left - margin.right - horizontal).max(0.0),
+                |length| length.resolve(style.font_size, available_width).max(0.0),
+            )
+        },
+        |(width, _)| width,
     );
     let border_x = x + margin.left;
     let border_y = y + margin.top;
     let content_x = border_x + border.left + padding.left;
     let content_y = border_y + border.top + padding.top;
     layout_box.padding = padding;
-    let height = layout_children(layout_box, content_x, content_y, width, font);
+    let height = if let Some((_, height)) = replaced_size {
+        if let Some(image) = &layout_box.image
+            && let Some(fragment) = image.alt_fragment(
+                Rect {
+                    x: content_x,
+                    y: content_y,
+                    width,
+                    height,
+                },
+                &layout_box.style,
+            )
+        {
+            layout_box.text_fragments.push(fragment);
+        }
+        height
+    } else {
+        layout_children(layout_box, content_x, content_y, width, font)
+    };
     layout_box.content_rect = Rect {
         x: content_x,
         y: content_y,

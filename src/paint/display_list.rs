@@ -1,6 +1,7 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use crate::layout::{LayoutBox, LayoutTree};
+use crate::media::DecodedImage;
 
 pub(crate) const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
 pub(crate) const DEFAULT_VIEWPORT_HEIGHT: f32 = 600.0;
@@ -23,6 +24,13 @@ pub enum DisplayItem {
         color: u32,
         bold: bool,
         italic: bool,
+    },
+    Image {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        image: Arc<DecodedImage>,
     },
     Rect {
         x: f32,
@@ -68,6 +76,18 @@ pub(crate) fn build_display_list(
 
 fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
     append_decoration_items(layout_box, display_list);
+    if let Some(image) = layout_box.decoded_image() {
+        let rect = layout_box.content_rect();
+        if rect.width > 0.0 && rect.height > 0.0 {
+            display_list.push(DisplayItem::Image {
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                image: Arc::clone(image),
+            });
+        }
+    }
     if let Some(marker) = layout_box.list_marker()
         && let Some(color) = layout_box.style().color
         && layout_box.style().font_size > 0.0
@@ -195,6 +215,71 @@ mod tests {
             .iter()
             .filter(|item| matches!(item, DisplayItem::Text { .. }))
             .collect()
+    }
+
+    #[test]
+    fn loaded_images_and_failed_image_alt_text_reach_paint_and_hidden_images_do_not() {
+        use std::{io::Cursor, sync::Arc};
+        let source = image::ImageBuffer::from_pixel(2, 1, image::Rgba([255u8, 0, 0, 255]));
+        let mut bytes = Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let image = Arc::new(DecodedImage::decode(&bytes.into_inner()).unwrap());
+        let document = parser::parse("<img id='loaded' width='10' style='padding:2px; border-width:1px; background-color:blue'>\
+            <img alt='Unavailable'><img id='hidden' style='display:none'>").unwrap();
+        let mut images = crate::media::ImageMap::new();
+        for id in document.preorder() {
+            if document
+                .node(id)
+                .unwrap()
+                .as_element()
+                .is_some_and(|element| element.attribute("id").is_some())
+            {
+                images.insert(id, Arc::clone(&image));
+            }
+        }
+        let resolution = crate::style::resolve(&document);
+        let mut tree =
+            layout::build_layout_tree_with_resources(&document, &resolution.styles, &images);
+        tree.layout(400.0, &load_bundled_font().unwrap());
+        let list = build_display_list(&tree, 400.0, 600.0, false);
+        assert_eq!(
+            list.iter()
+                .filter(|item| matches!(item, DisplayItem::Image { .. }))
+                .count(),
+            1
+        );
+        assert!(list.iter().any(|item| matches!(
+            item,
+            DisplayItem::Image {
+                w: 10.0,
+                h: 5.0,
+                ..
+            }
+        )));
+        assert!(
+            list.iter().any(
+                |item| matches!(item, DisplayItem::Text { text, .. } if text == "Unavailable")
+            )
+        );
+        let decoration = list
+            .iter()
+            .position(|item| {
+                matches!(
+                    item,
+                    DisplayItem::Rect {
+                        color: 0x0000FF,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let bitmap = list
+            .iter()
+            .position(|item| matches!(item, DisplayItem::Image { .. }))
+            .unwrap();
+        assert!(decoration < bitmap);
     }
 
     #[test]

@@ -69,6 +69,37 @@ pub(crate) fn rasterize_display_list(
                 };
                 draw_outline_rect(pixels, width, height, rect, scale, *color);
             }
+            DisplayItem::Image { x, y, w, h, image } => {
+                let left = *x * scale;
+                let top = (*y - scroll_offset) * scale;
+                let image_width = *w * scale;
+                let image_height = *h * scale;
+                if image_width <= 0.0 || image_height <= 0.0 {
+                    continue;
+                }
+                let start_x = left.floor().clamp(0.0, width as f32) as usize;
+                let start_y = top.floor().clamp(0.0, height as f32) as usize;
+                let end_x = (left + image_width).ceil().clamp(0.0, width as f32) as usize;
+                let end_y = (top + image_height).ceil().clamp(0.0, height as f32) as usize;
+                for target_y in start_y..end_y {
+                    let source_y = (((target_y as f32 + 0.5 - top) / image_height
+                        * image.height() as f32) as u32)
+                        .min(image.height() - 1);
+                    for target_x in start_x..end_x {
+                        let source_x = (((target_x as f32 + 0.5 - left) / image_width
+                            * image.width() as f32) as u32)
+                            .min(image.width() - 1);
+                        let source =
+                            (source_y as usize * image.width() as usize + source_x as usize) * 4;
+                        let rgba = &image.rgba()[source..source + 4];
+                        let foreground = (u32::from(rgba[0]) << 16)
+                            | (u32::from(rgba[1]) << 8)
+                            | u32::from(rgba[2]);
+                        let target = target_y * width + target_x;
+                        pixels[target] = blend(pixels[target], foreground, u32::from(rgba[3]));
+                    }
+                }
+            }
             DisplayItem::Text {
                 x,
                 y,
@@ -249,6 +280,42 @@ mod tests {
 
     const BACKGROUND_COLOR: u32 = 0x00FF_FFFF;
     const TEXT_COLOR: u32 = 0x0000_0000;
+
+    #[test]
+    fn images_scale_clip_scroll_and_alpha_blend_with_the_destination() {
+        use std::{io::Cursor, sync::Arc};
+        let source = image::ImageBuffer::from_pixel(2, 1, image::Rgba([255u8, 0, 0, 128]));
+        let mut encoded = Cursor::new(Vec::new());
+        source
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let image = Arc::new(crate::media::DecodedImage::decode(&encoded.into_inner()).unwrap());
+        let items = [DisplayItem::Image {
+            x: 1.0,
+            y: 3.0,
+            w: 2.0,
+            h: 1.0,
+            image,
+        }];
+        let mut pixels = vec![BACKGROUND_COLOR; 8 * 4];
+        let font = load_bundled_font().unwrap();
+        rasterize_display_list(&items, &font, &mut pixels, 8, 4, 2.0, 0.0);
+        assert!(pixels.iter().all(|pixel| *pixel == BACKGROUND_COLOR));
+        rasterize_display_list(&items, &font, &mut pixels, 8, 4, 2.0, 2.0);
+        for y in 0..4 {
+            for x in 0..8 {
+                let expected = if (2..6).contains(&x) && (2..4).contains(&y) {
+                    0xFF7F7F
+                } else {
+                    BACKGROUND_COLOR
+                };
+                assert_eq!(pixels[y * 8 + x], expected, "pixel ({x}, {y})");
+            }
+        }
+        let mut clipped = vec![BACKGROUND_COLOR; 2];
+        rasterize_display_list(&items, &font, &mut clipped, 2, 1, 1.0, 3.0);
+        assert_eq!(clipped, [BACKGROUND_COLOR, 0xFF7F7F]);
+    }
 
     #[test]
     fn skips_text_lines_outside_the_viewport() {

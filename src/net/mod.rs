@@ -1,26 +1,27 @@
+//! Bounded HTTP/file loading with a GET-only redirect loop, not yet full Fetch.
+
+mod client;
+mod location;
+
+pub use client::{
+    FetchError, MAX_CSS_BYTES, MAX_HTML_BYTES, MAX_IMAGE_BYTES, Resource, ResponseMetadata,
+    fetch_resource,
+};
+pub use location::location_url;
+
 use std::{
     error::Error,
-    fs,
     io::{self, Read},
-    path::PathBuf,
 };
 use url::Url;
 
 pub fn fetch_html(location: &str) -> Result<String, Box<dyn Error>> {
-    match uri_scheme(location) {
-        Some(scheme)
-            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") =>
-        {
-            fetch_html_from_url(location)
-        }
-        Some(scheme) if scheme.eq_ignore_ascii_case("file") => fetch_html_from_path(location),
-        Some(scheme) => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unsupported URL scheme: {scheme}"),
-        )
-        .into()),
-        None => fetch_html_from_path(location),
-    }
+    let mut source = String::new();
+    stream_html(location, 8192, |chunk| {
+        source.push_str(chunk);
+        Ok(())
+    })?;
+    Ok(source)
 }
 
 pub fn stream_html(
@@ -28,24 +29,21 @@ pub fn stream_html(
     chunk_size: usize,
     mut on_chunk: impl FnMut(&str) -> Result<(), Box<dyn Error>>,
 ) -> Result<(), Box<dyn Error>> {
-    match uri_scheme(location) {
-        Some(scheme)
-            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") =>
-        {
-            let mut response = ureq::get(location).call()?;
-            stream_reader(response.body_mut().as_reader(), chunk_size, &mut on_chunk)
-        }
-        Some(scheme) if scheme.eq_ignore_ascii_case("file") => {
-            let file_path = file_path(location)?;
-            stream_reader(fs::File::open(file_path)?, chunk_size, &mut on_chunk)
-        }
-        Some(scheme) => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unsupported URL scheme: {scheme}"),
-        )
-        .into()),
-        None => stream_reader(fs::File::open(location)?, chunk_size, &mut on_chunk),
-    }
+    stream_document(&location_url(location)?, chunk_size, |_, chunk| {
+        on_chunk(chunk)
+    })
+    .map(|_| ())
+}
+
+pub fn stream_document(
+    url: &Url,
+    chunk_size: usize,
+    mut on_chunk: impl FnMut(&ResponseMetadata, &str) -> Result<(), Box<dyn Error>>,
+) -> Result<ResponseMetadata, Box<dyn Error>> {
+    client::with_response(url, MAX_HTML_BYTES, |metadata, reader| {
+        stream_reader(reader, chunk_size, &mut |chunk| on_chunk(metadata, chunk))?;
+        Ok(metadata.clone())
+    })
 }
 
 fn stream_reader(
@@ -87,40 +85,6 @@ fn stream_reader(
     }
 
     Ok(())
-}
-
-fn uri_scheme(location: &str) -> Option<&str> {
-    let (scheme, rest) = location.split_once(':')?;
-    let mut characters = scheme.chars();
-    let first = characters.next()?;
-
-    if !first.is_ascii_alphabetic()
-        || !characters.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
-        || (scheme.len() == 1 && (rest.starts_with('/') || rest.starts_with('\\')))
-    {
-        return None;
-    }
-
-    Some(scheme)
-}
-
-fn fetch_html_from_url(url: &str) -> Result<String, Box<dyn Error>> {
-    let mut response = ureq::get(url).call()?;
-    Ok(response.body_mut().read_to_string()?)
-}
-
-fn fetch_html_from_path(path: &str) -> Result<String, Box<dyn Error>> {
-    Ok(fs::read_to_string(file_path(path)?)?)
-}
-
-fn file_path(path: &str) -> Result<PathBuf, Box<dyn Error>> {
-    if path.starts_with("file://") {
-        Url::parse(path)?
-            .to_file_path()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid file URL").into())
-    } else {
-        Ok(PathBuf::from(path))
-    }
 }
 
 #[cfg(test)]

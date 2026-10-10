@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use crate::{
     css::values::Edges,
     dom::{Document, NodeId, NodeKind},
+    media::{DecodedImage, ImageMap},
     style::{self, ComputedStyle, ComputedStyles, Display},
 };
 
-use super::{Rect, block::layout_children};
+use super::{Rect, block::layout_children, replaced::ImageContent};
 
 // This is a viewport gutter, not an element's CSS padding.
 const PAGE_PADDING: f32 = 24.0;
@@ -49,6 +52,7 @@ pub struct LayoutBox {
     pub(super) children: Vec<LayoutBox>,
     pub(super) text_fragments: Vec<TextFragment>,
     pub(super) list_marker: Option<ListMarker>,
+    pub(super) image: Option<ImageContent>,
 }
 
 impl LayoutBox {
@@ -84,6 +88,10 @@ impl LayoutBox {
         self.list_marker.as_ref()
     }
 
+    pub(crate) fn decoded_image(&self) -> Option<&Arc<DecodedImage>> {
+        self.image.as_ref()?.data.as_ref()
+    }
+
     pub(super) fn reset(&mut self) {
         self.rect = Rect::default();
         self.content_rect = Rect::default();
@@ -103,6 +111,64 @@ pub struct LayoutTree {
 impl LayoutTree {
     pub fn root(&self) -> &LayoutBox {
         &self.root
+    }
+
+    /// CSS/document coordinates. Text is tested per fragment, not its multi-line bounds.
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
+        fn hit(layout_box: &LayoutBox, x: f32, y: f32) -> Option<NodeId> {
+            for child in layout_box.children.iter().rev() {
+                if let Some(id) = hit(child, x, y) {
+                    return Some(id);
+                }
+            }
+            if layout_box.kind == BoxKind::Text {
+                return layout_box
+                    .text_fragments
+                    .iter()
+                    .rev()
+                    .any(|fragment| {
+                        contains(
+                            Rect {
+                                x: fragment.x,
+                                y: fragment.y,
+                                width: fragment.width,
+                                height: fragment.height,
+                            },
+                            x,
+                            y,
+                        )
+                    })
+                    .then_some(layout_box.node_id);
+            }
+            // Undecorated inline wrappers have no single hit region when wrapped.
+            if layout_box.kind == BoxKind::Inline
+                && layout_box.image.is_none()
+                && layout_box.style.background_color.is_none()
+                && layout_box.style.border_width == Edges::default()
+            {
+                return None;
+            }
+            contains(layout_box.rect, x, y).then_some(layout_box.node_id)
+        }
+        fn contains(rect: Rect, x: f32, y: f32) -> bool {
+            rect.width > 0.0
+                && rect.height > 0.0
+                && x >= rect.x
+                && x < rect.x + rect.width
+                && y >= rect.y
+                && y < rect.y + rect.height
+        }
+        hit(&self.root, x, y)
+    }
+
+    pub fn node_rect(&self, node_id: NodeId) -> Option<Rect> {
+        fn find(layout_box: &LayoutBox, id: NodeId) -> Option<Rect> {
+            if layout_box.node_id == id {
+                return Some(layout_box.rect);
+            }
+            layout_box.children.iter().find_map(|child| find(child, id))
+        }
+        find(&self.root, node_id)
     }
 
     pub fn layout(&mut self, viewport_width: f32, font: &fontdue::Font) {
@@ -137,12 +203,25 @@ pub fn build_layout_tree(document: &Document) -> LayoutTree {
 
 /// `styles` must be the resolution for this exact document snapshot.
 pub fn build_layout_tree_with_styles(document: &Document, styles: &ComputedStyles) -> LayoutTree {
-    let root = build_box(document, document.root_id(), styles)
+    build_layout_tree_with_resources(document, styles, &ImageMap::new())
+}
+
+pub fn build_layout_tree_with_resources(
+    document: &Document,
+    styles: &ComputedStyles,
+    images: &ImageMap,
+) -> LayoutTree {
+    let root = build_box(document, document.root_id(), styles, images)
         .expect("the document root must have a computed style and layout box");
     LayoutTree { root }
 }
 
-fn build_box(document: &Document, node_id: NodeId, styles: &ComputedStyles) -> Option<LayoutBox> {
+fn build_box(
+    document: &Document,
+    node_id: NodeId,
+    styles: &ComputedStyles,
+    images: &ImageMap,
+) -> Option<LayoutBox> {
     let node = document.node(node_id)?;
     let style = styles
         .get(node_id)
@@ -172,10 +251,14 @@ fn build_box(document: &Document, node_id: NodeId, styles: &ComputedStyles) -> O
         rect: Rect::default(),
         content_rect: Rect::default(),
         padding: Edges::default(),
+        image: node
+            .as_element()
+            .filter(|element| element.tag_name().eq_ignore_ascii_case("img"))
+            .map(|element| ImageContent::new(element, images.get(&node_id).cloned())),
         children: node
             .children()
             .iter()
-            .filter_map(|id| build_box(document, *id, styles))
+            .filter_map(|id| build_box(document, *id, styles, images))
             .collect(),
         text_fragments: Vec::new(),
         list_marker: None,
