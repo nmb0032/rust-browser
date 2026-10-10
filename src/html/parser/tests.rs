@@ -1,5 +1,17 @@
 use super::*;
-use crate::dom::NodeKind;
+use crate::dom::{Node, NodeKind};
+
+fn body(document: &Document) -> &Node {
+    document
+        .preorder()
+        .find_map(|id| {
+            document.node(id).filter(|node| {
+                node.as_element()
+                    .is_some_and(|element| element.tag_name() == "body")
+            })
+        })
+        .unwrap()
+}
 
 fn signature(document: &Document) -> String {
     format!("{document:?}")
@@ -53,7 +65,7 @@ fn text_is_visible_before_finish_and_coalesces_without_changing_its_id() {
     let mut parser = HtmlParser::new();
     parser.feed("<p>caf").unwrap();
     let snapshot = parser.document().clone();
-    let root = snapshot.node(snapshot.root_id()).unwrap();
+    let root = body(&snapshot);
     let paragraph = snapshot.node(root.children()[0]).unwrap();
     let text_id = paragraph.children()[0];
     let revision = parser.revision();
@@ -89,7 +101,7 @@ fn partial_attributes_do_not_create_elements_and_snapshots_are_independent() {
 #[test]
 fn parses_nested_elements_text_and_attributes() {
     let document = parse(r#"<P CLASS="intro">Hello <a href='/next'>there</a></P>"#).unwrap();
-    let root = document.node(document.root_id()).unwrap();
+    let root = body(&document);
     let paragraph = document.node(root.children()[0]).unwrap();
     assert_eq!(paragraph.as_element().unwrap().tag_name(), "p");
     assert_eq!(
@@ -113,7 +125,7 @@ fn parses_nested_elements_text_and_attributes() {
 #[test]
 fn newlines_unicode_and_quoted_greater_than_are_preserved() {
     let document = parse("<p title=\"left > right\">café\r\n世界\rnext\nlast</p>").unwrap();
-    let root = document.node(document.root_id()).unwrap();
+    let root = body(&document);
     let paragraph = document.node(root.children()[0]).unwrap();
     assert_eq!(
         paragraph.as_element().unwrap().attribute("title"),
@@ -128,7 +140,7 @@ fn newlines_unicode_and_quoted_greater_than_are_preserved() {
 #[test]
 fn boolean_attributes_and_void_elements_preserve_tree_structure() {
     let document = parse("<div>before<input disabled value=hello><br>after</div>").unwrap();
-    let root = document.node(document.root_id()).unwrap();
+    let root = body(&document);
     let div = document.node(root.children()[0]).unwrap();
     assert_eq!(div.children().len(), 4);
     let input = document
@@ -153,18 +165,19 @@ fn boolean_attributes_and_void_elements_preserve_tree_structure() {
 }
 
 #[test]
-fn declarations_are_still_skipped_until_comment_and_doctype_nodes_are_implemented() {
+fn comments_and_doctypes_are_retained_at_their_insertion_locations() {
     let document = parse("<!DOCTYPE html><!-- head > note --><p>content</p><!-- end -->").unwrap();
     let root = document.node(document.root_id()).unwrap();
-    assert_eq!(root.children().len(), 1);
-    assert_eq!(
-        document
-            .node(root.children()[0])
-            .unwrap()
-            .as_element()
-            .unwrap()
-            .tag_name(),
-        "p"
+    assert_eq!(root.children().len(), 3);
+    assert!(
+        matches!(document.node(root.children()[0]).unwrap().kind(), NodeKind::Doctype(data) if data.name == "html")
+    );
+    assert!(
+        matches!(document.node(root.children()[1]).unwrap().kind(), NodeKind::Comment(text) if text == " head > note ")
+    );
+    let body = body(&document);
+    assert!(
+        matches!(document.node(body.children()[1]).unwrap().kind(), NodeKind::Comment(text) if text == " end ")
     );
 }
 
@@ -191,7 +204,7 @@ fn malformed_core_markup_recovers_with_diagnostics_instead_of_aborting() {
         }
     }
     let document = parse("<p=bad>").unwrap();
-    let root = document.node(document.root_id()).unwrap();
+    let root = body(&document);
     assert_eq!(
         document
             .node(root.children()[0])
@@ -204,9 +217,9 @@ fn malformed_core_markup_recovers_with_diagnostics_instead_of_aborting() {
 }
 
 #[test]
-fn naive_ancestor_closing_and_html_self_closing_behavior_are_preserved() {
+fn ancestor_closing_and_html_self_closing_behavior_are_preserved() {
     let document = parse("</unknown><div><p/>nested</div>tail").unwrap();
-    let root = document.node(document.root_id()).unwrap();
+    let root = body(&document);
     let div = document.node(root.children()[0]).unwrap();
     assert_eq!(root.children().len(), 2);
     assert_eq!(div.children().len(), 1);

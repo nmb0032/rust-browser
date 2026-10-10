@@ -11,25 +11,75 @@ pub struct Node {
     kind: NodeKind,
     parent: Option<NodeId>,
     children: Vec<NodeId>,
+    template_host: Option<NodeId>,
 }
 
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     Document,
+    DocumentFragment,
     Element(ElementData),
     Text(String),
+    Comment(String),
+    Doctype(DoctypeData),
+    ProcessingInstruction { target: String, data: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DoctypeData {
+    pub name: String,
+    pub public_identifier: String,
+    pub system_identifier: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Namespace {
+    #[default]
+    Html,
+    Svg,
+    MathMl,
+    None,
+    Other(String),
+}
+
+impl Namespace {
+    pub fn uri(&self) -> &str {
+        match self {
+            Self::Html => "http://www.w3.org/1999/xhtml",
+            Self::Svg => "http://www.w3.org/2000/svg",
+            Self::MathMl => "http://www.w3.org/1998/Math/MathML",
+            Self::None => "",
+            Self::Other(uri) => uri,
+        }
+    }
+
+    pub fn from_uri(uri: &str) -> Self {
+        match uri {
+            "" => Self::None,
+            "http://www.w3.org/1999/xhtml" => Self::Html,
+            "http://www.w3.org/2000/svg" => Self::Svg,
+            "http://www.w3.org/1998/Math/MathML" => Self::MathMl,
+            _ => Self::Other(uri.to_owned()),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct ElementData {
     tag_name: String,
     attributes: Vec<Attribute>,
+    namespace: Namespace,
+    prefix: Option<String>,
+    template_contents: Option<NodeId>,
+    attribute_case_sensitive: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct Attribute {
     name: String,
     value: String,
+    namespace: Option<String>,
+    prefix: Option<String>,
 }
 
 impl NodeId {
@@ -48,6 +98,7 @@ impl Node {
             kind,
             parent,
             children: Vec::new(),
+            template_host: None,
         }
     }
 
@@ -61,6 +112,12 @@ impl Node {
 
     pub fn children(&self) -> &[NodeId] {
         &self.children
+    }
+    pub(super) fn template_host(&self) -> Option<NodeId> {
+        self.template_host
+    }
+    pub(super) fn set_template_host(&mut self, host: NodeId) {
+        self.template_host = Some(host);
     }
 
     pub(super) fn add_child(&mut self, child: NodeId) {
@@ -79,8 +136,24 @@ impl Node {
     pub fn as_element(&self) -> Option<&ElementData> {
         match &self.kind {
             NodeKind::Element(data) => Some(data),
-            NodeKind::Document | NodeKind::Text(_) => None,
+            _ => None,
         }
+    }
+
+    pub(super) fn as_element_mut(&mut self) -> Option<&mut ElementData> {
+        if let NodeKind::Element(element) = &mut self.kind {
+            Some(element)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn children_mut(&mut self) -> &mut Vec<NodeId> {
+        &mut self.children
+    }
+
+    pub(super) fn set_parent(&mut self, parent: Option<NodeId>) {
+        self.parent = parent;
     }
 }
 
@@ -89,6 +162,66 @@ impl ElementData {
         Self {
             tag_name,
             attributes,
+            namespace: Namespace::Html,
+            prefix: None,
+            template_contents: None,
+            attribute_case_sensitive: false,
+        }
+    }
+
+    pub fn namespaced(
+        tag_name: String,
+        attributes: Vec<Attribute>,
+        namespace: Namespace,
+        prefix: Option<String>,
+    ) -> Self {
+        let attribute_case_sensitive = namespace != Namespace::Html;
+        Self {
+            tag_name,
+            attributes,
+            namespace,
+            prefix,
+            template_contents: None,
+            attribute_case_sensitive,
+        }
+    }
+
+    pub fn xml(
+        tag_name: String,
+        attributes: Vec<Attribute>,
+        namespace: Namespace,
+        prefix: Option<String>,
+    ) -> Self {
+        let mut element = Self::namespaced(tag_name, attributes, namespace, prefix);
+        element.attribute_case_sensitive = true;
+        element
+    }
+
+    pub(super) fn clone_without_template_contents(&self) -> Self {
+        let mut element = self.clone();
+        element.template_contents = None;
+        element
+    }
+
+    pub fn namespace(&self) -> &Namespace {
+        &self.namespace
+    }
+    pub fn prefix(&self) -> Option<&str> {
+        self.prefix.as_deref()
+    }
+    pub fn template_contents(&self) -> Option<NodeId> {
+        self.template_contents
+    }
+    pub(super) fn set_template_contents(&mut self, id: NodeId) {
+        self.template_contents = Some(id);
+    }
+    pub(super) fn merge_attributes(&mut self, attributes: Vec<Attribute>) {
+        for attribute in attributes {
+            if !self.attributes.iter().any(|existing| {
+                existing.name == attribute.name && existing.namespace == attribute.namespace
+            }) {
+                self.attributes.push(attribute);
+            }
         }
     }
 
@@ -103,16 +236,47 @@ impl ElementData {
     pub fn attribute(&self, name: &str) -> Option<&str> {
         self.attributes
             .iter()
-            .find(|attr| attr.name.eq_ignore_ascii_case(name))
+            .find(|attr| {
+                attr.namespace.is_none()
+                    && if !self.attribute_case_sensitive {
+                        attr.name.eq_ignore_ascii_case(name)
+                    } else {
+                        attr.name == name
+                    }
+            })
             .map(|attr| attr.value.as_str())
     }
 }
 
 impl Attribute {
     pub fn new(name: String, value: String) -> Self {
-        Self { name, value }
+        Self {
+            name,
+            value,
+            namespace: None,
+            prefix: None,
+        }
     }
 
+    pub fn namespaced(
+        name: String,
+        value: String,
+        namespace: String,
+        prefix: Option<String>,
+    ) -> Self {
+        Self {
+            name,
+            value,
+            namespace: Some(namespace),
+            prefix,
+        }
+    }
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+    pub fn prefix(&self) -> Option<&str> {
+        self.prefix.as_deref()
+    }
     pub fn name(&self) -> &str {
         &self.name
     }

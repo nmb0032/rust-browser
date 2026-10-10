@@ -8,6 +8,7 @@ pub enum DumpFormat {
     Layout,
     DisplayList,
     Stylesheets,
+    ParseErrors,
 }
 
 pub fn run(
@@ -42,6 +43,23 @@ fn dump_frame(frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
             crate::devtools::dump_stylesheets(&frame.stylesheets.stylesheets);
         }
         DumpFormat::Dom => crate::devtools::dump_dom(&frame.document),
+        DumpFormat::ParseErrors => {
+            for error in &frame.parse_errors {
+                println!(
+                    "{}:{} (byte {}): {}",
+                    error.position.line,
+                    error.position.column,
+                    error.position.byte_offset,
+                    error.code
+                );
+            }
+            if frame.dropped_parse_errors > 0 {
+                println!(
+                    "{} additional parse errors omitted",
+                    frame.dropped_parse_errors
+                );
+            }
+        }
         DumpFormat::Layout | DumpFormat::DisplayList => {
             let font = crate::paint::load_bundled_font()?;
             let mut tree = frame.layout_tree();

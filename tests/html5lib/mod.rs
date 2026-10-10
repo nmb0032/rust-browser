@@ -44,11 +44,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     documents.report("Tree construction (documents)");
     fragments.report("Tree construction (fragments)");
     println!(
-        "Passes require output AND parse errors; character chunks 1, 7, 64 must agree with whole input."
+        "Current-spec tree output gate: all documents and fragments; four PI expectations updated explicitly in living-standard.dat."
     );
     println!(
-        "Fragment contexts are not implemented (6.15): inputs exercise the current backend but are never credited as passes."
+        "Passes require output AND parse errors; character chunks 1, 7, 64 must agree with whole input."
     );
+    println!("Fragments use namespace-, mode-, and scripting-aware context initialization.");
     println!(
         "Unsupported tokenizer initial states and non-scalar inputs count as failures, not exclusions."
     );
@@ -57,6 +58,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     );
     println!(
         "Exclusions: xmlViolation.test (optional XML infoset coercion); tree-construction/scripted/ (script execution, 10.6)."
+    );
+    assert!(
+        tokens.passed >= 6990,
+        "tokenizer diagnostic baseline regressed"
+    );
+    assert!(
+        documents.passed >= 2549,
+        "document diagnostic baseline regressed"
+    );
+    assert!(
+        fragments.passed >= 332,
+        "fragment diagnostic baseline regressed"
     );
     if std::env::var_os("HTML5LIB_STRICT").is_some() {
         assert_eq!(tokens.passed, tokens.total, "tokenizer conformance");

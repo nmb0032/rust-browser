@@ -15,6 +15,8 @@ struct Outcome {
 pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
     let mut counts = Counts::default();
     let mut core = Counts::default();
+    let mut scalar_gate = 0;
+    let mut obsolete_pi = 0;
     for file in files(path, "test")? {
         if file
             .file_name()
@@ -35,10 +37,9 @@ pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
                     "Data state" => InitialState::Data,
                     "RAWTEXT state" => InitialState::Rawtext,
                     "PLAINTEXT state" => InitialState::Plaintext,
-                    "RCDATA state" | "Script data state" | "CDATA section state" => {
-                        counts.unsupported += 1;
-                        continue;
-                    }
+                    "RCDATA state" => InitialState::Rcdata,
+                    "Script data state" => InitialState::ScriptData,
+                    "CDATA section state" => InitialState::Cdata,
                     state => return Err(format!("unknown initial state: {state}").into()),
                 };
                 let mut source = case["input"]
@@ -80,8 +81,29 @@ pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
                 counts.shape_passed += usize::from(shape_matches);
                 let errors = case["errors"].as_array().cloned().unwrap_or_default();
                 let matches = shape_matches && whole.errors == errors && whole.dropped_errors == 0;
+                if errors
+                    .iter()
+                    .any(|error| error["code"] == "unexpected-question-mark-instead-of-tag-name")
+                {
+                    obsolete_pi += 1;
+                } else {
+                    assert!(
+                        matches,
+                        "scalar tokenizer regression: {}: {}\nexpected {expected}, errors {errors:?}\nactual {whole:?}",
+                        file.display(),
+                        case["description"]
+                    );
+                    scalar_gate += 1;
+                }
                 if matches {
                     counts.passed += 1;
+                }
+                if !matches && std::env::var_os("HTML5LIB_FAILURES").is_some() {
+                    eprintln!(
+                        "{}: {} ({initial})\nexpected {expected}, errors {errors:?}\nactual {whole:?}",
+                        file.display(),
+                        case["description"]
+                    );
                 }
                 let core_case = state == InitialState::Data
                     && !source.contains('&')
@@ -111,6 +133,9 @@ pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
         return Err("no tokenizer cases ran".into());
     }
     assert!(core.total > 0, "no core tokenizer cases ran");
+    println!(
+        "Exact scalar tokenizer regression gate: {scalar_gate} cases; {obsolete_pi} old PI expectations retained in raw baseline."
+    );
     Ok((counts, core))
 }
 
@@ -168,7 +193,17 @@ fn drain(tokenizer: &mut Tokenizer, tokens: &mut Vec<Value>) {
                 }
                 json!(["Character", text])
             }
-            Token::Markup(text) => json!(["UnsupportedMarkup", text]),
+            Token::Comment(text) => json!(["Comment", text]),
+            Token::ProcessingInstruction { target, data } => {
+                json!(["ProcessingInstruction", target, data])
+            }
+            Token::Doctype(data) => json!([
+                "DOCTYPE",
+                data.name,
+                data.public_identifier,
+                data.system_identifier,
+                !data.force_quirks
+            ]),
             Token::Eof => continue,
         };
         tokens.push(output);

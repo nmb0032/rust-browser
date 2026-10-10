@@ -71,11 +71,17 @@ pub fn resolve_with_stylesheets(
             .and_then(|id| nodes.get(&id))
             .unwrap_or(&initial);
         let style = match node.kind() {
-            NodeKind::Document => ComputedStyle {
+            NodeKind::Document | NodeKind::DocumentFragment => ComputedStyle {
                 display: Display::Block,
                 ..initial.clone()
             },
             NodeKind::Text(_) => ComputedStyle::inherit(parent),
+            NodeKind::Comment(_)
+            | NodeKind::Doctype(_)
+            | NodeKind::ProcessingInstruction { .. } => ComputedStyle {
+                display: Display::None,
+                ..ComputedStyle::inherit(parent)
+            },
             NodeKind::Element(element) => {
                 let mut winners = HashMap::new();
                 apply_rules(

@@ -2,7 +2,7 @@ use std::{error::Error, io, thread, time::Duration};
 
 use url::Url;
 
-use crate::{html::parser::HtmlParser, net};
+use crate::{html::encoding::HtmlByteParser, net};
 
 use super::{Frame, resources::load_resources};
 
@@ -24,14 +24,25 @@ pub fn load_page(
     } else {
         8192
     };
-    let mut parser = HtmlParser::new();
-    let mut last_revision = parser.revision();
-    let metadata = net::stream_document(url, chunk_size, |metadata, chunk| {
+    let mut parser = None;
+    let mut xml_bytes = Vec::new();
+    let mut last_revision = 0;
+    let metadata = net::stream_document_bytes(url, chunk_size, |metadata, chunk| {
         check_cancelled(&cancelled)?;
+        if metadata
+            .content_type
+            .as_deref()
+            .is_some_and(crate::xml::is_xml_mime)
+        {
+            xml_bytes.extend_from_slice(chunk);
+            return Ok(());
+        }
+        let parser =
+            parser.get_or_insert_with(|| HtmlByteParser::new(metadata.content_type.as_deref()));
         parser
             .feed(chunk)
             .map_err(|error| io::Error::other(format!("HTML parse failed: {error:?}")))?;
-        let node_count = parser.node_count();
+        let node_count = parser.document().node_count();
         if options.trace {
             eprintln!("[trace] {node_count} DOM nodes after {} bytes", chunk.len());
         }
@@ -45,9 +56,44 @@ pub fn load_page(
         Ok(())
     })?;
     check_cancelled(&cancelled)?;
-    let parsed = parser
-        .finish_with_diagnostics()
+    if metadata
+        .content_type
+        .as_deref()
+        .is_some_and(crate::xml::is_xml_mime)
+    {
+        let (document, failure) =
+            match crate::xml::parse_bytes(&xml_bytes, metadata.content_type.as_deref()) {
+                Ok(document) => (document, None),
+                Err(failure) => {
+                    eprintln!("{failure}");
+                    (crate::xml::error_document(&failure), Some(failure))
+                }
+            };
+        let mut frame = Frame::new(metadata.url, document);
+        if let Some(failure) = failure {
+            frame.parse_errors.push(crate::html::tokenizer::ParseError {
+                code: "xml-well-formedness-error",
+                position: failure.position,
+            });
+            frame.error = Some(failure.to_string());
+        } else {
+            load_resources(&mut frame, &mut on_progress, &cancelled)?;
+        }
+        check_cancelled(&cancelled)?;
+        on_progress(&frame)?;
+        return Ok(frame);
+    }
+    let decoded = parser
+        .unwrap_or_else(|| HtmlByteParser::new(metadata.content_type.as_deref()))
+        .finish()
         .map_err(|error| io::Error::other(format!("HTML parse failed: {error:?}")))?;
+    if decoded.had_replacements {
+        eprintln!(
+            "HTML: malformed {} byte sequences replaced",
+            decoded.encoding.name()
+        );
+    }
+    let parsed = decoded.parsed;
     for error in &parsed.errors {
         eprintln!(
             "HTML at {}:{} (byte {}): {}",
@@ -68,6 +114,8 @@ pub fn load_page(
         );
     }
     let mut frame = Frame::new(metadata.url, document);
+    frame.parse_errors = parsed.errors;
+    frame.dropped_parse_errors = parsed.dropped_errors;
     on_progress(&frame)?;
     load_resources(&mut frame, &mut on_progress, &cancelled)?;
     check_cancelled(&cancelled)?;

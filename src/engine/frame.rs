@@ -15,6 +15,8 @@ pub struct Frame {
     pub styles: ComputedStyles,
     pub images: ImageMap,
     pub error: Option<String>,
+    pub parse_errors: Vec<crate::html::tokenizer::ParseError>,
+    pub dropped_parse_errors: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +35,8 @@ impl Frame {
             styles: resolution.styles,
             images: ImageMap::new(),
             error: None,
+            parse_errors: Vec::new(),
+            dropped_parse_errors: 0,
         }
     }
 

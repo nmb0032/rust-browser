@@ -71,6 +71,18 @@ pub(crate) fn with_response<T>(
         let path = url
             .to_file_path()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid file URL"))?;
+        let content_type = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .and_then(|extension| match extension.to_ascii_lowercase().as_str() {
+                "xml" => Some("application/xml"),
+                "xhtml" | "xht" => Some("application/xhtml+xml"),
+                "svg" => Some("image/svg+xml"),
+                "html" | "htm" => Some("text/html"),
+                "css" => Some("text/css"),
+                _ => None,
+            })
+            .map(str::to_owned);
         let mut reader = LimitedReader {
             inner: File::open(path)?,
             remaining: limit,
@@ -78,7 +90,7 @@ pub(crate) fn with_response<T>(
         return on_response(
             &ResponseMetadata {
                 url: url.clone(),
-                content_type: None,
+                content_type,
             },
             &mut reader,
         );

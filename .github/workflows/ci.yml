@@ -17,6 +17,20 @@ jobs:
       - name: Windowing build dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
       - run: cargo fmt --all --check
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Tests and html5lib baseline (remaining conformance failures informational)
+      - name: Tests, scalar tokenizer gate, current-spec tree output, and diagnostic baseline
         run: cargo test --lib --tests -- --show-output
+
+  parser-fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Windowing build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+      - run: cargo install cargo-fuzz --locked
+      - name: Bounded HTML and XML fuzz smoke
+        run: |
+          cargo fuzz run html -- -runs=10000 -max_len=16384
+          cargo fuzz run xml -- -runs=10000 -max_len=16384

@@ -60,8 +60,8 @@ keeping the codebase small enough to learn from.
 | --- | --- | --- |
 | App entry | `src/app` | Starts interactive browsing or resource-aware DOM/stylesheet/layout/display-list dumps. |
 | Engine | `src/engine` | Owns document snapshots, final/base URLs, external resources, cancellable loading, and bounded back/forward history. |
-| Networking | `src/net` | Bounded HTTP/file bodies, GET redirects and response metadata, with incremental UTF-8 decoding. |
-| HTML | `src/html` | Spec-based core tokenizer with bounded diagnostics; declaration/text compatibility states and tree construction remain incomplete. |
+| Networking | `src/net` | Bounded HTTP/file bodies, GET redirects, response metadata, raw document-byte streaming, and explicit UTF-8 text utilities. |
+| HTML/XML | `src/html`, `src/xml` | Resumable HTML tokenizer, insertion-mode tree construction, contextual fragments, encoding sniffing/restarts, and bounded XML parsing; exact tree diagnostic conformance remains open. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
 | CSS | `src/css` | Rule-level syntax tree, simple selector matching/specificity, and color/length value parsers. |
 | Style | `src/style` | Embedded/external sheets in document order, inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
@@ -594,17 +594,17 @@ sections; script-execution integration belongs to 10.6.
   and EOF tokens, and self-closing tag metadata.
   *You'll see:* tokenizer test pass rate increase, and the large split
   attribute benchmark no longer pays for repeated scans.
-- [ ] **6.3 Tokenizer: comments and doctypes.** Emit comment and doctype
+- [x] **6.3 Tokenizer: comments and doctypes.** Emit comment and doctype
   tokens, and add comment and doctype nodes to the DOM. Cover malformed and
   bogus comments, doctype public/system identifiers, and the force-quirks
   flag consumed by the tree builder.
   *You'll see:* comments and doctypes in `--dump=dom`.
-- [ ] **6.4 Tokenizer: character references.** Decode named and numeric
+- [x] **6.4 Tokenizer: character references.** Decode named and numeric
   character references using the spec's entity table. Cover decimal and
   hexadecimal forms, context-dependent text/attribute and semicolon rules,
   and invalid-code-point recovery.
   *You'll see:* `&amp;`, `&copy;`, and `&#8212;` render correctly.
-- [ ] **6.5 Tokenizer: contextual text states.** Handle RCDATA for `title`
+- [x] **6.5 Tokenizer: contextual text states.** Handle RCDATA for `title`
   and `textarea`, RAWTEXT for `style` and other raw-text elements, script data
   including escaped and double-escaped states, and PLAINTEXT. Have the tree
   builder switch tokenizer states, with context-appropriate end-tag matching.
@@ -615,31 +615,31 @@ sections; script-execution integration belongs to 10.6.
   malformed attributes, state-specific NULL handling, input control-character
   and noncharacter diagnostics, and EOF recovery for incomplete constructs.
   *You'll see:* `--dump=parse-errors` lists problems while pages still render.
-- [ ] **6.7 Tree builder: implied `html`, `head`, and `body`.** Implement the
+- [x] **6.7 Tree builder: implied `html`, `head`, and `body`.** Implement the
   `initial`, `before html`, `before head`, `in head`, `after head`, and
   `in body` insertion modes, and select no-quirks, limited-quirks, or quirks
   document mode from doctype information.
   *You'll see:* bare text such as `Hello` produces a full document structure.
-- [ ] **6.8 Tree builder: implied end tags.** Automatically close elements
+- [x] **6.8 Tree builder: implied end tags.** Automatically close elements
   such as `p` and `li` when the spec requires it.
   *You'll see:* `<p>a<p>b` produces sibling paragraphs.
-- [ ] **6.9 Tree builder: active formatting elements.** Implement the list of
+- [x] **6.9 Tree builder: active formatting elements.** Implement the list of
   active formatting elements and the adoption agency algorithm.
   *You'll see:* misnested markup such as `<b><i></b></i>` matches browsers.
-- [ ] **6.10 Tree builder: tables.** Implement table insertion modes and
+- [x] **6.10 Tree builder: tables.** Implement table insertion modes and
   foster parenting.
   *You'll see:* stray content in tables is moved where browsers place it.
-- [ ] **6.11 Tree builder: SVG and MathML.** Add namespaces and foreign
+- [x] **6.11 Tree builder: SVG and MathML.** Add namespaces and foreign
   content rules, including HTML integration points, tag/attribute name
   adjustments, and self-closing tag handling. Feed foreign-content context
   back to the tokenizer so CDATA is recognized only where permitted.
   *You'll see:* inline SVG elements have the correct namespace in the DOM.
-- [ ] **6.12 Detect encodings.** Use `encoding_rs` with the BOM,
+- [x] **6.12 Detect encodings.** Use `encoding_rs` with the BOM,
   `Content-Type` charset, and `<meta charset>` prescan. Apply encoding
   precedence, fallback, replacement decoding, and parser-restart rules rather
   than assuming strict UTF-8. This belongs before tokenization.
   *You'll see:* non-UTF-8 pages display correctly.
-- [ ] **6.13 Fuzz the parser.** Add a `cargo fuzz` target.
+- [x] **6.13 Fuzz the parser.** Add a `cargo fuzz` target.
   *You'll see:* fuzzing runs without panics.
 - [ ] **6.14 Tree builder: templates and remaining parsing rules.**
   Implement template contents and the template insertion-mode stack. Complete
@@ -648,12 +648,12 @@ sections; script-execution integration belongs to 10.6.
   modes, and legacy frameset parsing.
   *You'll see:* template content stays outside the document's rendered tree,
   and the remaining tree-construction conformance cases pass.
-- [ ] **6.15 Parse HTML fragments with context.** Initialize tokenizer and
+- [x] **6.15 Parse HTML fragments with context.** Initialize tokenizer and
   tree-builder state from the context element, namespace, document mode, and
   scripting flag. Reuse this parser for markup-insertion DOM APIs later.
   *You'll see:* fragment tests for contexts such as `textarea`, `table`,
   `template`, and SVG match the specification.
-- [ ] **6.16 Parse XML documents.** Add an XML 1.0 and Namespaces in XML
+- [x] **6.16 Parse XML documents.** Add an XML 1.0 and Namespaces in XML
   parser for `application/xhtml+xml`, `image/svg+xml`, and other XML MIME
   types. Display well-formedness errors as browsers do, and reuse it for
   `DOMParser` and `XMLSerializer` later.
@@ -668,23 +668,68 @@ carry them explicitly into 10.6; chunk-boundary tests must continue to pass.
 WPT `html/syntax/`, `encoding/`, and the parsing parts of `domparsing/` must
 meet the conformance gate once 9.8 can run WPT.
 
-**Incremental checkpoint (6.1-6.2):** The tokenizer owns partially built tags
-and attributes, reconsumption, newline preprocessing, original UTF-8 byte
-offsets, and one-based normalized line/column positions. It emits character,
-start/end-tag, and exactly one EOF token. ASCII case folding, first-wins
-duplicate attributes, self-closing metadata, core NULL/error recovery, and
-input control/noncharacter diagnostics are implemented. Character references
-are still literal until 6.4. Malformed core HTML no longer aborts the load;
-`finish_with_diagnostics` retains errors, and the loader prints them. Error
-storage is capped at 256 with an explicit omitted-error count.
+**Implementation checkpoint (6.3-6.16):** The HTML parser remains in-house.
+The tokenizer now emits comments, doctypes, character references, contextual
+text, CDATA, and living-standard processing instructions. It retains partial
+tokens and reconsumption state rather than rescanning unfinished input.
+`tools/generate_entities.py` regenerates the checked-in normative entity table
+from the WHATWG `entities.json` data.
 
-`html/tokenizer/` separates input preprocessing, pending tags, core states,
-compatibility states, and tests. `html/tree_builder.rs` retains the earlier
-append/ancestor-closing algorithm behind `HtmlParser`. Adjacent text tokens
-coalesce without changing node IDs; loader snapshots use mutation revisions,
-not node counts, so continued text is visible before the next tag or EOF.
-Styles still accumulate until their closing tag or EOF so incomplete CSS is
-not parsed in progressive snapshots.
+`html/tokenizer/` separates input, tags, comments, doctypes, references,
+contextual text, and processing instructions. `html/tree_builder/` separates
+shared construction, body rules, structural insertion modes, formatting,
+tables, foreign content, and selected-option cloning. It implements implied
+document structure and document modes, scope and implied-end rules,
+formatting reconstruction/adoption agency, foster parenting, SVG/MathML
+adjustments and integration points, template insertion modes, scripting-aware
+`noscript`, after-body modes, and framesets. Select parsing follows the
+current in-body rules, not the removed historical "in select" modes.
+
+Template contents have detached document-fragment roots and cannot form
+host-including cycles through reparenting. They stay out of layout and
+resource discovery. `selectedcontent` receives independent deep clones of
+the selected option, including separate template contents when applicable.
+DOM mutation helpers preserve arena IDs; `Document::validate` checks child
+ownership, parent links, template hosts, and cycles.
+
+`HtmlParser::fragment` and `parse_fragment` reuse the construction algorithm
+with a context element, namespace, document mode, scripting flag, and
+nearest-first ancestor information for form handling. The returned arena
+has a document-fragment root. `HtmlParser::with_options` controls scripting
+without executing scripts.
+
+Adjacent text coalesces without changing node IDs; progressive snapshots
+still use mutation revisions. Styles remain buffered until close/EOF to
+avoid parsing partial CSS. Safe in-body/text runs are inserted together;
+contexts with character-specific recovery retain individual source positions.
+Both live and finished parser diagnostics combine tokenizer and tree errors,
+cap storage at 256, and expose an explicit omitted count. Frames retain these
+diagnostics, and `--dump=parse-errors` prints them without aborting rendering.
+Columns count UTF-16 code units. Byte offsets refer to the decoded UTF-8
+source, **not original network-byte offsets for legacy encodings**.
+
+`HtmlByteParser` selects BOM, transport charset, the first accepted meta
+declaration/prescan, XML-declaration fallback, or Windows-1252, and uses
+incremental replacement decoding. UTF-16 meta labels normalize to UTF-8;
+`x-user-defined` meta labels normalize to Windows-1252. Tentative parsing
+retains original bytes and restarts when a later accepted declaration changes
+the encoding; BOM/transport selections are certain and cannot be overridden.
+Resources load only after the final parse so restarts cannot leave stale
+resource node IDs. The existing `net::stream_html`/`fetch_html` text utilities
+remain explicitly strict UTF-8; navigations use raw document-byte streaming.
+
+XML MIME types (`application/xml`, `text/xml`, and `+xml` suffixes) dispatch to
+`src/xml`, using `xml-rs` for XML syntax and `encoding_rs` before parsing.
+XHTML and SVG retain namespaces, prefixes, case-sensitive attributes,
+namespace declarations, comments, PIs, and doctypes. Duplicate expanded
+attributes and namespace declarations, reserved namespace violations, and
+invalid encoding declarations are fatal XML well-formedness errors, shown
+in an error document. Local `.xml`, `.xhtml`/`.xht`, and `.svg` files receive
+XML MIME metadata. This is non-validating XML 1.0: no network entity resolver
+is installed, XML 1.1 is rejected, and external-DTD validation is not provided.
+Input/expanded data is bounded to 16 MiB, with entity depth 10 and a 1 MiB
+per-expansion limit. XML serialization and script-visible DOM APIs remain
+future integration work.
 
 **Run the conformance baseline:**
 
@@ -708,61 +753,90 @@ double escapes, and UTF-16 attribute ordering. Optional XML-infoset coercion
 requires execution and is explicitly deferred to 10.6. Pending-spec-change
 fixtures remain in the baseline.
 
-Unsupported tokenizer initial states and non-scalar inputs are counted as
-failures, not silently replaced or excluded. Fragment inputs exercise the
-current document backend for streaming checks; without a contextual-fragment
-API they are **always counted as failures**, even if a dump happens to match.
-The scripting flag is enumerated but does not yet control the naive builder.
-The harness's namespace/template serialization and fragment adapter must be
-extended alongside 6.11, 6.14, and 6.15.
+The full raw fixture scores remain visible. Four lone-surrogate tokenizer
+inputs cannot be represented by the current Rust `str` API and remain counted
+as failures, not silently replaced or excluded.
 
-Baseline on 2026-10-10:
+Current measurements on 2026-10-10:
 
 | Suite | Output and error checks | Output only |
 | --- | --- | --- |
-| Tokenizer, all applicable initial-state cases | 2,975 / 7,032 (42.31%) | 2,983 / 7,032 |
+| Tokenizer, raw pinned fixtures | 6,990 / 7,032 (99.40%) | 7,017 / 7,032 |
 | Core data/tag/attribute subset | 834 / 834 (100%) | 834 / 834 |
-| Tree construction, document/scripting variants | 0 / 3,165 (0%) | 4 / 3,165 |
-| Tree construction, fragment/scripting variants | 0 / 384 (0%) | Not credited without context |
+| Tree construction, document/scripting variants | 2,549 / 3,165 (80.54%) | 3,157 / 3,165 |
+| Tree construction, fragment/scripting variants | 332 / 384 (86.46%) | 384 / 384 |
 
-The core subset selects scalar Data-state cases without `&`, declarations,
-or expected comment/doctype tokens. CI enforces this subset, chunk invariance,
-formatting, Clippy, and ordinary regression tests, but remaining conformance
-failures are informational. `HTML5LIB_STRICT=1 cargo test --test html5lib`
-enables full-suite enforcement once the remaining steps land. These are
-baseline gates, **not** a claim that Milestone 6 is complete.
+The current living standard's processing-instruction states differ from
+38 tokenizer expectations in the pinned revision. All other 6,990 scalar
+tokenizer cases pass exact output and positioned diagnostic checks; CI
+enforces them. Living-standard PI target/data/EOF behavior has separate
+boundary tests. Four old document PI inputs, each run with both scripting
+flags, explain the eight raw tree-output differences. Their current expected
+trees and error counts are explicitly stored in
+`tests/html5lib/living-standard.dat`; they do not alter the raw scores.
+CI enforces **all 3,165 document and 384 fragment trees** using those four
+audited updates, plus chunk invariance, formatting, strict Clippy, ordinary
+regressions, bounded fuzzing, and non-decreasing raw diagnostic pass counts.
 
-**Remaining tokenizer and integration rules:**
+**Milestone 6 is not complete.** Steps 6.6 and 6.14 remain unchecked because
+the raw exact tree-diagnostic gate does not pass. Many legacy/new-error
+entries describe overlapping tokenizer conditions, but the harness retains
+the documented additive `#new-errors` count. Other mismatches require
+per-case audit against the living standard; no extra diagnostics are
+fabricated to match counts. `HTML5LIB_STRICT=1 cargo test --test html5lib`
+still intentionally fails and remains the full raw-suite exit check.
+
+**Remaining conformance and integration work:**
 
 | Work | Specification / roadmap step |
 | --- | --- |
-| Replace compatibility `Markup` tokens with full comment/doctype states and DOM nodes | HTML 13.2.5.41-68; 6.3 |
-| Named/numeric references and context-dependent recovery | HTML 13.2.5.77-84, 13.5; 6.4 |
-| RCDATA, complete script data, contextual text switching, and foreign CDATA | HTML 13.2.5.2-31, 69-71; 6.5, 6.11 |
-| Processing-instruction states recently added to the living standard; replace question-mark declaration compatibility | HTML 13.2.5.72-76; 6.14 |
-| Remaining tokenizer/tree-builder errors and parse-error dump | HTML 13.2.2, 13.2.6; 6.6 |
-| Non-scalar input diagnostics, decoding, encoding sniffing/restarts | HTML 13.2.3; 6.6, 6.12 |
-| Insertion modes, document modes, implied end tags, formatting, tables, foreign content | HTML 13.2.6; 6.7-6.11 |
-| Templates, scripting flag, remaining insertion modes, contextual fragments | HTML 13.2.6-7; 6.14-6.15 |
-| Fuzz targets and XML MIME handling | 6.13, 6.16 |
+| Audit exact tree diagnostic counts, distinguishing fixture drift from implementation errors | HTML 13.2.2, 13.2.6; 6.6, 6.14 |
+| Represent lone-surrogate DOMString input without silently replacing fixture data | HTML input-stream preprocessing; future DOM-facing parsing API |
+| Map decoded diagnostic offsets back to original network bytes | HTML 13.2.3; diagnostic fidelity |
+| Script-execution-dependent parsing and insertion hooks | 10.6 |
+| WPT syntax, encoding, and DOM parsing gates | 9.8 |
 
-**Measure the tokenizer change:** `cargo bench --bench streaming` retains the
+**Fuzzing:** `fuzz/` contains `html` and `xml` cargo-fuzz targets and seed
+corpora. HTML checks whole/chunked byte decoding, identical final DOMs and
+positioned errors, fragment contexts, and arena invariants. XML checks both
+successful trees and well-formedness error documents. Deterministic tests
+also cover 10,000 nested elements, long table text, formatting recovery,
+split 1 MiB attributes, encoding boundaries, and template-host cycles.
+
+```sh
+cargo install cargo-fuzz --locked
+cargo +nightly fuzz run html -- -runs=50000 -max_len=16384
+cargo +nightly fuzz run xml -- -runs=50000 -max_len=16384
+```
+
+Both targets completed 50,000 coverage-guided runs locally without crashes.
+The local Homebrew Rust toolchain lacks the ASan runtime, so those runs used
+`--sanitizer none`; CI uses nightly with the default address sanitizer.
+Bounded smoke runs are not proof that all hostile inputs are safe.
+
+**Performance:** `cargo bench --bench streaming` retains the
 buffered/streamed comparison with seven release-mode samples and 8 KiB
-chunks. On ARM64 macOS with Rust 1.98.0 (2026-10-10):
+chunks and now measures byte decoding and XML. On ARM64 macOS with Rust
+1.98.0 (2026-10-10):
 
 | Input | Buffered parse | Stream parse | Stream plus snapshots |
 | --- | --- | --- | --- |
-| 64 KiB paragraphs | 0.778 ms | 0.787 ms | 1.343 ms |
-| 1 MiB paragraphs | 12.861 ms | 12.590 ms | 117.278 ms |
-| 1 MiB single attribute | 8.286 ms | 8.342 ms | 8.403 ms |
+| 64 KiB paragraphs | 1.339 ms | 1.358 ms | 1.946 ms |
+| 1 MiB paragraphs | 21.238 ms | 21.310 ms | 125.320 ms |
+| 1 MiB single attribute | 9.564 ms | 9.653 ms | 9.713 ms |
 
 The split-attribute penalty is gone: the same input took 186.79 ms streamed
 at the Milestone 3 checkpoint. Core tokenization has a higher per-character
 cost than that naive parser, especially for paragraphs; no general parsing
 speedup is claimed. Tests also feed 1 MiB attribute **names and values** in
 127-byte chunks and assert that every source character is consumed exactly
-once. Loopback HTTP first text was 45.728 ms streamed versus 216.897 ms
-buffered (78.9% earlier); these remain DOM timings, not first-paint timings.
+once. Loopback HTTP first text was 45.644 ms streamed versus 215.425 ms
+buffered (78.8% earlier); these remain DOM timings, not first-paint timings.
+Incremental decode plus parse medians were 21.460 ms for 1 MiB UTF-8 HTML,
+47.883 ms for 961,180 bytes of reference-heavy Windows-1252 HTML, and
+22.112 ms for 2,015,234 bytes of UTF-16 HTML. XML namespaces/entities took
+42.238 ms for 1,075,029 UTF-8 bytes. These inputs are different workloads,
+not comparisons of encoding throughput on equivalent trees.
 
 ### Milestone 7: Spec-correct CSS
 

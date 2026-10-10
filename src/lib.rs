@@ -10,3 +10,4 @@ pub mod net;
 pub mod paint;
 pub mod style;
 pub mod ui;
+pub mod xml;

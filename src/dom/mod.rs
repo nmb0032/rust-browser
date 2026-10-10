@@ -12,5 +12,5 @@
 mod document;
 mod node;
 
-pub use document::{Document, DomError};
-pub use node::{Attribute, ElementData, Node, NodeId, NodeKind};
+pub use document::{Document, DocumentMode, DomError};
+pub use node::{Attribute, DoctypeData, ElementData, Namespace, Node, NodeId, NodeKind};

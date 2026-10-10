@@ -231,7 +231,9 @@ fn build_box(
         return None;
     }
     let (tag_name, kind, text) = match node.kind() {
-        NodeKind::Document => ("#document".into(), BoxKind::Block, None),
+        NodeKind::Document | NodeKind::DocumentFragment => {
+            ("#document".into(), BoxKind::Block, None)
+        }
         NodeKind::Element(element) => {
             let kind = match style.display {
                 Display::Block | Display::ListItem => BoxKind::Block,
@@ -241,6 +243,9 @@ fn build_box(
             (format!("<{}>", element.tag_name()), kind, None)
         }
         NodeKind::Text(text) => ("#text".into(), BoxKind::Text, Some(text.clone())),
+        NodeKind::Comment(_) | NodeKind::Doctype(_) | NodeKind::ProcessingInstruction { .. } => {
+            return None;
+        }
     };
     Some(LayoutBox {
         node_id,

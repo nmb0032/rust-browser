@@ -58,7 +58,59 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     http_timings()?;
+    document_format_timings();
     Ok(())
+}
+
+fn document_format_timings() {
+    use rust_browser::html::encoding::HtmlByteParser;
+    let source = paragraphs(1024 * 1024);
+    let legacy = b"<p>caf\xe9 &amp; text</p>".repeat(1024 * 1024 / 24);
+    let utf16 = [
+        vec![0xFF, 0xFE],
+        source.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+    ]
+    .concat();
+    println!("\nDocument decoding and parsing, seven-sample medians:");
+    for (label, bytes, mime) in [
+        (
+            "UTF-8 HTML",
+            source.as_bytes(),
+            Some("text/html; charset=utf-8"),
+        ),
+        ("Windows-1252 HTML", legacy.as_slice(), None),
+        ("UTF-16 HTML", utf16.as_slice(), None),
+    ] {
+        let samples = (0..SAMPLES)
+            .map(|_| {
+                time_parse(|| {
+                    let mut parser = HtmlByteParser::new(mime);
+                    for chunk in black_box(bytes).chunks(CHUNK_BYTES) {
+                        parser.feed(chunk).unwrap();
+                    }
+                    parser.finish().unwrap().parsed.document
+                })
+            })
+            .collect();
+        println!(
+            "{label:<24} {:>10.3} ms ({} input bytes)",
+            millis(median(samples)),
+            bytes.len()
+        );
+    }
+    let xml = format!(
+        "<root xmlns:p='urn:p'>{}</root>",
+        "<p:item value='1'>text &amp; café</p:item>".repeat(25000)
+    );
+    let samples = (0..SAMPLES)
+        .map(|_| time_parse(|| rust_browser::xml::parse(black_box(&xml)).unwrap()))
+        .collect();
+    println!(
+        "{:<24} {:>10.3} ms ({} UTF-8 bytes)",
+        "XML namespaces/entities",
+        millis(median(samples)),
+        xml.len()
+    );
 }
 
 fn paragraphs(bytes: usize) -> String {
@@ -244,13 +296,14 @@ fn time_http_load(
 }
 
 fn contains_first_paragraph_text(document: &Document) -> bool {
-    let root = document.node(document.root_id()).unwrap();
-    let Some(first_child) = root.children().first() else {
-        return false;
-    };
-    let paragraph = document.node(*first_child).unwrap();
-    paragraph.children().iter().any(|child| {
-        matches!(document.node(*child).unwrap().kind(), NodeKind::Text(text) if !text.is_empty())
+    document.preorder().any(|id| {
+        let node = document.node(id).unwrap();
+        matches!(node.kind(), NodeKind::Text(text) if !text.is_empty())
+            && node
+                .parent()
+                .and_then(|parent| document.node(parent))
+                .and_then(|node| node.as_element())
+                .is_some_and(|element| element.tag_name() == "p")
     })
 }
 

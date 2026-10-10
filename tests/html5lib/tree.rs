@@ -1,8 +1,8 @@
 use std::{error::Error, fmt::Write, fs, path::Path};
 
 use rust_browser::{
-    dom::{Document, NodeKind},
-    html::parser::HtmlParser,
+    dom::{Attribute, Document, DocumentMode, ElementData, Namespace, NodeKind},
+    html::parser::{FragmentContext, HtmlParser, ParserOptions},
 };
 
 use super::{Counts, chunks, files};
@@ -26,6 +26,7 @@ struct Outcome {
 pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
     let mut documents = Counts::default();
     let mut fragments = Counts::default();
+    let living = parse_cases(include_str!("living-standard.dat"))?;
     for file in files(path, "dat")? {
         for (index, case) in parse_cases(&fs::read_to_string(&file)?)?.iter().enumerate() {
             let flags: &[bool] = match case.scripting {
@@ -40,10 +41,10 @@ pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
                     &mut documents
                 };
                 counts.total += 1;
-                let whole = parse(&case.input, usize::MAX)?;
+                let whole = parse(&case.input, usize::MAX, case.context.as_deref(), *scripting)?;
                 for size in [1, 7, 64] {
                     assert_eq!(
-                        parse(&case.input, size)?,
+                        parse(&case.input, size, case.context.as_deref(), *scripting)?,
                         whole,
                         "{}: case {} (scripting {scripting}, context {:?}, chunk {size})",
                         file.display(),
@@ -51,16 +52,41 @@ pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
                         case.context
                     );
                 }
-                // There is no contextual-fragment API yet; never report accidental
-                // document-backend matches as fragment conformance.
-                if case.context.is_some() {
-                    counts.unsupported += 1;
-                    continue;
-                }
                 let shape_matches = whole.output == case.expected;
+                let current = living
+                    .iter()
+                    .find(|updated| updated.input == case.input && updated.context == case.context);
+                assert_eq!(
+                    whole.output,
+                    current.unwrap_or(case).expected,
+                    "current-spec tree output regression: {}:{} (context {:?}, scripting {scripting})",
+                    file.display(),
+                    index + 1,
+                    case.context
+                );
+                if let Some(current) = current {
+                    assert_eq!(
+                        whole.errors.len() + whole.dropped_errors,
+                        current.errors,
+                        "living-standard PI diagnostic count"
+                    );
+                }
                 counts.shape_passed += usize::from(shape_matches);
                 if shape_matches && whole.errors.len() + whole.dropped_errors == case.errors {
                     counts.passed += 1;
+                } else if std::env::var_os("HTML5LIB_TREE_FAILURES").is_some() {
+                    eprintln!(
+                        "{}:{} (scripting {scripting}, context {:?}) input {:?}\nexpected ({} errors):\n{}\nactual ({} errors):\n{}\n{:?}\n",
+                        file.display(),
+                        index + 1,
+                        case.context,
+                        case.input,
+                        case.errors,
+                        case.expected,
+                        whole.errors.len() + whole.dropped_errors,
+                        whole.output,
+                        whole.errors
+                    );
                 }
             }
         }
@@ -71,8 +97,29 @@ pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
     Ok((documents, fragments))
 }
 
-fn parse(source: &str, size: usize) -> Result<Outcome, Box<dyn Error>> {
-    let mut parser = HtmlParser::new();
+fn parse(
+    source: &str,
+    size: usize,
+    context: Option<&str>,
+    scripting: bool,
+) -> Result<Outcome, Box<dyn Error>> {
+    let mut parser = if let Some(context) = context {
+        let (namespace, name) = match context.split_once(' ') {
+            Some(("svg", name)) => (Namespace::Svg, name),
+            Some(("math", name)) => (Namespace::MathMl, name),
+            Some(_) => return Err("unknown fragment namespace".into()),
+            None => (Namespace::Html, context),
+        };
+        HtmlParser::fragment(FragmentContext {
+            element: ElementData::namespaced(name.into(), Vec::new(), namespace, None),
+            ancestors: Vec::new(),
+            document_mode: DocumentMode::NoQuirks,
+            scripting,
+        })
+        .map_err(|error| format!("{error:?}"))?
+    } else {
+        HtmlParser::with_options(ParserOptions { scripting })
+    };
     for chunk in chunks(source, size) {
         parser.feed(chunk).map_err(|error| format!("{error:?}"))?;
     }
@@ -95,31 +142,69 @@ fn serialize(document: &Document) -> String {
         let node = document.node(id).expect("valid arena link");
         let indent = "  ".repeat(depth);
         match node.kind() {
-            NodeKind::Document => {
+            NodeKind::Document | NodeKind::DocumentFragment => {
                 pending.extend(node.children().iter().rev().map(|id| (*id, depth)));
                 continue;
             }
             NodeKind::Element(element) => {
-                writeln!(output, "| {indent}<{}>", element.tag_name()).unwrap();
+                let namespace = match element.namespace() {
+                    Namespace::Svg => "svg ",
+                    Namespace::MathMl => "math ",
+                    _ => "",
+                };
+                writeln!(output, "| {indent}<{namespace}{}>", element.tag_name()).unwrap();
                 let mut attributes = element.attributes().iter().collect::<Vec<_>>();
                 attributes.sort_by(|left, right| {
-                    left.name().encode_utf16().cmp(right.name().encode_utf16())
+                    attribute_name(left)
+                        .encode_utf16()
+                        .cmp(attribute_name(right).encode_utf16())
                 });
                 for attribute in attributes {
                     writeln!(
                         output,
                         "| {indent}  {}=\"{}\"",
-                        attribute.name(),
+                        attribute_name(attribute),
                         attribute.value()
                     )
                     .unwrap();
                 }
+                if let Some(contents) = element.template_contents() {
+                    writeln!(output, "| {indent}  content").unwrap();
+                    pending.push((contents, depth + 2));
+                }
             }
+
             NodeKind::Text(text) => writeln!(output, "| {indent}\"{text}\"").unwrap(),
+            NodeKind::Comment(text) => writeln!(output, "| {indent}<!-- {text} -->").unwrap(),
+            NodeKind::Doctype(data) => {
+                if data.public_identifier.is_empty() && data.system_identifier.is_empty() {
+                    writeln!(output, "| {indent}<!DOCTYPE {}>", data.name).unwrap();
+                } else {
+                    writeln!(
+                        output,
+                        "| {indent}<!DOCTYPE {} \"{}\" \"{}\">",
+                        data.name, data.public_identifier, data.system_identifier
+                    )
+                    .unwrap();
+                }
+            }
+            NodeKind::ProcessingInstruction { target, data } => {
+                writeln!(output, "| {indent}<?{target} {data}>").unwrap()
+            }
         }
         pending.extend(node.children().iter().rev().map(|id| (*id, depth + 1)));
     }
     output.strip_suffix('\n').unwrap_or(&output).to_owned()
+}
+
+fn attribute_name(attribute: &Attribute) -> String {
+    let prefix = match attribute.namespace() {
+        Some("http://www.w3.org/1999/xlink") => "xlink ",
+        Some("http://www.w3.org/XML/1998/namespace") => "xml ",
+        Some("http://www.w3.org/2000/xmlns/") => "xmlns ",
+        _ => "",
+    };
+    format!("{prefix}{}", attribute.name())
 }
 
 fn parse_cases(source: &str) -> Result<Vec<Case>, Box<dyn Error>> {
@@ -207,7 +292,7 @@ mod tests {
         let document = rust_browser::html::parser::parse("<p z=last a='first'>a\nb</p>").unwrap();
         assert_eq!(
             serialize(&document),
-            "| <p>\n|   a=\"first\"\n|   z=\"last\"\n|   \"a\nb\""
+            "| <html>\n|   <head>\n|   <body>\n|     <p>\n|       a=\"first\"\n|       z=\"last\"\n|       \"a\nb\""
         );
     }
 

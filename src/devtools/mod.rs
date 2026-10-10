@@ -1,4 +1,4 @@
-use crate::dom::{Document, NodeId, NodeKind};
+use crate::dom::{Document, NodeKind};
 use crate::layout::{BoxKind, LayoutBox, LayoutTree};
 use crate::paint::DisplayItem;
 
@@ -70,7 +70,68 @@ fn format_rule(rule: &crate::css::Rule, depth: usize, output: &mut String) {
 }
 
 pub fn dump_dom(document: &Document) {
-    dump_node(document, document.root_id(), 0);
+    print!("{}", format_dom(document));
+}
+
+pub fn format_dom(document: &Document) -> String {
+    use crate::dom::Namespace;
+    use std::fmt::Write;
+    let mut output = String::new();
+    let mut pending = vec![(document.root_id(), 0)];
+    while let Some((id, depth)) = pending.pop() {
+        let node = document.node(id).expect("valid DOM arena link");
+        let indent = "  ".repeat(depth);
+        match node.kind() {
+            NodeKind::Document => writeln!(output, "{indent}#document"),
+            NodeKind::DocumentFragment => writeln!(output, "{indent}#document-fragment"),
+            NodeKind::Element(element) => {
+                let namespace = match element.namespace() {
+                    Namespace::Html => String::new(),
+                    Namespace::Svg => "svg ".into(),
+                    Namespace::MathMl => "math ".into(),
+                    Namespace::None => "null ".into(),
+                    Namespace::Other(uri) => format!("{{{uri}}} "),
+                };
+                let prefix = element
+                    .prefix()
+                    .map_or(String::new(), |prefix| format!("{prefix}:"));
+                write!(output, "{indent}<{namespace}{prefix}{}", element.tag_name())
+                    .expect("writing a string");
+                for attribute in element.attributes() {
+                    let prefix = attribute
+                        .prefix()
+                        .map_or(String::new(), |prefix| format!("{prefix}:"));
+                    let namespace = attribute
+                        .namespace()
+                        .map_or(String::new(), |uri| format!("{{{uri}}}"));
+                    write!(
+                        output,
+                        " {namespace}{prefix}{}={:?}",
+                        attribute.name(),
+                        attribute.value()
+                    )
+                    .expect("writing a string");
+                }
+                if let Some(contents) = element.template_contents() {
+                    pending.push((contents, depth + 1));
+                }
+                writeln!(output, ">")
+            }
+            NodeKind::Text(text) => writeln!(output, "{indent}{text:?}"),
+            NodeKind::Comment(text) => writeln!(output, "{indent}<!--{text}-->"),
+            NodeKind::Doctype(data) => writeln!(
+                output,
+                "{indent}<!DOCTYPE {} {:?} {:?}>",
+                data.name, data.public_identifier, data.system_identifier
+            ),
+            NodeKind::ProcessingInstruction { target, data } => {
+                writeln!(output, "{indent}<?{target} {data}?>")
+            }
+        }
+        .expect("writing a string");
+        pending.extend(node.children().iter().rev().map(|id| (*id, depth + 1)));
+    }
+    output
 }
 
 pub fn dump_display_list(display_list: &[DisplayItem]) {
@@ -106,30 +167,5 @@ fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
 
     for child in layout_box.children() {
         dump_layout_box(child, depth + 1);
-    }
-}
-
-fn dump_node(document: &Document, id: NodeId, depth: usize) {
-    let node = document
-        .node(id)
-        .expect("DOM child ID must refer to an existing node");
-    let indent = "  ".repeat(depth);
-
-    match node.kind() {
-        NodeKind::Document => println!("{indent}#document"),
-        NodeKind::Element(element) => {
-            print!("{indent}<{}", element.tag_name());
-
-            for attribute in element.attributes() {
-                print!(" {}={:?}", attribute.name(), attribute.value());
-            }
-
-            println!(">");
-        }
-        NodeKind::Text(text) => println!("{indent}{text:?}"),
-    }
-
-    for child_id in node.children() {
-        dump_node(document, *child_id, depth + 1);
     }
 }

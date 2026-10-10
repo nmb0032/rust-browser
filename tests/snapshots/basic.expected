@@ -1,7 +1,6 @@
 #document
-  "\n"
+  <!DOCTYPE html "" "">
   <html lang="en">
-    "\n"
     <head>
       "\n    "
       <meta charset="UTF-8">
@@ -34,6 +33,4 @@
       "\n\n    "
       <a href="https://example.com">
         "Visit Example Link"
-      "\n\n"
-    "\n"
-  "\n"
+      "\n\n\n\n"

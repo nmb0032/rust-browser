@@ -66,7 +66,7 @@ impl Input {
                 self.position.line += 1;
                 self.position.column = 1;
             } else {
-                self.position.column += 1;
+                self.position.column += normalized.len_utf16();
             }
             return Some((normalized, position));
         }

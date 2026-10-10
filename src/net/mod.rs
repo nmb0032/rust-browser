@@ -46,6 +46,24 @@ pub fn stream_document(
     })
 }
 
+pub fn stream_document_bytes(
+    url: &Url,
+    chunk_size: usize,
+    mut on_chunk: impl FnMut(&ResponseMetadata, &[u8]) -> Result<(), Box<dyn Error>>,
+) -> Result<ResponseMetadata, Box<dyn Error>> {
+    client::with_response(url, MAX_HTML_BYTES, |metadata, reader| {
+        let mut buffer = vec![0; chunk_size.max(1)];
+        loop {
+            let count = reader.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            on_chunk(metadata, &buffer[..count])?;
+        }
+        Ok(metadata.clone())
+    })
+}
+
 fn stream_reader(
     mut reader: impl Read,
     chunk_size: usize,

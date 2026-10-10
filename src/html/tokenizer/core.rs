@@ -1,34 +1,38 @@
-use super::{PendingTag, State, Tokenizer, whitespace};
+use super::{PendingTag, State, Tokenizer, comments::CommentState, whitespace};
 
 impl Tokenizer {
     pub(super) fn step(&mut self, ch: char) {
         match self.state {
             State::Data => match ch {
+                '&' => self.begin_reference(State::Data),
                 '<' => {
                     self.state = State::TagOpen;
                     self.flush_characters();
                 }
                 '\0' => {
                     self.error("unexpected-null-character");
-                    self.characters.push(ch);
+                    self.character(ch);
                 }
-                _ => self.characters.push(ch),
+                _ => self.character(ch),
             },
             State::TagOpen => match ch {
-                '!' => self.begin_markup("<!"),
+                '!' => {
+                    self.declaration.clear();
+                    self.lookahead_position = self.input.position();
+                    self.state = State::Declaration;
+                }
                 '/' => self.state = State::EndTagOpen,
                 ch if ch.is_ascii_alphabetic() => {
                     self.tag = PendingTag::default();
                     self.reconsume_in(ch, State::TagName);
                 }
                 '?' => {
-                    self.error("unexpected-question-mark-instead-of-tag-name");
-                    self.begin_markup("<");
-                    self.reconsume = Some(ch);
+                    self.keyword.clear();
+                    self.state = State::Instruction(super::instructions::InstructionState::Open);
                 }
                 _ => {
                     self.error("invalid-first-character-of-tag-name");
-                    self.characters.push('<');
+                    self.character('<');
                     self.reconsume_in(ch, State::Data);
                 }
             },
@@ -44,7 +48,8 @@ impl Tokenizer {
                 }
                 _ => {
                     self.error("invalid-first-character-of-tag-name");
-                    self.begin_markup("</");
+                    self.comment.clear();
+                    self.state = State::Comment(CommentState::Bogus);
                     self.reconsume = Some(ch);
                 }
             },
@@ -119,6 +124,8 @@ impl Tokenizer {
                 };
                 if ch == quote {
                     self.state = State::AfterQuoted;
+                } else if ch == '&' {
+                    self.begin_reference(self.state);
                 } else if ch == '\0' {
                     self.error("unexpected-null-character");
                     self.tag.value().push('\u{FFFD}');
@@ -127,6 +134,7 @@ impl Tokenizer {
                 }
             }
             State::Unquoted => match ch {
+                '&' => self.begin_reference(State::Unquoted),
                 ch if whitespace(ch) => {
                     self.tag.finish_attribute();
                     self.state = State::BeforeAttributeName;
@@ -163,18 +171,24 @@ impl Tokenizer {
                     self.reconsume_in(ch, State::BeforeAttributeName);
                 }
             }
-            State::Markup => self.markup_character(ch),
+            State::Declaration => self.declaration_character(ch),
+            State::Comment(state) => self.comment_character(state, ch),
+            State::Doctype(state) => self.doctype_character(state, ch),
+            State::Reference(state) => self.reference_character(state, ch),
+            State::Instruction(state) => self.instruction_character(state, ch),
             State::Rawtext | State::RawLessThan | State::RawEndOpen | State::RawEndName => {
                 self.rawtext_character(ch);
             }
             State::Plaintext => {
                 if ch == '\0' {
                     self.error("unexpected-null-character");
-                    self.characters.push('\u{FFFD}');
+                    self.character('\u{FFFD}');
                 } else {
-                    self.characters.push(ch);
+                    self.character(ch);
                 }
             }
+            State::Script(state) => self.script_character(state, ch),
+            State::Cdata | State::CdataBracket | State::CdataEnd => self.cdata_character(ch),
         }
     }
 }

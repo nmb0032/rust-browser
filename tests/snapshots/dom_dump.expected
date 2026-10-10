@@ -1,6 +1,9 @@
 #document
-  <section id="root">
-    <input disabled="" value="hello">
-    <br>
-    "after"
-  "\n"
+  <html>
+    <head>
+    <body>
+      <section id="root">
+        <input disabled="" value="hello">
+        <br>
+        "after"
+      "\n"

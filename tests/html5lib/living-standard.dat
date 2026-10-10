@@ -1,0 +1,39 @@
+#data
+<?import namespace="foo" implementation="#bar">
+#errors
+missing-doctype
+#document
+| <?import namespace="foo" implementation="#bar">
+| <html>
+|   <head>
+|   <body>
+
+#data
+<?
+#errors
+eof-in-processing-instruction
+missing-doctype
+#document
+| <html>
+|   <head>
+|   <body>
+
+#data
+<?COMMENT?>
+#errors
+missing-doctype
+#document
+| <?COMMENT >
+| <html>
+|   <head>
+|   <body>
+
+#data
+<?COM--MENT?>
+#errors
+missing-doctype
+#document
+| <?COM--MENT >
+| <html>
+|   <head>
+|   <body>
