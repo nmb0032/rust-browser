@@ -19,7 +19,7 @@ const SAMPLES: usize = 7;
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Release-mode medians of {SAMPLES} samples; 8 KiB parser chunks.");
     println!("CPU timings exclude fetching, layout, painting, and final DOM destruction.");
-    println!("A snapshot is a full DOM clone on each feed, plus the final DOM clone.\n");
+    println!("Snapshots clone after each feed that mutates the DOM, plus the final clone.\n");
     println!("Input                    Buffered parse   Stream parse   Stream + snapshots");
     for (label, source) in [
         ("64 KiB paragraphs", paragraphs(64 * 1024)),
@@ -72,7 +72,7 @@ fn paragraphs(bytes: usize) -> String {
 fn parse_chunks(source: &str, snapshots: bool) -> Document {
     let mut parser = HtmlParser::new();
     let mut position = 0;
-    let mut last_node_count = parser.node_count();
+    let mut last_revision = parser.revision();
     while position < source.len() {
         let mut end = (position + CHUNK_BYTES).min(source.len());
         while !source.is_char_boundary(end) {
@@ -81,9 +81,9 @@ fn parse_chunks(source: &str, snapshots: bool) -> Document {
         parser
             .feed(&source[position..end])
             .expect("benchmark chunk should parse");
-        if snapshots && parser.node_count() != last_node_count {
+        if snapshots && parser.revision() != last_revision {
             black_box(parser.document().clone());
-            last_node_count = parser.node_count();
+            last_revision = parser.revision();
         }
         position = end;
     }
@@ -211,15 +211,15 @@ fn time_http_load(
     let mut first_text = None;
     let document = if streaming {
         let mut parser = HtmlParser::new();
-        let mut last_node_count = parser.node_count();
+        let mut last_revision = parser.revision();
         net::stream_html(location, CHUNK_BYTES, |chunk| {
             parser.feed(chunk).map_err(parse_error)?;
-            if parser.node_count() != last_node_count {
+            if parser.revision() != last_revision {
                 let snapshot = black_box(parser.document().clone());
                 if first_text.is_none() && contains_first_paragraph_text(&snapshot) {
                     first_text = Some(start.elapsed());
                 }
-                last_node_count = parser.node_count();
+                last_revision = parser.revision();
             }
             Ok(())
         })?;

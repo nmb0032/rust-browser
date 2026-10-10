@@ -68,6 +68,42 @@ fn font() -> fontdue::Font {
 }
 
 #[test]
+fn progressive_loading_publishes_changes_to_an_existing_text_node() {
+    let source = format!("<p>{}</p>", "x".repeat(1024));
+    let server = Server::new(vec![("/", Reply::ok("text/html", source.into_bytes()))], 1);
+    let mut updates = Vec::new();
+    load_page(
+        &server.url,
+        LoadOptions {
+            trace: false,
+            throttle_ms: Some(0),
+        },
+        |frame| {
+            let text_bytes: usize = frame
+                .document
+                .preorder()
+                .filter_map(|id| match frame.document.node(id).unwrap().kind() {
+                    rust_browser::dom::NodeKind::Text(text) => Some(text.len()),
+                    _ => None,
+                })
+                .sum();
+            updates.push((frame.document.node_count(), text_bytes));
+            Ok(())
+        },
+        || false,
+    )
+    .unwrap();
+    assert!(
+        updates
+            .windows(2)
+            .any(|pair| { pair[0].0 == pair[1].0 && pair[0].1 < pair[1].1 }),
+        "text-only progress must not be lost: {updates:?}"
+    );
+    assert_eq!(updates.last().unwrap().1, 1024);
+    server.finish();
+}
+
+#[test]
 fn redirected_document_resolves_base_and_cascades_external_sheets_in_document_order() {
     let server = Server::new(
         vec![

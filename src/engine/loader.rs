@@ -25,7 +25,7 @@ pub fn load_page(
         8192
     };
     let mut parser = HtmlParser::new();
-    let mut last_node_count = parser.node_count();
+    let mut last_revision = parser.revision();
     let metadata = net::stream_document(url, chunk_size, |metadata, chunk| {
         check_cancelled(&cancelled)?;
         parser
@@ -35,9 +35,9 @@ pub fn load_page(
         if options.trace {
             eprintln!("[trace] {node_count} DOM nodes after {} bytes", chunk.len());
         }
-        if node_count != last_node_count {
+        if parser.revision() != last_revision {
             on_progress(&Frame::new(metadata.url.clone(), parser.document().clone()))?;
-            last_node_count = node_count;
+            last_revision = parser.revision();
         }
         if let Some(delay) = options.throttle_ms {
             thread::sleep(Duration::from_millis(delay));
@@ -45,9 +45,22 @@ pub fn load_page(
         Ok(())
     })?;
     check_cancelled(&cancelled)?;
-    let document = parser
-        .finish()
+    let parsed = parser
+        .finish_with_diagnostics()
         .map_err(|error| io::Error::other(format!("HTML parse failed: {error:?}")))?;
+    for error in &parsed.errors {
+        eprintln!(
+            "HTML at {}:{} (byte {}): {}",
+            error.position.line, error.position.column, error.position.byte_offset, error.code
+        );
+    }
+    if parsed.dropped_errors > 0 {
+        eprintln!(
+            "HTML: {} additional parse errors omitted",
+            parsed.dropped_errors
+        );
+    }
+    let document = parsed.document;
     if options.trace {
         eprintln!(
             "[trace] parsing finished with {} DOM nodes",

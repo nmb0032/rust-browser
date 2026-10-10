@@ -67,6 +67,15 @@ impl Node {
         self.children.push(child);
     }
 
+    pub(super) fn append_text(&mut self, text: &str) -> bool {
+        if let NodeKind::Text(contents) = &mut self.kind {
+            contents.push_str(text);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn as_element(&self) -> Option<&ElementData> {
         match &self.kind {
             NodeKind::Element(data) => Some(data),

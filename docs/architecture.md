@@ -61,7 +61,7 @@ keeping the codebase small enough to learn from.
 | App entry | `src/app` | Starts interactive browsing or resource-aware DOM/stylesheet/layout/display-list dumps. |
 | Engine | `src/engine` | Owns document snapshots, final/base URLs, external resources, cancellable loading, and bounded back/forward history. |
 | Networking | `src/net` | Bounded HTTP/file bodies, GET redirects and response metadata, with incremental UTF-8 decoding. |
-| HTML | `src/html` | Resumable parser for a limited HTML subset; not WHATWG-compliant. |
+| HTML | `src/html` | Spec-based core tokenizer with bounded diagnostics; declaration/text compatibility states and tree construction remain incomplete. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
 | CSS | `src/css` | Rule-level syntax tree, simple selector matching/specificity, and color/length value parsers. |
 | Style | `src/style` | Embedded/external sheets in document order, inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
@@ -357,7 +357,7 @@ the same parser after downloading the entire body; this isolates streaming,
 not changes from the old tokenizer. These are DOM timings, not first-paint
 timings, and the benchmark excludes the UI channel, layout, and rasterization.
 
-**Naive limitations:** Each progress update clones the entire DOM and rebuilds
+**Naive limitations at this checkpoint:** Each progress update clones the entire DOM and rebuilds
 layout. The UI consumes at most one snapshot per event-loop turn so a busy
 loader cannot indefinitely postpone redraws. Trailing text waits for the next
 `<` or EOF, and incomplete markup is rescanned on each feed. Streaming improves
@@ -379,6 +379,8 @@ The HTTP streaming measurements include snapshots, but not rendering. First
 text was about 79% earlier; total-load differences were small and varied
 between runs. The large-attribute case demonstrates the cost of rescanning
 incomplete markup, not a typical page.
+Milestone 6.2 removes the trailing-text delay and incomplete-token rescanning;
+its current measurements are recorded below.
 
 ### Milestone 4: First CSS
 
@@ -578,13 +580,13 @@ stages spec-correct one at a time.
 not only the examples below. Track missing rules against their specification
 sections; script-execution integration belongs to 10.6.
 
-- [ ] **6.1 Add the html5lib-tests harness.** Add the suite as a git
+- [x] **6.1 Add the html5lib-tests harness.** Add the suite as a git
   submodule or vendored data. Run tokenizer, document, and fragment cases,
   reporting tokenizer and tree-construction pass rates separately without
   failing CI yet. Also run cases across chunk boundaries: equivalent chunked
   output alone does not establish HTML5 correctness.
   *You'll see:* a baseline pass rate. Each following step should raise it.
-- [ ] **6.2 Tokenizer: data, tag, and attribute states.** Replace the
+- [x] **6.2 Tokenizer: data, tag, and attribute states.** Replace the
   tokenizer with the spec's state machine, starting with the core states in
   [HTML section 13.2.5]. Keep the `feed` API, retaining state and partially
   built tokens rather than rescanning buffered input. Implement the specified
@@ -665,6 +667,102 @@ prevents regressions. Document any script-execution-dependent exclusions and
 carry them explicitly into 10.6; chunk-boundary tests must continue to pass.
 WPT `html/syntax/`, `encoding/`, and the parsing parts of `domparsing/` must
 meet the conformance gate once 9.8 can run WPT.
+
+**Incremental checkpoint (6.1-6.2):** The tokenizer owns partially built tags
+and attributes, reconsumption, newline preprocessing, original UTF-8 byte
+offsets, and one-based normalized line/column positions. It emits character,
+start/end-tag, and exactly one EOF token. ASCII case folding, first-wins
+duplicate attributes, self-closing metadata, core NULL/error recovery, and
+input control/noncharacter diagnostics are implemented. Character references
+are still literal until 6.4. Malformed core HTML no longer aborts the load;
+`finish_with_diagnostics` retains errors, and the loader prints them. Error
+storage is capped at 256 with an explicit omitted-error count.
+
+`html/tokenizer/` separates input preprocessing, pending tags, core states,
+compatibility states, and tests. `html/tree_builder.rs` retains the earlier
+append/ancestor-closing algorithm behind `HtmlParser`. Adjacent text tokens
+coalesce without changing node IDs; loader snapshots use mutation revisions,
+not node counts, so continued text is visible before the next tag or EOF.
+Styles still accumulate until their closing tag or EOF so incomplete CSS is
+not parsed in progressive snapshots.
+
+**Run the conformance baseline:**
+
+```sh
+git submodule update --init --recursive
+cargo test --test html5lib -- --nocapture
+```
+
+The fixtures are pinned at html5lib-tests
+`9329e64694e7835d0dcff9811e22856ef6ad16f9` in
+`tests/fixtures/html5lib`. This revision retains the tree-construction data;
+upstream subsequently moved that data to WPT. The fixture license and author
+notices remain in the submodule.
+
+The harness expands tokenizer initial states and tree-construction scripting
+variants, and compares full output plus exact tokenizer errors or tree error
+counts. Outputs **and positioned diagnostics** must agree for whole input and
+1-, 7-, and 64-character chunks. It preserves literal multiline fixture data,
+double escapes, and UTF-16 attribute ordering. Optional XML-infoset coercion
+(`xmlViolation.test`) is excluded. The `tree-construction/scripted/` directory
+requires execution and is explicitly deferred to 10.6. Pending-spec-change
+fixtures remain in the baseline.
+
+Unsupported tokenizer initial states and non-scalar inputs are counted as
+failures, not silently replaced or excluded. Fragment inputs exercise the
+current document backend for streaming checks; without a contextual-fragment
+API they are **always counted as failures**, even if a dump happens to match.
+The scripting flag is enumerated but does not yet control the naive builder.
+The harness's namespace/template serialization and fragment adapter must be
+extended alongside 6.11, 6.14, and 6.15.
+
+Baseline on 2026-10-10:
+
+| Suite | Output and error checks | Output only |
+| --- | --- | --- |
+| Tokenizer, all applicable initial-state cases | 2,975 / 7,032 (42.31%) | 2,983 / 7,032 |
+| Core data/tag/attribute subset | 834 / 834 (100%) | 834 / 834 |
+| Tree construction, document/scripting variants | 0 / 3,165 (0%) | 4 / 3,165 |
+| Tree construction, fragment/scripting variants | 0 / 384 (0%) | Not credited without context |
+
+The core subset selects scalar Data-state cases without `&`, declarations,
+or expected comment/doctype tokens. CI enforces this subset, chunk invariance,
+formatting, Clippy, and ordinary regression tests, but remaining conformance
+failures are informational. `HTML5LIB_STRICT=1 cargo test --test html5lib`
+enables full-suite enforcement once the remaining steps land. These are
+baseline gates, **not** a claim that Milestone 6 is complete.
+
+**Remaining tokenizer and integration rules:**
+
+| Work | Specification / roadmap step |
+| --- | --- |
+| Replace compatibility `Markup` tokens with full comment/doctype states and DOM nodes | HTML 13.2.5.41-68; 6.3 |
+| Named/numeric references and context-dependent recovery | HTML 13.2.5.77-84, 13.5; 6.4 |
+| RCDATA, complete script data, contextual text switching, and foreign CDATA | HTML 13.2.5.2-31, 69-71; 6.5, 6.11 |
+| Processing-instruction states recently added to the living standard; replace question-mark declaration compatibility | HTML 13.2.5.72-76; 6.14 |
+| Remaining tokenizer/tree-builder errors and parse-error dump | HTML 13.2.2, 13.2.6; 6.6 |
+| Non-scalar input diagnostics, decoding, encoding sniffing/restarts | HTML 13.2.3; 6.6, 6.12 |
+| Insertion modes, document modes, implied end tags, formatting, tables, foreign content | HTML 13.2.6; 6.7-6.11 |
+| Templates, scripting flag, remaining insertion modes, contextual fragments | HTML 13.2.6-7; 6.14-6.15 |
+| Fuzz targets and XML MIME handling | 6.13, 6.16 |
+
+**Measure the tokenizer change:** `cargo bench --bench streaming` retains the
+buffered/streamed comparison with seven release-mode samples and 8 KiB
+chunks. On ARM64 macOS with Rust 1.98.0 (2026-10-10):
+
+| Input | Buffered parse | Stream parse | Stream plus snapshots |
+| --- | --- | --- | --- |
+| 64 KiB paragraphs | 0.778 ms | 0.787 ms | 1.343 ms |
+| 1 MiB paragraphs | 12.861 ms | 12.590 ms | 117.278 ms |
+| 1 MiB single attribute | 8.286 ms | 8.342 ms | 8.403 ms |
+
+The split-attribute penalty is gone: the same input took 186.79 ms streamed
+at the Milestone 3 checkpoint. Core tokenization has a higher per-character
+cost than that naive parser, especially for paragraphs; no general parsing
+speedup is claimed. Tests also feed 1 MiB attribute **names and values** in
+127-byte chunks and assert that every source character is consumed exactly
+once. Loopback HTTP first text was 45.728 ms streamed versus 216.897 ms
+buffered (78.9% earlier); these remain DOM timings, not first-paint timings.
 
 ### Milestone 7: Spec-correct CSS
 

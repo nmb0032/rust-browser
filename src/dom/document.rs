@@ -66,6 +66,20 @@ impl Document {
         self.append_node(parent, NodeKind::Text(text))
     }
 
+    pub(crate) fn append_text_coalesced(
+        &mut self,
+        parent: NodeId,
+        text: String,
+    ) -> Result<NodeId, DomError> {
+        let parent_node = self.node(parent).ok_or(DomError::InvalidParent(parent))?;
+        if let Some(last) = parent_node.children().last().copied()
+            && self.nodes[last.index()].append_text(&text)
+        {
+            return Ok(last);
+        }
+        self.append_text(parent, text)
+    }
+
     fn append_node(&mut self, parent: NodeId, kind: NodeKind) -> Result<NodeId, DomError> {
         let parent_index = parent.index();
         {
@@ -151,5 +165,40 @@ mod tests {
         assert_eq!(result, Err(DomError::TextNodeCannotHaveChildren(text_id)));
         assert_eq!(document.nodes.len(), original_node_count);
         assert!(document.node(text_id).unwrap().children().is_empty());
+    }
+
+    #[test]
+    fn parser_text_coalescing_keeps_ids_and_parent_links_stable() {
+        let mut document = Document::new();
+        let root = document.root_id();
+        let first = document.append_text_coalesced(root, "one".into()).unwrap();
+        assert_eq!(
+            document.append_text_coalesced(root, "two".into()).unwrap(),
+            first
+        );
+        assert_eq!(document.node_count(), 2);
+        assert_eq!(document.node(first).unwrap().parent(), Some(root));
+        assert!(
+            matches!(document.node(first).unwrap().kind(), NodeKind::Text(text) if text == "onetwo")
+        );
+        let element = document
+            .append_element(root, ElementData::new("p".into(), Vec::new()))
+            .unwrap();
+        let second = document
+            .append_text_coalesced(root, "three".into())
+            .unwrap();
+        assert_ne!(second, first);
+        assert_eq!(
+            document.node(root).unwrap().children(),
+            [first, element, second]
+        );
+        assert_eq!(
+            document.append_text_coalesced(first, "invalid".into()),
+            Err(DomError::TextNodeCannotHaveChildren(first))
+        );
+        assert_eq!(
+            document.append_text_coalesced(NodeId::from_index(usize::MAX), "invalid".into()),
+            Err(DomError::InvalidParent(NodeId::from_index(usize::MAX)))
+        );
     }
 }
