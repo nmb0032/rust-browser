@@ -12,6 +12,7 @@ struct Case {
     input: String,
     expected: String,
     errors: usize,
+    current_errors: usize,
     context: Option<String>,
     scripting: Option<bool>,
 }
@@ -72,6 +73,33 @@ pub(super) fn run(path: &Path) -> Result<(Counts, Counts), Box<dyn Error>> {
                     );
                 }
                 counts.shape_passed += usize::from(shape_matches);
+                let current_errors = current.map_or_else(
+                    || {
+                        case.current_errors
+                            .checked_add_signed(super::expectations::tree_delta(
+                                file.file_name()
+                                    .and_then(|name| name.to_str())
+                                    .expect("fixture filename"),
+                                index + 1,
+                            ))
+                            .expect("audited diagnostic count")
+                    },
+                    |case| case.errors,
+                );
+                let current_matches = whole.output == current.unwrap_or(case).expected
+                    && whole.errors.len() + whole.dropped_errors == current_errors;
+                counts.current_passed += usize::from(current_matches);
+                if !current_matches {
+                    eprintln!(
+                        "CURRENT {}:{} (scripting {scripting}, context {:?}) input {:?}\nexpected {current_errors} errors, actual {}:\n{:?}",
+                        file.display(),
+                        index + 1,
+                        case.context,
+                        case.input,
+                        whole.errors.len() + whole.dropped_errors,
+                        whole.errors
+                    );
+                }
                 if shape_matches && whole.errors.len() + whole.dropped_errors == case.errors {
                     counts.passed += 1;
                 } else if std::env::var_os("HTML5LIB_TREE_FAILURES").is_some() {
@@ -229,21 +257,33 @@ fn parse_cases(source: &str) -> Result<Vec<Case>, Box<dyn Error>> {
             input: input.join("\n"),
             expected: String::new(),
             errors: 0,
+            current_errors: 0,
             context: None,
             scripting: None,
         };
+        let mut legacy = Vec::new();
+        let mut new = Vec::new();
+        let mut new_errors = false;
         loop {
             match lines.next().ok_or("missing #document")? {
                 "#document" => break,
-                "#new-errors" => {}
+                "#new-errors" => new_errors = true,
                 "#document-fragment" => {
                     case.context = Some(lines.next().ok_or("missing fragment context")?.to_owned());
                 }
                 "#script-on" => case.scripting = Some(true),
                 "#script-off" => case.scripting = Some(false),
-                line if !line.is_empty() => case.errors += 1,
+                line if !line.is_empty() => {
+                    case.errors += 1;
+                    if new_errors {
+                        new.push(line.to_owned());
+                    } else {
+                        legacy.push(line.to_owned());
+                    }
+                }
                 _ => return Err("unexpected empty metadata line".into()),
             }
+            case.current_errors = super::expectations::diagnostic_count(&legacy, &new);
         }
         let mut expected = Vec::new();
         while let Some(line) = lines.peek() {

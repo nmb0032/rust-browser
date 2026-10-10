@@ -1,3 +1,4 @@
+mod expectations;
 mod tokenizer;
 mod tree;
 
@@ -13,6 +14,7 @@ pub(super) struct Counts {
     pub passed: usize,
     pub shape_passed: usize,
     pub unsupported: usize,
+    pub current_passed: usize,
 }
 
 impl Counts {
@@ -25,6 +27,10 @@ impl Counts {
         println!(
             "{name}: {}/{} ({percent:.2}%); output-only {}; unsupported {}",
             self.passed, self.total, self.shape_passed, self.unsupported
+        );
+        println!(
+            "{name}, current WHATWG: {}/{}",
+            self.current_passed, self.total
         );
     }
 }
@@ -44,14 +50,14 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     documents.report("Tree construction (documents)");
     fragments.report("Tree construction (fragments)");
     println!(
-        "Current-spec tree output gate: all documents and fragments; four PI expectations updated explicitly in living-standard.dat."
+        "Current WHATWG gate: every tokenizer, document, and fragment output AND diagnostic; historical updates audited explicitly."
     );
     println!(
-        "Passes require output AND parse errors; character chunks 1, 7, 64 must agree with whole input."
+        "UTF-8 character and UTF-16 code-unit chunks 1, 7, 64 must agree with whole input and positioned diagnostics."
     );
     println!("Fragments use namespace-, mode-, and scripting-aware context initialization.");
     println!(
-        "Unsupported tokenizer initial states and non-scalar inputs count as failures, not exclusions."
+        "All tokenizer initial states and lone-surrogate inputs are supported; raw pinned expectations remain unmodified."
     );
     println!(
         "Core gate selects Data-state cases without '&', declarations, or expected comment/doctype tokens."
@@ -59,23 +65,22 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     println!(
         "Exclusions: xmlViolation.test (optional XML infoset coercion); tree-construction/scripted/ (script execution, 10.6)."
     );
-    assert!(
-        tokens.passed >= 6990,
-        "tokenizer diagnostic baseline regressed"
+    assert_eq!(tokens.total, 7032, "pinned tokenizer inventory");
+    assert_eq!(documents.total, 3165, "pinned document inventory");
+    assert_eq!(fragments.total, 384, "pinned fragment inventory");
+    assert_eq!(tokens.unsupported, 0, "unsupported tokenizer input");
+    assert_eq!(
+        tokens.current_passed, tokens.total,
+        "current tokenizer conformance"
     );
-    assert!(
-        documents.passed >= 2549,
-        "document diagnostic baseline regressed"
+    assert_eq!(
+        documents.current_passed, documents.total,
+        "current document conformance"
     );
-    assert!(
-        fragments.passed >= 332,
-        "fragment diagnostic baseline regressed"
+    assert_eq!(
+        fragments.current_passed, fragments.total,
+        "current fragment conformance"
     );
-    if std::env::var_os("HTML5LIB_STRICT").is_some() {
-        assert_eq!(tokens.passed, tokens.total, "tokenizer conformance");
-        assert_eq!(documents.passed, documents.total, "document conformance");
-        assert_eq!(fragments.passed, fragments.total, "fragment conformance");
-    }
     Ok(())
 }
 

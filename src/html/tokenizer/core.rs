@@ -50,7 +50,7 @@ impl Tokenizer {
                     self.error("invalid-first-character-of-tag-name");
                     self.comment.clear();
                     self.state = State::Comment(CommentState::Bogus);
-                    self.reconsume = Some(ch);
+                    self.reconsume = Some(self.current_character.literal(ch));
                 }
             },
             State::TagName => match ch {
@@ -61,7 +61,11 @@ impl Tokenizer {
                     self.error("unexpected-null-character");
                     self.tag.token.name.push('\u{FFFD}');
                 }
-                _ => self.tag.token.name.push(ch.to_ascii_lowercase()),
+                _ => self
+                    .tag
+                    .token
+                    .name
+                    .push_input(ch.to_ascii_lowercase(), self.current_character),
             },
             State::BeforeAttributeName => match ch {
                 ch if whitespace(ch) => {}
@@ -94,7 +98,10 @@ impl Tokenizer {
                     self.error("unexpected-character-in-attribute-name");
                     self.tag.name().push(ch);
                 }
-                _ => self.tag.name().push(ch.to_ascii_lowercase()),
+                _ => self
+                    .tag
+                    .name()
+                    .push_input(ch.to_ascii_lowercase(), self.current_character),
             },
             State::AfterAttributeName => match ch {
                 ch if whitespace(ch) => {}
@@ -130,7 +137,7 @@ impl Tokenizer {
                     self.error("unexpected-null-character");
                     self.tag.value().push('\u{FFFD}');
                 } else {
-                    self.tag.value().push(ch);
+                    self.tag.value().push_input(ch, self.current_character);
                 }
             }
             State::Unquoted => match ch {
@@ -148,7 +155,7 @@ impl Tokenizer {
                     self.error("unexpected-character-in-unquoted-attribute-value");
                     self.tag.value().push(ch);
                 }
-                _ => self.tag.value().push(ch),
+                _ => self.tag.value().push_input(ch, self.current_character),
             },
             State::AfterQuoted => match ch {
                 ch if whitespace(ch) => {

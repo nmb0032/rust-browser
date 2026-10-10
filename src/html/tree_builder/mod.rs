@@ -54,7 +54,8 @@ pub(super) struct TreeBuilder {
     fragment: Option<ElementData>,
     ignore_lf: bool,
     table_text: String,
-    table_position: Option<SourcePosition>,
+    table_positions: Vec<SourcePosition>,
+    self_closing_acknowledged: bool,
     style_text: Option<String>,
     pub revision: usize,
     pub errors: Vec<ParseError>,
@@ -84,7 +85,8 @@ impl TreeBuilder {
             fragment: None,
             ignore_lf: false,
             table_text: String::new(),
-            table_position: None,
+            table_positions: Vec::new(),
+            self_closing_acknowledged: false,
             style_text: None,
             revision: 0,
             errors: Vec::new(),
@@ -165,6 +167,8 @@ impl TreeBuilder {
         positions: &[SourcePosition],
     ) -> Result<Option<(InitialState, String)>, HtmlError> {
         self.position = position;
+        let self_closing = matches!(&token, Token::StartTag(tag) if tag.self_closing);
+        self.self_closing_acknowledged = false;
         let eof = matches!(token, Token::Eof);
         let foreign = self.use_foreign_rules(&token);
         if let Token::Character(text) = token {
@@ -199,17 +203,10 @@ impl TreeBuilder {
             self.process_one(token)?;
         }
         self.update_closed_options(eof)?;
-        Ok(self.text_context.take())
-    }
-
-    fn advance_position(&mut self, ch: char) {
-        self.position.byte_offset += ch.len_utf8();
-        if ch == '\n' {
-            self.position.line += 1;
-            self.position.column = 1;
-        } else {
-            self.position.column += ch.len_utf16();
+        if self_closing && !self.self_closing_acknowledged {
+            self.error("non-void-html-element-start-tag-with-trailing-solidus");
         }
+        Ok(self.text_context.take())
     }
 
     fn process_one(&mut self, token: Token) -> Result<(), HtmlError> {

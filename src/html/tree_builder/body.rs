@@ -375,9 +375,7 @@ impl TreeBuilder {
                 self.insert(tag, Namespace::Html)?;
             }
         }
-        if tag.self_closing && !acknowledge {
-            self.error("non-void-html-element-start-tag-with-trailing-solidus");
-        }
+        self.self_closing_acknowledged |= acknowledge;
         Ok(true)
     }
 

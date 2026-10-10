@@ -19,7 +19,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Tests, scalar tokenizer gate, current-spec tree output, and diagnostic baseline
+      - name: Tests and strict WHATWG tokenizer, tree, and diagnostic conformance
+        env:
+          HTML5LIB_STRICT: "1"
         run: cargo test --lib --tests -- --show-output
 
   parser-fuzz:

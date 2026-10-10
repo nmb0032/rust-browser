@@ -73,6 +73,7 @@ impl TreeBuilder {
                 self.insert(tag, namespace)?;
                 if tag.self_closing {
                     self.pop();
+                    self.self_closing_acknowledged = true;
                 }
             }
             Token::EndTag(tag) if matches!(tag.name.as_str(), "br" | "p") => {
@@ -85,18 +86,26 @@ impl TreeBuilder {
                     self.error("misnested-foreign-end-tag");
                 }
                 for index in (0..self.open.len()).rev() {
+                    if index == 0 {
+                        return Ok(true);
+                    }
                     let id = self.open[index];
                     let element = self
                         .document
                         .node(id)
                         .and_then(|node| node.as_element())
                         .ok_or(HtmlError::InvalidTreeState)?;
-                    if element.namespace() == &Namespace::Html {
-                        return Ok(false);
-                    }
                     if element.tag_name().eq_ignore_ascii_case(&tag.name) {
                         self.open.truncate(index);
                         return Ok(true);
+                    }
+                    if self
+                        .document
+                        .node(self.open[index - 1])
+                        .and_then(|node| node.as_element())
+                        .is_some_and(|element| element.namespace() == &Namespace::Html)
+                    {
+                        return Ok(false);
                     }
                 }
             }

@@ -11,26 +11,23 @@ impl TreeBuilder {
                     if text == "\0" {
                         self.error("unexpected-null-in-table");
                     } else {
-                        if self.table_text.is_empty() {
-                            self.table_position = Some(self.position);
-                        }
                         self.table_text.push_str(text);
+                        self.table_positions.push(self.position);
                     }
                 } else {
                     let text = std::mem::take(&mut self.table_text);
+                    let positions = std::mem::take(&mut self.table_positions);
                     if !text.is_empty() {
                         let position = self.position;
-                        self.position = self.table_position.take().unwrap_or(position);
+                        self.position = positions[0];
                         if space(&text) {
                             self.text(&text)?;
                         } else {
                             self.error("non-space-in-table");
-                            self.foster = true;
-                            for ch in text.chars() {
-                                self.in_body(&Token::Character(ch.to_string()))?;
-                                self.advance_position(ch);
+                            for (ch, position) in text.chars().zip(positions) {
+                                self.position = position;
+                                self.foster_body(&Token::Character(ch.to_string()))?;
                             }
-                            self.foster = false;
                         }
                         self.position = position;
                     }
@@ -83,6 +80,7 @@ impl TreeBuilder {
                 Token::StartTag(tag) if tag.name == "col" => {
                     self.insert(tag, Namespace::Html)?;
                     self.pop();
+                    self.self_closing_acknowledged = true;
                 }
                 _ if end(token, &["colgroup"]) => {
                     if self.current_name() != "colgroup" {
@@ -252,6 +250,7 @@ impl TreeBuilder {
                 ) =>
             {
                 self.table_text.clear();
+                self.table_positions.clear();
                 self.original_mode = self.mode;
                 self.mode = Mode::InTableText;
                 return Ok(false);
@@ -304,11 +303,15 @@ impl TreeBuilder {
                     self.error("hidden-input-in-table");
                     self.insert(tag, Namespace::Html)?;
                     self.pop();
+                    self.self_closing_acknowledged = true;
                 }
                 "form" => {
                     self.error("form-in-table");
-                    if self.form.is_none() && !self.has_template() {
-                        self.form = Some(self.insert(tag, Namespace::Html)?);
+                    if self.form.is_none() || self.has_template() {
+                        let form = self.insert(tag, Namespace::Html)?;
+                        if !self.has_template() {
+                            self.form = Some(form);
+                        }
                         self.pop();
                     }
                 }

@@ -1,4 +1,4 @@
-use super::{State, Token, Tokenizer, whitespace};
+use super::{State, Token, Tokenizer, buffer::TextBuffer, whitespace};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DoctypeState {
@@ -55,7 +55,9 @@ impl Tokenizer {
                 }
                 _ => {
                     let ch = self.doctype_null(ch);
-                    self.doctype.name = Some(ch.to_ascii_lowercase().to_string());
+                    let mut name = TextBuffer::default();
+                    name.push_input(ch.to_ascii_lowercase(), self.current_character);
+                    self.doctype.name = Some(name);
                     Name
                 }
             },
@@ -71,7 +73,7 @@ impl Tokenizer {
                         .name
                         .as_mut()
                         .expect("doctype name")
-                        .push(ch.to_ascii_lowercase());
+                        .push_input(ch.to_ascii_lowercase(), self.current_character);
                     Name
                 }
             },
@@ -127,10 +129,10 @@ impl Tokenizer {
                             });
                         }
                         if public {
-                            self.doctype.public_identifier = Some(String::new());
+                            self.doctype.public_identifier = Some(TextBuffer::default());
                             PublicQuoted(ch)
                         } else {
-                            self.doctype.system_identifier = Some(String::new());
+                            self.doctype.system_identifier = Some(TextBuffer::default());
                             SystemQuoted(ch)
                         }
                     }
@@ -178,7 +180,7 @@ impl Tokenizer {
                         self.doctype.system_identifier.as_mut()
                     }
                     .expect("doctype identifier")
-                    .push(ch);
+                    .push_input(ch, self.current_character);
                     state
                 }
             }
@@ -194,7 +196,7 @@ impl Tokenizer {
                             "missing-whitespace-between-doctype-public-and-system-identifiers",
                         );
                     }
-                    self.doctype.system_identifier = Some(String::new());
+                    self.doctype.system_identifier = Some(TextBuffer::default());
                     SystemQuoted(ch)
                 }
                 _ => {

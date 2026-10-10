@@ -92,6 +92,140 @@ fn live_and_finished_diagnostics_include_tree_recovery_and_omitted_counts() {
 }
 
 #[test]
+fn self_closing_flags_are_checked_once_in_every_insertion_mode() {
+    for (markup, expected) in [
+        ("<html/>", 1),
+        ("<head/>", 1),
+        ("<title/>x</title>", 1),
+        ("<body/>", 1),
+        ("<table/><tbody/><tr/><td/>x</table>", 4),
+        ("<table><colgroup/><col/></table>", 1),
+        ("<frameset/><frame/></frameset>", 1),
+        ("<head><head/></head>", 1),
+        ("<meta/><br/><input/><hr/>", 0),
+        ("<svg><g/></svg><math><mi/></math>", 0),
+    ] {
+        let source = format!("<!doctype html>{markup}");
+        for split in 0..=source.len() {
+            let mut parser = HtmlParser::new();
+            parser.feed(&source[..split]).unwrap();
+            parser.feed(&source[split..]).unwrap();
+            let parsed = parser.finish_with_diagnostics().unwrap();
+            assert_eq!(
+                parsed
+                    .errors
+                    .iter()
+                    .filter(|error| error.code
+                        == "non-void-html-element-start-tag-with-trailing-solidus")
+                    .count(),
+                expected,
+                "{source:?}, split {split}"
+            );
+            parsed.document.validate().unwrap();
+        }
+    }
+}
+
+#[test]
+fn pending_table_errors_keep_reference_null_and_newline_source_positions() {
+    use crate::html::tokenizer::{ParseError, SourcePosition};
+    let source = "<!doctype html><table> \0&#88;\r\nY</table>";
+    let expected = [
+        ("non-space-in-table", 22, 1, 23),
+        ("unexpected-token-in-table", 22, 1, 23),
+        ("unexpected-null-character", 23, 1, 24),
+        ("unexpected-null-in-table", 23, 1, 24),
+        ("unexpected-token-in-table", 29, 1, 30),
+        ("unexpected-token-in-table", 29, 1, 30),
+        ("unexpected-token-in-table", 31, 2, 1),
+    ]
+    .map(|(code, byte_offset, line, column)| ParseError {
+        code,
+        position: SourcePosition {
+            byte_offset,
+            line,
+            column,
+        },
+    });
+    for split in 0..=source.len() {
+        let mut parser = HtmlParser::new();
+        parser.feed(&source[..split]).unwrap();
+        parser.feed(&source[split..]).unwrap();
+        let parsed = parser.finish_with_diagnostics().unwrap();
+        assert_eq!(parsed.errors, expected, "split {split}");
+        assert_eq!(parsed.dropped_errors, 0);
+        parsed.document.validate().unwrap();
+    }
+    let source = format!("<!doctype html><table>{}</table>", "x".repeat(1000));
+    let mut parser = HtmlParser::new();
+    parser.feed(&source).unwrap();
+    let parsed = parser.finish_with_diagnostics().unwrap();
+    assert_eq!(parsed.errors.len(), MAX_PARSE_ERRORS);
+    assert_eq!(parsed.errors.len() + parsed.dropped_errors, 1001);
+}
+
+#[test]
+fn foreign_fragment_end_tags_stop_at_the_root_or_reprocess_in_html() {
+    let mut context = FragmentContext::html("path");
+    context.element = ElementData::namespaced("path".into(), Vec::new(), Namespace::Svg, None);
+    for (source, expected) in [
+        ("</path>X", vec!["misnested-foreign-end-tag"]),
+        (
+            "<g></path>X",
+            vec![
+                "misnested-foreign-end-tag",
+                "unexpected-end-tag",
+                "eof-with-open-elements",
+            ],
+        ),
+    ] {
+        let mut parser = HtmlParser::fragment(context.clone()).unwrap();
+        parser.feed(source).unwrap();
+        let parsed = parser.finish_with_diagnostics().unwrap();
+        assert_eq!(
+            parsed
+                .errors
+                .iter()
+                .map(|error| error.code)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        parsed.document.validate().unwrap();
+    }
+}
+
+#[test]
+fn forms_in_template_tables_do_not_replace_the_outer_form_pointer() {
+    let source = "<!doctype html><form id=outer><template><table><form id=inner><tr><td>x</td></tr></table></template></form>";
+    let document = parse(source).unwrap();
+    let contents = document
+        .node(find(&document, "template"))
+        .unwrap()
+        .as_element()
+        .unwrap()
+        .template_contents()
+        .unwrap();
+    let table = document.node(contents).unwrap().children()[0];
+    let children = document.node(table).unwrap().children();
+    let inner = document.node(children[0]).unwrap().as_element().unwrap();
+    assert_eq!(inner.tag_name(), "form");
+    assert_eq!(inner.attribute("id"), Some("inner"));
+    assert!(document.node(children[0]).unwrap().children().is_empty());
+    let mut parser = HtmlParser::new();
+    parser.feed(source).unwrap();
+    let parsed = parser.finish_with_diagnostics().unwrap();
+    assert_eq!(
+        parsed
+            .errors
+            .iter()
+            .map(|error| error.code)
+            .collect::<Vec<_>>(),
+        vec!["form-in-table"]
+    );
+    parsed.document.validate().unwrap();
+}
+
+#[test]
 fn fragments_use_form_ancestors_and_hostile_nesting_keeps_arena_links_valid() {
     let mut context = FragmentContext::html("div");
     context

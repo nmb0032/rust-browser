@@ -115,7 +115,7 @@ impl Tokenizer {
                     self.finish_numeric();
                     self.current_position = position;
                     if ch != ';' {
-                        self.reconsume = Some(ch);
+                        self.reconsume = Some(self.current_character.literal(ch));
                     }
                 }
             }
@@ -151,7 +151,8 @@ impl Tokenizer {
             let positions = &self.reference_positions[length..];
             let replay = suffix.chars().zip(positions).collect::<Vec<_>>();
             for (ch, position) in replay.into_iter().rev() {
-                self.replay.push_front((ch, *position));
+                self.replay
+                    .push_front((self.current_character.literal(ch), *position));
             }
             self.state = self.return_state;
         } else {
@@ -162,7 +163,8 @@ impl Tokenizer {
                 .zip(&self.reference_positions)
                 .collect::<Vec<_>>();
             for (ch, position) in replay.into_iter().rev() {
-                self.replay.push_front((ch, *position));
+                self.replay
+                    .push_front((self.current_character.literal(ch), *position));
             }
             self.state = State::Reference(ReferenceState::Ambiguous);
             if eof && self.replay.is_empty() {

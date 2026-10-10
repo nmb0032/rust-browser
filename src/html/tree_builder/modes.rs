@@ -263,6 +263,7 @@ impl TreeBuilder {
                     }
                     self.insert(tag, Namespace::Html)?;
                     self.pop();
+                    self.self_closing_acknowledged = true;
                 }
                 "title" => self.text_element(tag, InitialState::Rcdata)?,
                 "noframes" | "style" => self.text_element(tag, InitialState::Rawtext)?,
@@ -350,6 +351,7 @@ impl TreeBuilder {
             Token::StartTag(tag) if tag.name == "frame" && self.mode == Mode::InFrameset => {
                 self.insert(tag, Namespace::Html)?;
                 self.pop();
+                self.self_closing_acknowledged = true;
             }
             _ if start(token, &["noframes"]) => return self.in_head(token),
             _ if end(token, &["html"]) && self.mode == Mode::AfterFrameset => {

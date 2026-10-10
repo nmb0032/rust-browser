@@ -17,15 +17,15 @@ pub(super) enum CommentState {
 
 impl Tokenizer {
     pub(super) fn declaration_character(&mut self, ch: char) {
-        self.declaration.push(ch);
+        self.declaration.push_input(ch, self.current_character);
         let text = &self.declaration;
-        if text == "--" {
+        if text.equals("--") {
             self.comment.clear();
             self.state = State::Comment(CommentState::Start);
         } else if text.eq_ignore_ascii_case("DOCTYPE") {
             self.doctype = DoctypeToken::default();
             self.state = State::Doctype(DoctypeState::BeforeNameSpace);
-        } else if text == "[CDATA[" {
+        } else if text.equals("[CDATA[") {
             if self.allow_cdata {
                 self.state = State::Cdata;
             } else {
@@ -33,9 +33,9 @@ impl Tokenizer {
                 self.comment = std::mem::take(&mut self.declaration);
                 self.state = State::Comment(CommentState::Bogus);
             }
-        } else if !"--".starts_with(text)
-            && !"DOCTYPE".starts_with(&text.to_ascii_uppercase())
-            && !"[CDATA[".starts_with(text)
+        } else if !text.is_prefix_of("--", false)
+            && !text.is_prefix_of("DOCTYPE", true)
+            && !text.is_prefix_of("[CDATA[", false)
         {
             self.error_at("incorrectly-opened-comment", self.lookahead_position);
             self.comment = std::mem::take(&mut self.declaration);
@@ -65,7 +65,7 @@ impl Tokenizer {
                     Bogus
                 }
                 _ => {
-                    self.comment.push(ch);
+                    self.comment.push_input(ch, self.current_character);
                     Bogus
                 }
             },
@@ -106,7 +106,7 @@ impl Tokenizer {
                     Data
                 }
                 _ => {
-                    self.comment.push(ch);
+                    self.comment.push_input(ch, self.current_character);
                     Data
                 }
             },

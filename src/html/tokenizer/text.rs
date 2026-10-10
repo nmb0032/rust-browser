@@ -66,7 +66,7 @@ impl Tokenizer {
         if ch.is_ascii_alphabetic() {
             self.raw_candidate.push(ch);
             self.tag.token.name.push(ch.to_ascii_lowercase());
-        } else if self.raw_end_tag.as_deref() == Some(&self.tag.token.name)
+        } else if self.raw_end_tag.as_ref() == Some(&self.tag.token.name)
             && (whitespace(ch) || matches!(ch, '/' | '>'))
         {
             match ch {

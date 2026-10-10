@@ -146,7 +146,7 @@ impl Tokenizer {
             Data => match ch {
                 '?' => self.state = State::Instruction(Questionable),
                 '>' => self.emit_instruction(),
-                _ => self.comment.push(ch),
+                _ => self.comment.push_input(ch, self.current_character),
             },
             Questionable => {
                 if ch == '>' {
@@ -160,13 +160,16 @@ impl Tokenizer {
     }
     fn invalid_instruction(&mut self, error: &'static str, ch: char) {
         self.error(error);
-        self.comment = format!("?{}", self.keyword);
+        self.comment = format!("?{}", self.keyword).into();
         self.reconsume_in(ch, State::Comment(CommentState::Bogus));
     }
     fn emit_instruction(&mut self) {
         let target = std::mem::take(&mut self.keyword);
         let data = std::mem::take(&mut self.comment);
-        self.emit(Token::ProcessingInstruction { target, data });
+        self.emit(Token::ProcessingInstruction {
+            target: target.into(),
+            data,
+        });
         self.state = State::Data;
     }
 }
