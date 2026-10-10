@@ -4,7 +4,7 @@
 
 use super::node::{ElementData, Node, NodeId, NodeKind};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Document {
     root: NodeId,
     nodes: Vec<Node>,
@@ -33,6 +33,10 @@ impl Document {
 
     pub fn node(&self, id: NodeId) -> Option<&Node> {
         self.nodes.get(id.index())
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
     }
 
     pub fn append_element(

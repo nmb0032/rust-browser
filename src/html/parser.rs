@@ -17,7 +17,7 @@
  *   matching ancestors close intervening elements, and open elements are
  *   accepted at end-of-input. Other malformed markup may differ from browsers.
  */
-use crate::dom::{Attribute, Document, DomError, ElementData};
+use crate::dom::{Attribute, Document, DomError, ElementData, NodeId};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HtmlError {
@@ -42,51 +42,176 @@ impl From<DomError> for HtmlError {
 }
 
 pub fn parse(source: &str) -> Result<Document, HtmlError> {
-    let normalized_source = source.replace("\r\n", "\n").replace('\r', "\n");
-    let tokens = tokenize(&normalized_source)?;
-    build_document(tokens)
+    let mut parser = HtmlParser::new();
+    parser.feed(source)?;
+    parser.finish()
 }
 
-fn tokenize(source: &str) -> Result<Vec<Token>, HtmlError> {
-    // Track how many bytes of the input have been turned into tokens. Each
-    // update below moves to the next unparsed portion of the source.
-    let mut position = 0;
-    let mut tokens = Vec::new();
-    while position < source.len() {
-        // Work only with the input that has not been tokenized yet.
-        let remaining = &source[position..];
+#[derive(Debug)]
+pub struct HtmlParser {
+    buffer: String,
+    document: Document,
+    elements_stack: Vec<NodeId>,
+    pending_carriage_return: bool,
+}
 
-        if remaining.starts_with("<!--") {
-            let end = remaining
-                .find("-->")
-                .ok_or(HtmlError::UnterminatedComment)?;
-            position += end + "-->".len();
-            continue;
-        }
+impl Default for HtmlParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        if is_doctype_start(remaining) {
-            let end = find_tag_end(remaining)?;
-            position += end + 1;
-            continue;
-        }
-
-        if !remaining.starts_with('<') {
-            // A text token ends at the next `<`, or at the end of the input if
-            // there are no more tags. `find` gives a byte offset for slicing.
-            let bytes_used = remaining.find('<').unwrap_or(remaining.len());
-            tokens.push(Token::Text(remaining[..bytes_used].to_string()));
-            // Advance past the text just added so the next pass starts at the
-            // next possible tag.
-            position += bytes_used;
-        } else {
-            // At `<`, delegate parsing to `parse_tag`. It reports both the
-            // token it found and how many input bytes it consumed.
-            let (token, bytes_used) = parse_tag(remaining)?;
-            tokens.push(token);
-            position += bytes_used;
+impl HtmlParser {
+    pub fn new() -> Self {
+        let document = Document::new();
+        let elements_stack = vec![document.root_id()];
+        Self {
+            buffer: String::new(),
+            document,
+            elements_stack,
+            pending_carriage_return: false,
         }
     }
-    Ok(tokens)
+
+    pub fn feed(&mut self, chunk: &str) -> Result<(), HtmlError> {
+        let mut input = String::new();
+        if self.pending_carriage_return {
+            input.push('\r');
+            self.pending_carriage_return = false;
+        }
+        input.push_str(chunk);
+
+        if input.ends_with('\r') {
+            input.pop();
+            self.pending_carriage_return = true;
+        }
+        self.buffer
+            .push_str(&input.replace("\r\n", "\n").replace('\r', "\n"));
+
+        self.process_available(false)
+    }
+
+    pub fn finish(mut self) -> Result<Document, HtmlError> {
+        if self.pending_carriage_return {
+            self.buffer.push('\n');
+            self.pending_carriage_return = false;
+        }
+        self.process_available(true)?;
+        Ok(self.document)
+    }
+
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.document.node_count()
+    }
+
+    fn process_available(&mut self, is_final: bool) -> Result<(), HtmlError> {
+        let mut position = 0;
+
+        while position < self.buffer.len() {
+            let remaining = &self.buffer[position..];
+
+            if remaining.starts_with("<!--") {
+                match remaining.find("-->") {
+                    Some(end) => position += end + "-->".len(),
+                    None if !is_final => break,
+                    None => return Err(HtmlError::UnterminatedComment),
+                }
+                continue;
+            }
+
+            if is_doctype_start(remaining) {
+                match find_tag_end(remaining) {
+                    Ok(end) => position += end + 1,
+                    Err(error) if !is_final && is_incomplete_markup_error(&error) => break,
+                    Err(error) => return Err(error),
+                }
+                continue;
+            }
+
+            if !remaining.starts_with('<') {
+                let Some(bytes_used) = remaining.find('<') else {
+                    if !is_final {
+                        break;
+                    }
+                    let text = remaining.to_string();
+                    self.append_token(Token::Text(text))?;
+                    position = self.buffer.len();
+                    continue;
+                };
+
+                let text = remaining[..bytes_used].to_string();
+                self.append_token(Token::Text(text))?;
+                position += bytes_used;
+                continue;
+            }
+
+            let (token, bytes_used) = match parse_tag(remaining) {
+                Ok(parsed) => parsed,
+                Err(error) if !is_final && is_incomplete_markup_error(&error) => break,
+                Err(error) => return Err(error),
+            };
+            self.append_token(token)?;
+            position += bytes_used;
+        }
+
+        self.buffer.drain(..position);
+        Ok(())
+    }
+
+    fn append_token(&mut self, token: Token) -> Result<(), HtmlError> {
+        match token {
+            Token::StartTag { name, attributes } => {
+                let parent = *self
+                    .elements_stack
+                    .last()
+                    .ok_or(HtmlError::InvalidTreeState)?;
+
+                let is_void = is_void_element(&name);
+                let element_id = self
+                    .document
+                    .append_element(parent, ElementData::new(name, attributes))?;
+
+                if !is_void {
+                    self.elements_stack.push(element_id);
+                }
+            }
+            Token::Text(text) => {
+                let parent = *self
+                    .elements_stack
+                    .last()
+                    .ok_or(HtmlError::InvalidTreeState)?;
+                self.document.append_text(parent, text)?;
+            }
+            Token::EndTag { name } => {
+                let matching_index = self
+                    .elements_stack
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .rev()
+                    .find_map(|(index, id)| {
+                        let element = self.document.node(*id)?.as_element()?;
+                        (element.tag_name() == name).then_some(index)
+                    });
+
+                if let Some(index) = matching_index {
+                    self.elements_stack.truncate(index);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_incomplete_markup_error(error: &HtmlError) -> bool {
+    matches!(
+        error,
+        HtmlError::UnterminatedTag | HtmlError::UnterminatedAttributeValue
+    )
 }
 
 fn parse_tag(source: &str) -> Result<(Token, usize), HtmlError> {
@@ -111,52 +236,6 @@ fn parse_tag(source: &str) -> Result<(Token, usize), HtmlError> {
         let attributes = parse_attributes(&mut cursor)?;
         Ok((Token::StartTag { name, attributes }, end + 1))
     }
-}
-
-fn build_document(tokens: Vec<Token>) -> Result<Document, HtmlError> {
-    let mut document = Document::new();
-    let mut elements_stack = vec![document.root_id()];
-
-    for token in tokens {
-        match token {
-            Token::StartTag { name, attributes } => {
-                let parent = *elements_stack.last().ok_or(HtmlError::InvalidTreeState)?;
-
-                let is_void = is_void_element(&name);
-                let element_id =
-                    document.append_element(parent, ElementData::new(name, attributes))?;
-
-                if !is_void {
-                    elements_stack.push(element_id);
-                }
-            }
-
-            Token::Text(text) => {
-                let parent = *elements_stack.last().ok_or(HtmlError::InvalidTreeState)?;
-
-                document.append_text(parent, text)?;
-            }
-
-            Token::EndTag { name } => {
-                let matching_index =
-                    elements_stack
-                        .iter()
-                        .enumerate()
-                        .skip(1)
-                        .rev()
-                        .find_map(|(index, id)| {
-                            let element = document.node(*id)?.as_element()?;
-                            (element.tag_name() == name).then_some(index)
-                        });
-
-                if let Some(index) = matching_index {
-                    elements_stack.truncate(index);
-                }
-            }
-        }
-    }
-
-    Ok(document)
 }
 
 fn parse_attributes(cursor: &mut Cursor<'_>) -> Result<Vec<Attribute>, HtmlError> {
@@ -372,6 +451,138 @@ fn is_void_element(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::dom::NodeKind;
+
+    #[test]
+    fn parses_stream_of_text() {
+        let chunks = [r#"<p title="left"#, r#" > right">caf"#, "é</p>"];
+        let mut parser = HtmlParser::new();
+
+        for chunk in chunks {
+            parser.feed(chunk).unwrap();
+        }
+
+        let document = parser.finish().unwrap();
+        let root = document.node(document.root_id()).unwrap();
+        assert_eq!(root.children().len(), 1);
+
+        let paragraph = document.node(root.children()[0]).unwrap();
+        assert_eq!(
+            paragraph.as_element().unwrap().attribute("title"),
+            Some("left > right")
+        );
+        assert_eq!(paragraph.children().len(), 1);
+        assert!(matches!(
+            document.node(paragraph.children()[0]).unwrap().kind(),
+            NodeKind::Text(text) if text == "café"
+        ));
+    }
+
+    #[test]
+    fn streaming_parser_matches_at_every_character_boundary() {
+        for source in [
+            "",
+            "plain text\r",
+            "\r\r\n",
+            "<!DOCTYPE html><!-- head > note --><p title=\"left > right\">café\r\n世界</p>",
+            "<p>before<!-- ignored -->after<br>last</p>",
+            "<p title='世界 > café' disabled data-value=hello>text</p>",
+            "</unknown><div><p>nested</div>tail",
+            include_str!("../../tests/pages/basic.html"),
+            include_str!("../../tests/pages/dom_dump.html"),
+        ] {
+            let expected = document_signature(&parse(source).unwrap());
+
+            for split in source
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain(std::iter::once(source.len()))
+            {
+                let mut parser = HtmlParser::new();
+                parser.feed(&source[..split]).unwrap();
+                parser.feed(&source[split..]).unwrap();
+
+                assert_eq!(
+                    document_signature(&parser.finish().unwrap()),
+                    expected,
+                    "DOM differed when {source:?} was split at byte {split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exposes_complete_content_before_finish_and_keeps_snapshots_independent() {
+        let mut parser = HtmlParser::new();
+        parser.feed("<p>visible</p><p title=\"unfinished").unwrap();
+        let snapshot = parser.document().clone();
+        let expected = document_signature(&parse("<p>visible</p>").unwrap());
+
+        assert_eq!(document_signature(&snapshot), expected);
+        parser.feed("\">next</p>").unwrap();
+        assert_eq!(document_signature(&snapshot), expected);
+        assert_eq!(
+            document_signature(&parser.finish().unwrap()),
+            document_signature(&parse("<p>visible</p><p title=\"unfinished\">next</p>").unwrap())
+        );
+    }
+
+    #[test]
+    fn streaming_errors_match_whole_input_errors_at_every_boundary() {
+        for source in ["<p", "<p title=\"unfinished>", "<!-- unfinished", "<p=bad>"] {
+            let expected = parse(source).unwrap_err();
+
+            for split in 0..=source.len() {
+                let mut parser = HtmlParser::new();
+                let result = parser
+                    .feed(&source[..split])
+                    .and_then(|()| parser.feed(&source[split..]))
+                    .and_then(|()| parser.finish());
+
+                assert_eq!(result.unwrap_err(), expected, "split at byte {split}");
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_parser_accepts_one_character_chunks() {
+        let source = "<p title=\"left > right\">café\r\n世界</p>";
+        let expected = document_signature(&parse(source).unwrap());
+        let mut parser = HtmlParser::new();
+
+        for character in source.chars() {
+            parser.feed(&character.to_string()).unwrap();
+        }
+
+        assert_eq!(document_signature(&parser.finish().unwrap()), expected);
+    }
+
+    fn document_signature(document: &Document) -> String {
+        fn node_signature(document: &Document, id: NodeId) -> String {
+            let node = document.node(id).unwrap();
+            let children = node
+                .children()
+                .iter()
+                .map(|child| node_signature(document, *child))
+                .collect::<Vec<_>>()
+                .join(",");
+
+            match node.kind() {
+                NodeKind::Document => format!("document[{children}]"),
+                NodeKind::Element(element) => {
+                    let attributes = element
+                        .attributes()
+                        .iter()
+                        .map(|attribute| format!("{:?}={:?}", attribute.name(), attribute.value()))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("element:{}({attributes})[{children}]", element.tag_name())
+                }
+                NodeKind::Text(text) => format!("text:{text:?}"),
+            }
+        }
+
+        node_signature(document, document.root_id())
+    }
 
     #[test]
     fn parses_nested_elements_text_and_attributes() {

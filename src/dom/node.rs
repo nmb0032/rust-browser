@@ -6,27 +6,27 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(usize);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Node {
     kind: NodeKind,
     parent: Option<NodeId>,
     children: Vec<NodeId>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum NodeKind {
     Document,
     Element(ElementData),
     Text(String),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ElementData {
     tag_name: String,
     attributes: Vec<Attribute>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Attribute {
     name: String,
     value: String,

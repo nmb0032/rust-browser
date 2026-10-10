@@ -1,4 +1,9 @@
-use std::{num::NonZeroU32, rc::Rc};
+use std::{
+    num::NonZeroU32,
+    rc::Rc,
+    sync::mpsc::{Receiver, TryRecvError},
+    time::{Duration, Instant},
+};
 
 use softbuffer::{Context, Surface};
 use winit::{
@@ -10,12 +15,24 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::layout::LayoutTree;
 use crate::paint::{self, DisplayItem};
+use crate::{
+    dom::Document,
+    layout::{self, LayoutTree},
+};
 
-pub fn run(layout_tree: LayoutTree, font: fontdue::Font) -> Result<(), Box<dyn std::error::Error>> {
+pub enum LoadEvent {
+    Progress(Document),
+    Finished(Result<(), String>),
+}
+
+pub fn run(
+    receiver: Receiver<LoadEvent>,
+    font: fontdue::Font,
+) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
     let context = Context::new(event_loop.owned_display_handle())?;
+    let layout_tree = layout::build_layout_tree(&Document::new());
 
     let mut app = BrowserWindow {
         context,
@@ -26,6 +43,8 @@ pub fn run(layout_tree: LayoutTree, font: fontdue::Font) -> Result<(), Box<dyn s
         display_list: Vec::new(),
         scroll_offset: 0.0,
         show_layout_outlines: false,
+        receiver,
+        is_loading: true,
     };
 
     event_loop.run_app(&mut app)?;
@@ -41,6 +60,8 @@ struct BrowserWindow {
     display_list: Vec<DisplayItem>,
     scroll_offset: f32,
     show_layout_outlines: bool,
+    receiver: Receiver<LoadEvent>,
+    is_loading: bool,
 }
 
 impl BrowserWindow {
@@ -104,6 +125,42 @@ impl BrowserWindow {
         self.show_layout_outlines = !self.show_layout_outlines;
         self.rebuild_display_list();
         self.request_redraw();
+    }
+
+    fn receive_load_events(&mut self) {
+        let mut document_changed = false;
+
+        loop {
+            match self.receiver.try_recv() {
+                Ok(LoadEvent::Progress(document)) => {
+                    self.layout_tree = layout::build_layout_tree(&document);
+                    document_changed = true;
+                    // Give redraws a turn even when the loader keeps sending snapshots.
+                    break;
+                }
+                Ok(LoadEvent::Finished(Ok(()))) => self.is_loading = false,
+                Ok(LoadEvent::Finished(Err(error))) => {
+                    self.is_loading = false;
+                    eprintln!("page load failed: {error}");
+                    if let Some(window) = &self.window {
+                        window.set_title("rust-browser - load failed");
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if self.is_loading {
+                        self.is_loading = false;
+                        eprintln!("page load worker disconnected before completion");
+                    }
+                    break;
+                }
+            }
+        }
+
+        if document_changed {
+            self.rebuild_display_list();
+            self.request_redraw();
+        }
     }
 }
 
@@ -207,6 +264,17 @@ impl ApplicationHandler for BrowserWindow {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.receive_load_events();
+        if self.is_loading {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(16),
+            ));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 
