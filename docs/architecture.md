@@ -63,7 +63,7 @@ keeping the codebase small enough to learn from.
 | Networking | `src/net` | Bounded HTTP/file bodies, GET redirects, response metadata, raw document-byte streaming, and explicit UTF-8 text utilities. |
 | HTML/XML | `src/html`, `src/xml` | Resumable UTF-8/lossless UTF-16 tokenization, insertion-mode tree construction, contextual fragments, encoding sniffing/restarts, and bounded XML parsing; all applicable current-WHATWG fixture outputs and diagnostics pass. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
-| CSS | `src/css` | Resumable CSS Syntax tokenizer and token-based rule parsing with bounded diagnostics/recovery; source-retaining AST, simple selector matching/specificity, and color/length value parsers. |
+| CSS | `src/css` | Resumable CSS Syntax tokenizer and token-based rule parsing with bounded diagnostics/recovery; source-retaining AST, attribute/combinator/structural selector matching and specificity, and color/length value parsers. |
 | Style | `src/style` | Embedded/external sheets in document order, inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
 | Layout | `src/layout` | Block/inline boxes, image sizing, spacing, text, list markers, and naive fragment-aware hit testing. |
 | Paint | `src/paint` | Rasterizes text, backgrounds, borders, and shared RGBA images with clipping, scaling, alpha blending, and scrolling. |
@@ -422,7 +422,9 @@ shorthand/longhand interactions, box geometry, paint order, scrolling, and
 stylesheets arriving after already-rendered content.
 
 **Implementation boundaries:** `css/selectors.rs` handles selector lists,
-compound selectors, the universal selector, and descendants.
+compound selectors, the universal selector, and descendants. Step 7.3 adds
+token-based attributes, child/sibling combinators, structural pseudo-classes,
+and `:not()`.
 `css/values/` handles named colors, three/six-digit hex, `transparent`,
 `currentcolor`, and `px`/`em`/`%` lengths. `style/` collects and compiles sheets
 and resolves the cascade independently of layout. The built-in
@@ -943,9 +945,36 @@ not comparisons of encoding throughput on equivalent trees.
   diagnostic limits, cascade/CLI behavior, and malformed external sheets reused
   from cache at multiple document slots. Selector/property grammars and at-rule
   semantics remain separate; this does not claim full CSS/WPT conformance.
-- [ ] **7.3 Complete selectors.** Add attribute selectors, child and sibling
+- [x] **7.3 Complete selectors.** Add attribute selectors, child and sibling
   combinators, and pseudo-classes such as `:first-child` and `:not()`.
   *You'll see:* selector tests for each new form.
+
+  Selector lists now consume CSS tokens, preserving comments, escaped
+  identifiers/strings, and commas or whitespace inside attribute values and
+  function arguments. Attributes support presence, `=`, `~=`, `|=`, `^=`,
+  `$=`, and `*=` with optional ASCII `i`/`s` flags. Matching respects HTML
+  attribute-value case rules, case-sensitive XML/foreign names, and quirks-mode
+  ID/class matching; empty word/prefix/suffix/substring needles never match.
+
+  Child (`>`), next-sibling (`+`), and subsequent-sibling (`~`) combinators
+  operate on DOM tree order, ignoring non-element siblings. Structural
+  pseudo-classes include `:root`, `:empty`, `:first-child`, `:last-child`,
+  `:only-child`, and the corresponding `*-of-type` forms. `:empty` follows
+  shipping browsers: nonempty text, including whitespace, prevents a match.
+  `:not()` accepts compound/complex selector lists and nested negations,
+  using its most specific argument without adding pseudo-class specificity.
+  Invalid/unsupported selectors invalidate the entire rule's selector list
+  and retain the existing style diagnostic.
+
+  Matching is iterative across combinator chains and backtracks over
+  ancestor/sibling candidates with memoized states. Nested negation is capped
+  at 64 with a diagnostic on rejection. Regressions cover each form, syntax
+  failures, specificity, tree mutation, deep chains, embedded-sheet cascade,
+  and redirected/cached external sheets reaching layout and paint.
+  Namespace-qualified selectors, `:nth-*`, other functional/stateful
+  pseudo-classes, and pseudo-elements remain deferred; this step does not
+  claim full Selectors Level 4 or WPT conformance.
+
 - [ ] **7.4 Implement the full cascade.** Handle origins, `!important`,
   `inherit`, `initial`, and `unset`.
   *You'll see:* `!important` and explicit keywords behaving as in browsers.

@@ -229,6 +229,10 @@ impl ElementData {
         &self.tag_name
     }
 
+    pub fn has_case_sensitive_names(&self) -> bool {
+        self.attribute_case_sensitive
+    }
+
     pub fn attributes(&self) -> &[Attribute] {
         &self.attributes
     }

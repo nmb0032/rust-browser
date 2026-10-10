@@ -144,3 +144,55 @@ fn styled_layout_and_paint_are_wired_to_the_cli() {
     );
     assert!(!paint.contains("Hidden"));
 }
+
+#[test]
+fn expanded_selectors_from_redirected_cached_sheets_reach_layout_and_paint() {
+    let server = Server::new(
+        vec![
+            (
+                "/",
+                Reply::ok(
+                    "text/html",
+                    b"<!doctype html><style>p {color:red}</style>\
+                    <link rel='stylesheet' href='selectors.css'>\
+                    <link rel='stylesheet' href='selectors.css'>\
+                    <main><!-- comment --><p data-kind='Notice'>First</p>\
+                    text <p>Next</p><p hidden>Hidden</p><span>Last</span></main>"
+                        .to_vec(),
+                ),
+            ),
+            ("/selectors.css", Reply::redirect("/final.css")),
+            (
+                "/final.css",
+                Reply::ok(
+                    "text/css",
+                    b"main > p[data-kind=notice i]:first-child {color:#123456}\
+                    main > p + p:not([hidden], .skip) {color:#654321}\
+                    main > p ~ span:last-child {background-color:#abcdef}\
+                    main > [hidden] {display:none}"
+                        .to_vec(),
+                ),
+            ),
+        ],
+        3,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+        .args(["--dump=display-list", server.url.as_str()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let paint = String::from_utf8(output.stdout).unwrap();
+    for color in [0x123456, 0x654321, 0xABCDEF] {
+        assert!(paint.contains(&format!("color: {color}")), "{paint}");
+    }
+    for text in ["First", "Next", "Last"] {
+        assert!(paint.contains(text), "{paint}");
+    }
+    assert!(!paint.contains("Hidden"), "{paint}");
+    assert_eq!(server.finish(), ["/", "/selectors.css", "/final.css"]);
+}

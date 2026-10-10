@@ -1,7 +1,7 @@
 //! Parses CSS rules into a syntax tree.
 //!
 //! The syntax tree retains selector and declaration-value source text.
-//! Dedicated `selectors` and `values` modules parse the milestone-4 subset
+//! Dedicated `selectors` and `values` modules parse their grammars
 //! for the style stage. At-rules and
 //! nested blocks are represented in the tree even when their semantics are
 //! not implemented yet.

@@ -100,6 +100,89 @@ fn lists_use_the_specificity_of_the_matching_selector_only() {
 }
 
 #[test]
+fn attribute_combinator_and_structural_selectors_reach_the_cascade() {
+    let document = parser::parse(
+        "<!doctype html><style>\
+         main > p[data-kind=notice i]:first-child {color:red}\
+         main > p + p:not([hidden], .skip) {color:blue; padding:3px}\
+         main > p ~ span:last-child {background-color:yellow}\
+         main > p[hidden] {display:none}\
+         </style><main><!-- comment -->\
+         <p id='first' data-kind='Notice'>first</p> text \
+         <p id='next'>next</p><p id='hidden' hidden>hidden</p>\
+         <span id='last'>last</span></main>",
+    )
+    .unwrap();
+    let result = resolve(&document);
+    assert!(
+        result.stylesheets.diagnostics.is_empty(),
+        "{:?}",
+        result.stylesheets.diagnostics
+    );
+    assert_eq!(
+        result.styles.get(find(&document, "first")).unwrap().color,
+        Some(0xFF0000)
+    );
+    let next = result.styles.get(find(&document, "next")).unwrap();
+    assert_eq!(next.color, Some(0x0000FF));
+    assert_eq!(next.padding, Edges::all(Length::Px(3.0)));
+    assert_eq!(
+        result
+            .styles
+            .get(find(&document, "hidden"))
+            .unwrap()
+            .display,
+        Display::None
+    );
+    assert_eq!(
+        result
+            .styles
+            .get(find(&document, "last"))
+            .unwrap()
+            .background_color,
+        Some(0xFFFF00)
+    );
+}
+
+#[test]
+fn negation_argument_specificity_and_matching_list_specificity_choose_winners() {
+    let style = styled(
+        "<!doctype html><style>\
+         p:not(.excluded, #unused) {color:red}\
+         .notice {color:blue}\
+         #unused, p:not([hidden]) {background-color:yellow}\
+         .notice {background-color:green}\
+         </style><p id='p' class='notice'>text</p>",
+        "p",
+    );
+    assert_eq!(style.color, Some(0xFF0000));
+    assert_eq!(style.background_color, Some(0xFFFF00));
+}
+
+#[test]
+fn invalid_selector_lists_and_negations_drop_only_their_rules_with_diagnostics() {
+    let document = parser::parse(
+        "<!doctype html><style>\
+         p {color:red}\
+         p, [data-x=] {color:blue}\
+         p:not(.excluded, :unsupported) {color:purple}\
+         p[data-x]:not(.excluded) {padding:4px}\
+         </style><p id='p' data-x>text</p>",
+    )
+    .unwrap();
+    let result = resolve(&document);
+    let style = result.styles.get(find(&document, "p")).unwrap();
+    assert_eq!(style.color, Some(0xFF0000));
+    assert_eq!(style.padding, Edges::all(Length::Px(4.0)));
+    assert_eq!(result.stylesheets.diagnostics.len(), 2);
+    assert!(result.stylesheets.diagnostics.iter().all(|diagnostic| {
+        diagnostic
+            .message
+            .contains("invalid or unsupported selector")
+    }));
+}
+
+#[test]
 fn invalid_values_do_not_displace_valid_declarations_and_errors_are_available() {
     let document = parser::parse(
         "<style>p {color: red; color: bad; padding: 1px -2px; width: -5px}\
