@@ -1,4 +1,5 @@
 use crate::dom::{Document, NodeId, NodeKind};
+use crate::layout::{BoxKind, LayoutBox, LayoutTree};
 use crate::paint::DisplayItem;
 
 pub fn dump_dom(document: &Document) {
@@ -7,6 +8,38 @@ pub fn dump_dom(document: &Document) {
 
 pub fn dump_display_list(display_list: &[DisplayItem]) {
     println!("{display_list:#?}");
+}
+
+pub fn dump_layout(layout: &LayoutTree) {
+    dump_layout_box(layout.root(), 0);
+}
+
+fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
+    if layout_box.kind() == BoxKind::Text
+        && layout_box.text().is_some_and(|text| text.trim().is_empty())
+    {
+        return;
+    }
+
+    let rect = layout_box.rect();
+    let indent = "  ".repeat(depth);
+    let contents = layout_box
+        .text()
+        .map(|text| format!(" {text:?}"))
+        .unwrap_or_default();
+    println!(
+        "{indent}{} {:?} x={:.1} y={:.1} width={:.1} height={:.1}{contents}",
+        layout_box.tag_name(),
+        layout_box.kind(),
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height
+    );
+
+    for child in layout_box.children() {
+        dump_layout_box(child, depth + 1);
+    }
 }
 
 fn dump_node(document: &Document, id: NodeId, depth: usize) {

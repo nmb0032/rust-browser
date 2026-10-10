@@ -10,9 +10,10 @@ use winit::{
     window::{Window, WindowId},
 };
 
+use crate::layout::LayoutTree;
 use crate::paint::{self, DisplayItem};
 
-pub fn run(text: String, font: fontdue::Font) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(layout_tree: LayoutTree, font: fontdue::Font) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
     let context = Context::new(event_loop.owned_display_handle())?;
 
@@ -21,9 +22,10 @@ pub fn run(text: String, font: fontdue::Font) -> Result<(), Box<dyn std::error::
         window: None,
         surface: None,
         font,
-        text,
+        layout_tree,
         display_list: Vec::new(),
         scroll_offset: 0.0,
+        show_layout_outlines: false,
     };
 
     event_loop.run_app(&mut app)?;
@@ -35,9 +37,10 @@ struct BrowserWindow {
     window: Option<Rc<Window>>,
     surface: Option<Surface<OwnedDisplayHandle, Rc<Window>>>,
     font: fontdue::Font,
-    text: String,
+    layout_tree: LayoutTree,
     display_list: Vec<DisplayItem>,
     scroll_offset: f32,
+    show_layout_outlines: bool,
 }
 
 impl BrowserWindow {
@@ -63,14 +66,15 @@ impl BrowserWindow {
 
         let scale_factor = window.scale_factor();
         let logical_size = window.inner_size().to_logical::<f32>(scale_factor);
+        self.layout_tree.layout(logical_size.width, &self.font);
         self.display_list = paint::build_display_list(
-            &self.text,
-            &self.font,
+            &self.layout_tree,
             logical_size.width,
             logical_size.height,
+            self.show_layout_outlines,
         );
         self.scroll_offset = self.scroll_offset.min(paint::max_scroll_offset(
-            &self.display_list,
+            &self.layout_tree,
             logical_size.height,
         ));
     }
@@ -81,7 +85,7 @@ impl BrowserWindow {
         };
         let scale_factor = window.scale_factor();
         let logical_height = window.inner_size().to_logical::<f32>(scale_factor).height;
-        let max_scroll = paint::max_scroll_offset(&self.display_list, logical_height);
+        let max_scroll = paint::max_scroll_offset(&self.layout_tree, logical_height);
         let next_offset = (self.scroll_offset + delta).clamp(0.0, max_scroll);
 
         if next_offset != self.scroll_offset {
@@ -94,6 +98,12 @@ impl BrowserWindow {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    fn toggle_layout_outlines(&mut self) {
+        self.show_layout_outlines = !self.show_layout_outlines;
+        self.rebuild_display_list();
+        self.request_redraw();
     }
 }
 
@@ -160,13 +170,14 @@ impl ApplicationHandler for BrowserWindow {
                 self.scroll_by(scroll_delta);
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                let scroll_delta = match event.logical_key {
-                    Key::Named(NamedKey::ArrowDown) => Some(paint::LINE_HEIGHT),
-                    Key::Named(NamedKey::ArrowUp) => Some(-paint::LINE_HEIGHT),
-                    _ => None,
-                };
-                if let Some(scroll_delta) = scroll_delta {
-                    self.scroll_by(scroll_delta);
+                match &event.logical_key {
+                    Key::Named(NamedKey::F12) => self.toggle_layout_outlines(),
+                    Key::Character(key) if key.eq_ignore_ascii_case("o") => {
+                        self.toggle_layout_outlines()
+                    }
+                    Key::Named(NamedKey::ArrowDown) => self.scroll_by(paint::LINE_HEIGHT),
+                    Key::Named(NamedKey::ArrowUp) => self.scroll_by(-paint::LINE_HEIGHT),
+                    _ => {}
                 }
             }
             WindowEvent::RedrawRequested => {

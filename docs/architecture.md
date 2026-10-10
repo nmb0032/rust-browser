@@ -50,11 +50,13 @@ keeping the codebase small enough to learn from.
 
 | Area | Location | Status |
 | --- | --- | --- |
-| App entry | `src/app` | Fetches `https://example.com`, parses it, prints the DOM. |
+| App entry | `src/app` | Loads a page, builds layout, and supports DOM/layout/display-list dumps. |
 | Networking | `src/net` | Blocking `ureq` GET that reads the whole body into a `String`. |
 | HTML | `src/html` | Simplified tokenizer and tree builder. Not WHATWG-compliant or streaming. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
 | CSS | `src/css` | Rule-level parser. Selectors and values are kept as raw strings. |
+| Layout | `src/layout` | Naive block/inline boxes, vertical flow, basic text styling, and list markers. |
+| Paint | `src/paint` | Builds and rasterizes a display list from layout fragments. |
 
 The DOM arena with stable IDs is a good foundation. The existing CSS rule
 parser is used in Milestone 4 and rebuilt on a tokenizer in Milestone 7.
@@ -217,26 +219,27 @@ Milestones 6, 7, and 8 are independent and can be interleaved.
 
 **Goal:** Turn the DOM into a layout tree and render document structure.
 
-- [ ] **2.1 Build a layout tree.** Create a `layout` module with a box tree
+- [x] **2.1 Build a layout tree.** Create a `layout` module with a box tree
   parallel to the DOM. Classify elements as block or inline using a
   hard-coded list (`div`, `p`, `h1`–`h6`, `ul`, `li`, and so on).
   **(naive)** Replaced by the CSS `display` property in 4.5.
   *You'll see:* `--dump=layout` prints the box tree.
-- [ ] **2.2 Stack blocks vertically.** Give each block box `x`, `y`, `width`,
+- [x] **2.2 Stack blocks vertically.** Give each block box `x`, `y`, `width`,
   and `height`. Children stack from top to bottom, and each block's width is
   its parent's width.
   *You'll see:* paragraphs separated into their own lines.
-- [ ] **2.3 Add a debug overlay.** Toggle outlines around each box with a key.
+- [x] **2.3 Add a debug overlay.** Toggle outlines around each box with F12.
   *You'll see:* the box tree drawn over the page, much like browser
   developer tools.
-- [ ] **2.4 Size headings and add spacing.** Hard-code larger font sizes for
+- [x] **2.4 Size headings and add spacing.** Hard-code larger font sizes for
   `h1`–`h6` and vertical margins for `p` and headings. **(naive)** Replaced by
   the user-agent stylesheet in 4.4.
   *You'll see:* a page hierarchy that looks roughly like a real browser.
-- [ ] **2.5 Support inline formatting.** Handle `b`, `strong`, `i`, and `em`
-  with bold and italic font faces, and handle `br`.
+- [x] **2.5 Support inline formatting.** Handle `b`, `strong`, `i`, and `em`
+  with bold and italic styling, and handle `br`. Styles are synthesized from
+  the bundled regular face until font-face selection is added.
   *You'll see:* emphasis and manual line breaks.
-- [ ] **2.6 Add list markers.** Indent `ul` and `ol`, and draw bullets or
+- [x] **2.6 Add list markers.** Indent `ul` and `ol`, and draw bullets or
   numbers for `li`.
   *You'll see:* lists rendered as lists.
 

@@ -1,14 +1,13 @@
 use std::error::Error;
 
-use crate::dom::{Document, NodeKind};
+use crate::layout::{LayoutBox, LayoutTree};
 
 pub(crate) const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
 pub(crate) const DEFAULT_VIEWPORT_HEIGHT: f32 = 600.0;
-const HORIZONTAL_PADDING: f32 = 24.0;
-const FONT_SIZE: f32 = 32.0;
-pub(crate) const LINE_HEIGHT: f32 = FONT_SIZE * 1.4;
+pub(crate) const LINE_HEIGHT: f32 = 20.0;
 const TEXT_COLOR: u32 = 0x0000_0000;
 const BACKGROUND_COLOR: u32 = 0x00FF_FFFF;
+const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
@@ -18,8 +17,17 @@ pub enum DisplayItem {
         text: String,
         size: f32,
         color: u32,
+        bold: bool,
+        italic: bool,
     },
     Rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: u32,
+    },
+    OutlineRect {
         x: f32,
         y: f32,
         w: f32,
@@ -35,33 +43,11 @@ pub(crate) fn load_bundled_font() -> Result<fontdue::Font, Box<dyn Error>> {
     Ok(font)
 }
 
-pub(crate) fn collect_document_text(document: &Document) -> String {
-    let mut raw_text = String::new();
-    let mut pending = vec![document.root_id()];
-
-    while let Some(id) = pending.pop() {
-        let node = document
-            .node(id)
-            .expect("document contains an invalid child node ID");
-
-        match node.kind() {
-            NodeKind::Text(text) => raw_text.push_str(text),
-            NodeKind::Element(element)
-                if matches!(element.tag_name(), "head" | "script" | "style") => {}
-            NodeKind::Document | NodeKind::Element(_) => {
-                pending.extend(node.children().iter().rev().copied());
-            }
-        }
-    }
-
-    raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 pub(crate) fn build_display_list(
-    text: &str,
-    font: &fontdue::Font,
+    layout: &LayoutTree,
     viewport_width: f32,
     viewport_height: f32,
+    show_outlines: bool,
 ) -> Vec<DisplayItem> {
     let mut display_list = vec![DisplayItem::Rect {
         x: 0.0,
@@ -71,74 +57,74 @@ pub(crate) fn build_display_list(
         color: BACKGROUND_COLOR,
     }];
 
-    let available_width = (viewport_width - 2.0 * HORIZONTAL_PADDING).max(0.0);
-    let space_width = font.metrics(' ', FONT_SIZE).advance_width;
-    let mut line = String::new();
-    let mut line_width = 0.0;
-    let mut line_y = HORIZONTAL_PADDING;
-
-    for word in text.split_whitespace() {
-        let word_width = measure_text(font, word, FONT_SIZE);
-        let separator_width = if line.is_empty() { 0.0 } else { space_width };
-
-        if !line.is_empty() && line_width + separator_width + word_width > available_width {
-            display_list.push(DisplayItem::Text {
-                x: HORIZONTAL_PADDING,
-                y: line_y,
-                text: std::mem::take(&mut line),
-                size: FONT_SIZE,
-                color: TEXT_COLOR,
-            });
-            line_y += LINE_HEIGHT;
-            line_width = 0.0;
-        }
-
-        if !line.is_empty() {
-            line.push(' ');
-            line_width += space_width;
-        }
-        line.push_str(word);
-        line_width += word_width;
+    append_box_items(layout.root(), &mut display_list);
+    if show_outlines {
+        append_box_outlines(layout.root(), &mut display_list);
     }
-
-    if !line.is_empty() {
-        display_list.push(DisplayItem::Text {
-            x: HORIZONTAL_PADDING,
-            y: line_y,
-            text: line,
-            size: FONT_SIZE,
-            color: TEXT_COLOR,
-        });
-    }
-
     display_list
 }
 
-pub(crate) fn max_scroll_offset(display_list: &[DisplayItem], viewport_height: f32) -> f32 {
-    let content_bottom = display_list
-        .iter()
-        .filter_map(|item| match item {
-            DisplayItem::Text { y, .. } => Some(y + LINE_HEIGHT),
-            DisplayItem::Rect { .. } => None,
-        })
-        .fold(0.0, f32::max);
+fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
+    if let Some(marker) = layout_box.list_marker() {
+        display_list.push(DisplayItem::Text {
+            x: marker.x,
+            y: marker.y,
+            text: marker.text.clone(),
+            size: 16.0,
+            color: TEXT_COLOR,
+            bold: false,
+            italic: false,
+        });
+    }
 
-    (content_bottom + HORIZONTAL_PADDING - viewport_height).max(0.0)
+    for fragment in layout_box.text_fragments() {
+        display_list.push(DisplayItem::Text {
+            x: fragment.x,
+            y: fragment.y,
+            text: fragment.text.clone(),
+            size: fragment.font_size,
+            color: TEXT_COLOR,
+            bold: fragment.bold,
+            italic: fragment.italic,
+        });
+    }
+
+    for child in layout_box.children() {
+        append_box_items(child, display_list);
+    }
 }
 
-fn measure_text(font: &fontdue::Font, text: &str, px: f32) -> f32 {
-    text.chars()
-        .map(|character| font.metrics(character, px).advance_width)
-        .sum()
+fn append_box_outlines(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
+    let rect = layout_box.rect();
+    if rect.width > 0.0 && rect.height > 0.0 {
+        display_list.push(DisplayItem::OutlineRect {
+            x: rect.x,
+            y: rect.y,
+            w: rect.width,
+            h: rect.height,
+            color: OUTLINE_COLOR,
+        });
+    }
+
+    for child in layout_box.children() {
+        append_box_outlines(child, display_list);
+    }
+}
+
+pub(crate) fn max_scroll_offset(layout: &LayoutTree, viewport_height: f32) -> f32 {
+    (layout.root().rect().height - viewport_height).max(0.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::html::parser;
+    use crate::{html::parser, layout};
 
-    fn font() -> fontdue::Font {
-        load_bundled_font().unwrap()
+    fn layout(source: &str, width: f32) -> LayoutTree {
+        let document = parser::parse(source).unwrap();
+        let mut tree = layout::build_layout_tree(&document);
+        tree.layout(width, &load_bundled_font().unwrap());
+        tree
     }
 
     fn text_items(display_list: &[DisplayItem]) -> Vec<&DisplayItem> {
@@ -149,41 +135,84 @@ mod tests {
     }
 
     #[test]
-    fn collects_text_in_dom_order_and_skips_non_rendered_elements() {
-        let document = parser::parse(
-            "<head><title>hidden title</title></head> <p>first <em>nested</em></p> \
-             <script>hidden script</script> <style>hidden style</style> <p>last</p>",
-        )
-        .unwrap();
+    fn display_list_uses_layout_fragments_and_skips_non_rendered_elements() {
+        let tree = layout(
+            "<head><title>hidden title</title></head><p>first <em>nested</em></p>\
+             <script>hidden script</script><style>hidden style</style><p>last</p>",
+            800.0,
+        );
+        let display_list = build_display_list(&tree, 800.0, 600.0, false);
+        let rendered_text = text_items(&display_list)
+            .into_iter()
+            .map(|item| match item {
+                DisplayItem::Text { text, .. } => text.as_str(),
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
 
-        assert_eq!(collect_document_text(&document), "first nested last");
-    }
-
-    #[test]
-    fn wraps_words_using_the_font_advance_width() {
-        let font = font();
-        let text = "one two three four five six";
-        let narrow = build_display_list(text, &font, 180.0, 600.0);
-        let wide = build_display_list(text, &font, 800.0, 600.0);
-
-        assert!(text_items(&narrow).len() > text_items(&wide).len());
-        assert_eq!(
-            text_items(&wide)
-                .into_iter()
-                .map(|item| match item {
-                    DisplayItem::Text { text, .. } => text.as_str(),
-                    DisplayItem::Rect { .. } => unreachable!(),
-                })
-                .collect::<Vec<_>>(),
-            [text]
+        assert_eq!(rendered_text, ["first", "nested", "last"]);
+        assert!(
+            !display_list
+                .iter()
+                .any(|item| matches!(item, DisplayItem::OutlineRect { .. }))
         );
     }
 
     #[test]
-    fn max_scroll_offset_is_zero_for_short_content_and_positive_for_long_content() {
-        let font = font();
-        let short = build_display_list("short", &font, 800.0, 600.0);
-        let long = build_display_list(&"word ".repeat(200), &font, 800.0, 600.0);
+    fn narrower_viewports_wrap_inline_fragments() {
+        let source = "<p>one two three four five six</p>";
+        let narrow = layout(source, 180.0);
+        let wide = layout(source, 800.0);
+        let narrow_list = build_display_list(&narrow, 180.0, 600.0, false);
+        let wide_list = build_display_list(&wide, 800.0, 600.0, false);
+        let line_count = |items: &[DisplayItem]| {
+            let mut lines = text_items(items)
+                .into_iter()
+                .filter_map(|item| match item {
+                    DisplayItem::Text { y, .. } => Some(*y),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            lines.sort_by(f32::total_cmp);
+            lines.dedup_by(|left, right| (*left - *right).abs() < 0.01);
+            lines.len()
+        };
+
+        assert!(line_count(&narrow_list) > line_count(&wide_list));
+    }
+
+    #[test]
+    fn list_markers_and_inline_emphasis_reach_the_display_list() {
+        let tree = layout(
+            "<ul><li><strong>bold</strong> <em>italic</em></li></ul>",
+            400.0,
+        );
+        let display_list = build_display_list(&tree, 400.0, 600.0, true);
+        let texts = text_items(&display_list);
+
+        assert!(texts.iter().any(|item| matches!(
+            item,
+            DisplayItem::Text { text, .. } if text == "\u{2022}"
+        )));
+        assert!(texts.iter().any(|item| matches!(
+            item,
+            DisplayItem::Text { text, bold: true, .. } if text == "bold"
+        )));
+        assert!(texts.iter().any(|item| matches!(
+            item,
+            DisplayItem::Text { text, italic: true, .. } if text == "italic"
+        )));
+        assert!(
+            display_list
+                .iter()
+                .any(|item| matches!(item, DisplayItem::OutlineRect { .. }))
+        );
+    }
+
+    #[test]
+    fn max_scroll_offset_tracks_layout_content_height() {
+        let short = layout("<p>short</p>", 800.0);
+        let long = layout(&format!("<p>{}</p>", "word ".repeat(1000)), 800.0);
 
         assert_eq!(max_scroll_offset(&short, 600.0), 0.0);
         assert!(max_scroll_offset(&long, 600.0) > 0.0);

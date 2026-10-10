@@ -1,9 +1,11 @@
 use crate::html::parser;
+use crate::layout;
 use crate::net::fetch_html;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum DumpFormat {
     Dom,
+    Layout,
     DisplayList,
 }
 
@@ -18,19 +20,25 @@ pub fn run(url: &str, dump: Option<DumpFormat>) -> Result<(), Box<dyn std::error
         return Ok(());
     }
 
-    let text = crate::paint::collect_document_text(&document);
     let font = crate::paint::load_bundled_font()?;
+    let mut layout_tree = layout::build_layout_tree(&document);
+    layout_tree.layout(crate::paint::DEFAULT_VIEWPORT_WIDTH, &font);
+
+    if dump == Some(DumpFormat::Layout) {
+        crate::devtools::dump_layout(&layout_tree);
+        return Ok(());
+    }
 
     if dump == Some(DumpFormat::DisplayList) {
         let display_list = crate::paint::build_display_list(
-            &text,
-            &font,
+            &layout_tree,
             crate::paint::DEFAULT_VIEWPORT_WIDTH,
             crate::paint::DEFAULT_VIEWPORT_HEIGHT,
+            false,
         );
         crate::devtools::dump_display_list(&display_list);
         return Ok(());
     }
 
-    crate::ui::window::run(text, font)
+    crate::ui::window::run(layout_tree, font)
 }

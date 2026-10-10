@@ -6,7 +6,7 @@ struct Args {
     #[arg(default_value = "https://example.com")]
     location: String,
 
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, value_name = "dom|layout|display-list")]
     dump: Option<DumpFormat>,
 }
 
