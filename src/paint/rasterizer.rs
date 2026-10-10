@@ -32,6 +32,20 @@ pub(crate) fn rasterize_display_list(
 
     for item in display_list {
         match item {
+            DisplayItem::ViewportBackground { w, h, color } => {
+                draw_rect(
+                    pixels,
+                    width,
+                    height,
+                    PixelRect {
+                        left: 0,
+                        top: 0,
+                        right: (*w * scale).ceil() as i32,
+                        bottom: (*h * scale).ceil() as i32,
+                    },
+                    *color,
+                );
+            }
             DisplayItem::Rect { x, y, w, h, color } => {
                 draw_rect(
                     pixels,
@@ -39,9 +53,9 @@ pub(crate) fn rasterize_display_list(
                     height,
                     PixelRect {
                         left: (*x * scale).floor() as i32,
-                        top: (*y * scale).floor() as i32,
+                        top: ((*y - scroll_offset) * scale).floor() as i32,
                         right: ((*x + *w) * scale).ceil() as i32,
-                        bottom: ((*y + *h) * scale).ceil() as i32,
+                        bottom: ((*y - scroll_offset + *h) * scale).ceil() as i32,
                     },
                     *color,
                 );
@@ -160,6 +174,10 @@ fn draw_rect(pixels: &mut [u32], width: usize, height: usize, rect: PixelRect, c
     let start_y = rect.top.max(0).min(height as i32) as usize;
     let end_y = rect.bottom.max(0).min(height as i32) as usize;
 
+    if start_x >= end_x || start_y >= end_y {
+        return;
+    }
+
     for y in start_y..end_y {
         pixels[y * width + start_x..y * width + end_x].fill(color);
     }
@@ -177,6 +195,11 @@ fn draw_text(
     for character in run.text.chars() {
         let (metrics, bitmap) = font.rasterize(character, run.px);
         let top = run.baseline_y - (metrics.ymin + metrics.height as i32);
+        let left = pen_x + metrics.xmin as f32;
+        if left + metrics.width as f32 * 1.2 <= 0.0 || left >= width as f32 {
+            pen_x += metrics.advance_width;
+            continue;
+        }
 
         for glyph_y in 0..metrics.height {
             for glyph_x in 0..metrics.width {
@@ -319,5 +342,86 @@ mod tests {
         let regular = render(false, false);
         assert_ne!(regular, render(true, false));
         assert_ne!(regular, render(false, true));
+    }
+
+    #[test]
+    fn backgrounds_and_borders_scroll_with_text_while_the_viewport_stays_fixed() {
+        let items = [
+            DisplayItem::ViewportBackground {
+                w: 20.0,
+                h: 20.0,
+                color: BACKGROUND_COLOR,
+            },
+            DisplayItem::Rect {
+                x: 2.0,
+                y: 100.0,
+                w: 10.0,
+                h: 10.0,
+                color: 0xFF0000,
+            },
+            DisplayItem::Rect {
+                x: 2.0,
+                y: 100.0,
+                w: 10.0,
+                h: 2.0,
+                color: 0x0000FF,
+            },
+        ];
+        let font = load_bundled_font().unwrap();
+        let mut pixels = vec![0; 400];
+        rasterize_display_list(&items, &font, &mut pixels, 20, 20, 1.0, 95.0);
+        assert_eq!(pixels[5 * 20 + 3], 0x0000FF);
+        assert_eq!(pixels[8 * 20 + 3], 0xFF0000);
+        assert_eq!(pixels[19 * 20 + 3], BACKGROUND_COLOR);
+        rasterize_display_list(&items, &font, &mut pixels, 20, 20, 1.0, 0.0);
+        assert!(pixels.iter().all(|pixel| *pixel == BACKGROUND_COLOR));
+    }
+
+    #[test]
+    fn rasterizes_computed_box_model_and_inherited_text_colors() {
+        let document = crate::html::parser::parse(
+            "<div style='width:20px; padding:2px; border-width:2px;\
+             border-color:blue; background-color:yellow; color:red'>A</div>",
+        )
+        .unwrap();
+        let font = load_bundled_font().unwrap();
+        let mut tree = crate::layout::build_layout_tree(&document);
+        tree.layout(100.0, &font);
+        let items = crate::paint::build_display_list(&tree, 100.0, 100.0, false);
+        let mut pixels = vec![BACKGROUND_COLOR; 10_000];
+        rasterize_display_list(&items, &font, &mut pixels, 100, 100, 1.0, 0.0);
+        assert_eq!(pixels[24 * 100 + 24], 0x0000FF);
+        assert_eq!(pixels[27 * 100 + 27], 0xFFFF00);
+        assert_eq!(pixels[23 * 100 + 24], BACKGROUND_COLOR);
+        assert!(pixels.iter().any(|pixel| {
+            let green = (*pixel >> 8) & 0xFF;
+            (*pixel >> 16) & 0xFF == 255 && green < 255 && *pixel & 0xFF == 0
+        }));
+    }
+
+    #[test]
+    fn clips_extreme_horizontal_css_positions_without_integer_overflow() {
+        let font = load_bundled_font().unwrap();
+        let mut pixels = vec![BACKGROUND_COLOR; 400];
+        for x in [1e30, -1e30] {
+            rasterize_display_list(
+                &[DisplayItem::Text {
+                    x,
+                    y: 0.0,
+                    text: "A".into(),
+                    size: 16.0,
+                    color: TEXT_COLOR,
+                    bold: true,
+                    italic: true,
+                }],
+                &font,
+                &mut pixels,
+                20,
+                20,
+                1.0,
+                0.0,
+            );
+        }
+        assert!(pixels.iter().all(|pixel| *pixel == BACKGROUND_COLOR));
     }
 }

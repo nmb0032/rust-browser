@@ -2,6 +2,72 @@ use crate::dom::{Document, NodeId, NodeKind};
 use crate::layout::{BoxKind, LayoutBox, LayoutTree};
 use crate::paint::DisplayItem;
 
+pub fn dump_stylesheets(stylesheets: &[crate::style::AuthorStylesheet]) {
+    print!("{}", format_stylesheets(stylesheets));
+}
+
+pub fn format_stylesheets(stylesheets: &[crate::style::AuthorStylesheet]) -> String {
+    use std::fmt::Write;
+    let mut output = String::new();
+    for (index, sheet) in stylesheets.iter().enumerate() {
+        writeln!(output, "Stylesheet {} (<style>)", index + 1)
+            .expect("writing a string cannot fail");
+        for rule in sheet.stylesheet.rules() {
+            format_rule(rule, 1, &mut output);
+        }
+    }
+    output
+}
+
+fn format_rule(rule: &crate::css::Rule, depth: usize, output: &mut String) {
+    use crate::css::{BlockItem, Rule};
+    use std::fmt::Write;
+    let indent = "  ".repeat(depth);
+    let items = match rule {
+        Rule::Qualified(rule) => {
+            writeln!(output, "{indent}{} {{", rule.prelude())
+                .expect("writing a string cannot fail");
+            rule.items()
+        }
+        Rule::At(rule) => {
+            let prelude = if rule.prelude().is_empty() {
+                String::new()
+            } else {
+                format!(" {}", rule.prelude())
+            };
+            if let Some(items) = rule.block() {
+                writeln!(output, "{indent}@{}{prelude} {{", rule.name())
+                    .expect("writing a string cannot fail");
+                items
+            } else {
+                writeln!(output, "{indent}@{}{prelude};", rule.name())
+                    .expect("writing a string cannot fail");
+                return;
+            }
+        }
+    };
+    for item in items {
+        match item {
+            BlockItem::Declaration(declaration) => {
+                let important = if declaration.is_important() {
+                    " !important"
+                } else {
+                    ""
+                };
+                writeln!(
+                    output,
+                    "{indent}  {}: {}{important};",
+                    declaration.property(),
+                    declaration.value()
+                )
+                .expect("writing a string cannot fail");
+            }
+            BlockItem::Rule(rule) => format_rule(rule, depth + 1, output),
+        }
+    }
+    writeln!(output, "{indent}}}").expect("writing a string cannot fail");
+}
+
 pub fn dump_dom(document: &Document) {
     dump_node(document, document.root_id(), 0);
 }

@@ -1,0 +1,30 @@
+Stylesheet 1 (<style>)
+  body {
+    color: navy;
+    font-family: sans-serif;
+  }
+  .card {
+    background-color: #eef;
+    padding: 1em;
+    margin: 12px 0;
+    width: 80%;
+  }
+  .card p {
+    color: green;
+  }
+  #hero {
+    color: rebeccapurple;
+    border-width: 3px;
+    border-color: #639;
+  }
+  .hidden {
+    display: none;
+  }
+Stylesheet 2 (<style>)
+  .card p {
+    color: teal;
+  }
+  span.block {
+    display: block;
+    margin: 0.5em 0;
+  }

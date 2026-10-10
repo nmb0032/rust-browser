@@ -14,3 +14,7 @@ fontdue = "0.9.4"
 [[bench]]
 name = "streaming"
 harness = false
+
+[[bench]]
+name = "styling"
+harness = false

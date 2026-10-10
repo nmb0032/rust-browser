@@ -58,13 +58,14 @@ keeping the codebase small enough to learn from.
 
 | Area | Location | Status |
 | --- | --- | --- |
-| App entry | `src/app` | Loads a page, builds layout, and supports DOM/layout/display-list dumps. |
+| App entry | `src/app` | Loads a page progressively and supports DOM/stylesheet/layout/display-list dumps. |
 | Networking | `src/net` | Streams HTTP and file bodies with incremental UTF-8 decoding. |
 | HTML | `src/html` | Resumable parser for a limited HTML subset; not WHATWG-compliant. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
-| CSS | `src/css` | Rule-level parser. Selectors and values are kept as raw strings. |
-| Layout | `src/layout` | Naive block/inline boxes, vertical flow, basic text styling, and list markers. |
-| Paint | `src/paint` | Builds and rasterizes a display list from layout fragments. |
+| CSS | `src/css` | Rule-level syntax tree, simple selector matching/specificity, and color/length value parsers. |
+| Style | `src/style` | Embedded and inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
+| Layout | `src/layout` | Computed-style-driven block/inline boxes, content-box sizing, spacing, text, and list markers. |
+| Paint | `src/paint` | Builds and rasterizes styled text, backgrounds, and borders; document rectangles scroll with content. |
 
 The DOM arena with stable IDs is a good foundation. The existing CSS rule
 parser is used in Milestone 4 and rebuilt on a tokenizer in Milestone 7.
@@ -380,33 +381,79 @@ incomplete markup, not a typical page.
 
 **Goal:** Apply real styles using the existing CSS parser.
 
-- [ ] **4.1 Collect `<style>` text.** Parse each `<style>` element's contents
+- [x] **4.1 Collect `<style>` text.** Parse each `<style>` element's contents
   with `css::parse` and list the resulting rules.
   *You'll see:* `--dump=stylesheets` prints the page's rules.
-- [ ] **4.2 Parse simple selectors.** Parse type, `.class`, `#id`, and
+- [x] **4.2 Parse simple selectors.** Parse type, `.class`, `#id`, and
   descendant selectors from rule preludes. Compute specificity.
   *You'll see:* unit tests for selectors and their specificity.
-- [ ] **4.3 Match and apply `color` and `background-color`.** Build a
+- [x] **4.3 Match and apply `color` and `background-color`.** Build a
   `style` module that matches rules against elements and parses named and
   hexadecimal colors. Apply the winning value by specificity and source order.
   *You'll see:* the first styled page, with colors taken from its CSS.
-- [ ] **4.4 Replace hard-coded styles with a user-agent stylesheet.** Move the
+- [x] **4.4 Replace hard-coded styles with a user-agent stylesheet.** Move the
   font sizes, margins, and block/inline list from Milestone 2 into a built-in
   stylesheet based on the HTML spec's rendering section.
   *You'll see:* the same rendering, now driven entirely by CSS.
-- [ ] **4.5 Use `display`, `font-size`, `margin`, and `padding`.** Read these
+- [x] **4.5 Use `display`, `font-size`, `margin`, and `padding`.** Read these
   from computed styles in layout. Support `px`, `em`, and `%` for margins,
   padding, and widths.
   *You'll see:* page CSS changing spacing and layout.
-- [ ] **4.6 Add inheritance.** Inherit `color`, `font-size`, and
+- [x] **4.6 Add inheritance.** Inherit `color`, `font-size`, and
   `font-family` from parent elements.
   *You'll see:* text inheriting its container's color.
-- [ ] **4.7 Draw borders and backgrounds.** Paint `border-width`,
+- [x] **4.7 Draw borders and backgrounds.** Paint `border-width`,
   `border-color`, and `background-color` rectangles.
   *You'll see:* boxes with visible borders and backgrounds.
-- [ ] **4.8 Support `style=""` attributes.** Parse inline declarations and
+- [x] **4.8 Support `style=""` attributes.** Parse inline declarations and
   apply them above stylesheet rules.
   *You'll see:* inline styles overriding stylesheet rules.
+
+**Try it:** `cargo run -- tests/pages/styles.html`, or add
+`--dump=stylesheets`, `--dump=layout`, or `--dump=display-list`.
+Stylesheet dumps have a committed snapshot. Unit and pipeline tests cover
+specificity, source order, inline priority, `!important`, inheritance,
+shorthand/longhand interactions, box geometry, paint order, scrolling, and
+stylesheets arriving after already-rendered content.
+
+**Implementation boundaries:** `css/selectors.rs` handles selector lists,
+compound selectors, the universal selector, and descendants.
+`css/values/` handles named colors, three/six-digit hex, `transparent`,
+`currentcolor`, and `px`/`em`/`%` lengths. `style/` collects and compiles sheets
+and resolves the cascade independently of layout. The built-in
+`style/user_agent.css` preserves the earlier heading, emphasis, paragraph,
+and list defaults. `layout/` separates box generation, geometry, block flow,
+and inline flow. Element widths use the content-box model; percentages for
+width, margin, and padding resolve against the containing block's width.
+
+**Naive limitations:** The HTML parser buffers `<style>` contents as raw text
+until its closing tag or EOF, including across chunk boundaries. This is not
+a complete raw-text tokenizer. A malformed CSS syntax tree rejects its
+entire sheet or inline declaration list; invalid/unsupported selectors and
+typed values are ignored with diagnostics. At-rules, media-query semantics,
+external sheets, advanced selectors, alpha colors, margin collapsing,
+auto margins, and font-face selection are still deferred. `font-family` is
+computed and inherited, but rasterization uses the bundled face. Nonzero
+border widths paint solid rectangular strips without a `border-style`
+model. Wrapped inline backgrounds/borders use a single bounding rectangle
+rather than per-line fragments. The browser's existing 24px viewport gutter
+remains separate from element CSS. Font sizes are capped at 512 CSS px with
+a diagnostic to bound glyph rasterization.
+
+**Measure styling:** `cargo bench --bench styling` reports median CSS
+syntax parsing, full style resolution, and styled box generation/layout
+CPU time over nine release-mode samples. Full resolution includes sheet
+collection, selector/value parsing, matching, and the cascade. HTML parsing,
+font loading, networking, rasterization, and final result destruction are
+outside the timed regions. The naive matcher examines every rule for every
+element, and each progressive update rebuilds all styles and layout.
+
+Example measurements on ARM64 macOS with Rust 1.98.0 (2026-10-10):
+
+| Elements / author rules | CSS parsing | Style resolution | Styled box layout |
+| --- | --- | --- | --- |
+| 100 / 10 | 0.009 ms | 0.168 ms | 0.082 ms |
+| 1,000 / 100 | 0.076 ms | 2.911 ms | 0.753 ms |
 
 ### Milestone 5: Real pages and links
 

@@ -65,6 +65,22 @@ pub fn parse(source: &str) -> Result<Stylesheet, CssError> {
     Parser::new(source).parse_stylesheet()
 }
 
+pub fn parse_declarations(source: &str) -> Result<Vec<Declaration>, CssError> {
+    let mut parser = Parser::new(source);
+    let mut declarations = Vec::new();
+    loop {
+        parser.skip_trivia()?;
+        match parser.peek_char() {
+            None => return Ok(declarations),
+            Some(';') => parser.advance_char(),
+            Some('}') => {
+                return Err(parser.error(CssErrorKind::UnexpectedClosingBrace, parser.position));
+            }
+            Some(_) => declarations.push(parser.parse_declaration_with_eof(true)?),
+        }
+    }
+}
+
 impl<'a> Parser<'a> {
     fn new(source: &'a str) -> Self {
         Self {
@@ -222,6 +238,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_declaration(&mut self) -> Result<Declaration, CssError> {
+        self.parse_declaration_with_eof(false)
+    }
+
+    fn parse_declaration_with_eof(&mut self, allow_eof: bool) -> Result<Declaration, CssError> {
         let start = self.position;
         let boundary = self.scan_boundary(start, self.source.len(), &[';', '}'], true)?;
         let colon = self
@@ -241,6 +261,7 @@ impl<'a> Parser<'a> {
         self.position = match boundary.delimiter {
             Some(';') => boundary.position + 1,
             Some('}') => boundary.position,
+            None if allow_eof => self.source.len(),
             None => {
                 return Err(self.error(CssErrorKind::UnterminatedBlock, self.source.len()));
             }

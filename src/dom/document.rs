@@ -16,6 +16,12 @@ pub enum DomError {
     TextNodeCannotHaveChildren(NodeId),
 }
 
+impl Default for Document {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Document {
     pub fn new() -> Self {
         let root = NodeId::from_index(0);

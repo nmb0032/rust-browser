@@ -10,6 +10,7 @@ pub enum DumpFormat {
     Dom,
     Layout,
     DisplayList,
+    Stylesheets,
 }
 
 // First path: app → engine → navigation/net → html → dom → css/style → layout → paint/render
@@ -96,6 +97,14 @@ fn load_document(
 
 fn dump_document(document: Document, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
     match dump {
+        DumpFormat::Stylesheets => {
+            let result = crate::style::collect_stylesheets(&document);
+            for diagnostic in &result.diagnostics {
+                eprintln!("CSS at {:?}: {}", diagnostic.node_id, diagnostic.message);
+            }
+            crate::devtools::dump_stylesheets(&result.stylesheets);
+            Ok(())
+        }
         DumpFormat::Dom => {
             crate::devtools::dump_dom(&document);
             Ok(())

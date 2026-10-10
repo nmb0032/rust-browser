@@ -9,8 +9,8 @@
  * - The parser does not synthesize `html`, `head`, or `body` elements, or
  *   implement insertion modes, implied end tags, table foster parenting, or
  *   adoption-agency recovery for formatting elements.
- * - Raw-text and RCDATA elements such as `script`, `style`, `title`, and
- *   `textarea` do not have their special tokenization rules.
+ * - `style` contents are buffered as raw text until the closing tag. Other
+ *   raw-text and RCDATA elements do not have special tokenization rules.
  * - SVG/MathML foreign content, namespaces, and their tag-name adjustments
  *   are not supported.
  * - Error recovery is intentionally small: unmatched end tags are ignored,
@@ -114,6 +114,30 @@ impl HtmlParser {
         while position < self.buffer.len() {
             let remaining = &self.buffer[position..];
 
+            let in_style = self
+                .elements_stack
+                .last()
+                .and_then(|id| self.document.node(*id))
+                .and_then(|node| node.as_element())
+                .is_some_and(|element| element.tag_name() == "style");
+            if in_style {
+                if let Some((start, bytes_used)) = find_style_end(remaining) {
+                    if start > 0 {
+                        self.append_token(Token::Text(remaining[..start].to_string()))?;
+                    }
+                    self.append_token(Token::EndTag {
+                        name: "style".into(),
+                    })?;
+                    position += start + bytes_used;
+                } else if is_final {
+                    self.append_token(Token::Text(remaining.to_string()))?;
+                    position = self.buffer.len();
+                } else {
+                    break;
+                }
+                continue;
+            }
+
             if remaining.starts_with("<!--") {
                 match remaining.find("-->") {
                     Some(end) => position += end + "-->".len(),
@@ -121,6 +145,24 @@ impl HtmlParser {
                     None => return Err(HtmlError::UnterminatedComment),
                 }
                 continue;
+            }
+
+            fn find_style_end(source: &str) -> Option<(usize, usize)> {
+                source.match_indices('<').find_map(|(start, _)| {
+                    let candidate = &source[start..];
+                    if !candidate
+                        .get(..7)
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("</style"))
+                    {
+                        return None;
+                    }
+                    match parse_tag(candidate) {
+                        Ok((Token::EndTag { name }, bytes_used)) if name == "style" => {
+                            Some((start, bytes_used))
+                        }
+                        _ => None,
+                    }
+                })
             }
 
             if is_doctype_start(remaining) {

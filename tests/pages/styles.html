@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <title>First CSS</title>
+  <style>
+    body { color: navy; font-family: sans-serif; }
+    .card { background-color: #eef; padding: 1em; margin: 12px 0; width: 80%; }
+    .card p { color: green; }
+    #hero { color: rebeccapurple; border-width: 3px; border-color: #639; }
+    .hidden { display: none; }
+  </style>
+  <style>
+    .card p { color: teal; }
+    span.block { display: block; margin: 0.5em 0; }
+  </style>
+</head>
+<body>
+  <h1>First CSS</h1>
+  <div id="hero" class="card">
+    <p>Inherited and matched colors.</p>
+    <p style="color: #c30; font-size: 1.25em">Inline override.</p>
+    <span class="block">A block created by CSS.</span>
+    <div class="hidden">Hidden content.</div>
+  </div>
+  <ul style="color: maroon"><li>Styled list marker.</li></ul>
+</body>
+</html>

@@ -5,12 +5,16 @@ use crate::layout::{LayoutBox, LayoutTree};
 pub(crate) const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
 pub(crate) const DEFAULT_VIEWPORT_HEIGHT: f32 = 600.0;
 pub(crate) const LINE_HEIGHT: f32 = 20.0;
-const TEXT_COLOR: u32 = 0x0000_0000;
 const BACKGROUND_COLOR: u32 = 0x00FF_FFFF;
 const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    ViewportBackground {
+        w: f32,
+        h: f32,
+        color: u32,
+    },
     Text {
         x: f32,
         y: f32,
@@ -49,9 +53,7 @@ pub(crate) fn build_display_list(
     viewport_height: f32,
     show_outlines: bool,
 ) -> Vec<DisplayItem> {
-    let mut display_list = vec![DisplayItem::Rect {
-        x: 0.0,
-        y: 0.0,
+    let mut display_list = vec![DisplayItem::ViewportBackground {
         w: viewport_width,
         h: viewport_height,
         color: BACKGROUND_COLOR,
@@ -65,28 +67,89 @@ pub(crate) fn build_display_list(
 }
 
 fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
-    if let Some(marker) = layout_box.list_marker() {
+    append_decoration_items(layout_box, display_list);
+    if let Some(marker) = layout_box.list_marker()
+        && let Some(color) = layout_box.style().color
+        && layout_box.style().font_size > 0.0
+    {
         display_list.push(DisplayItem::Text {
             x: marker.x,
             y: marker.y,
             text: marker.text.clone(),
-            size: 16.0,
-            color: TEXT_COLOR,
-            bold: false,
-            italic: false,
+            size: layout_box.style().font_size,
+            color,
+            bold: layout_box.style().bold,
+            italic: layout_box.style().italic,
         });
     }
 
     for fragment in layout_box.text_fragments() {
+        let Some(color) = fragment.color else {
+            continue;
+        };
+        if fragment.font_size == 0.0 {
+            continue;
+        }
         display_list.push(DisplayItem::Text {
             x: fragment.x,
             y: fragment.y,
             text: fragment.text.clone(),
             size: fragment.font_size,
-            color: TEXT_COLOR,
+            color,
             bold: fragment.bold,
             italic: fragment.italic,
         });
+    }
+
+    fn append_decoration_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
+        let rect = layout_box.rect();
+        let style = layout_box.style();
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        if let Some(color) = style.background_color {
+            display_list.push(DisplayItem::Rect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                color,
+            });
+        }
+        let widths = style.border_width;
+        let colors = style.border_color;
+        let inner_height = (rect.height - widths.top - widths.bottom).max(0.0);
+        for (x, y, w, h, color) in [
+            (rect.x, rect.y, rect.width, widths.top, colors.top),
+            (
+                rect.x,
+                rect.y + rect.height - widths.bottom,
+                rect.width,
+                widths.bottom,
+                colors.bottom,
+            ),
+            (
+                rect.x,
+                rect.y + widths.top,
+                widths.left,
+                inner_height,
+                colors.left,
+            ),
+            (
+                rect.x + rect.width - widths.right,
+                rect.y + widths.top,
+                widths.right,
+                inner_height,
+                colors.right,
+            ),
+        ] {
+            if w > 0.0
+                && h > 0.0
+                && let Some(color) = color
+            {
+                display_list.push(DisplayItem::Rect { x, y, w, h, color });
+            }
+        }
     }
 
     for child in layout_box.children() {
@@ -216,5 +279,91 @@ mod tests {
 
         assert_eq!(max_scroll_offset(&short, 600.0), 0.0);
         assert!(max_scroll_offset(&long, 600.0) > 0.0);
+    }
+
+    #[test]
+    fn paints_parent_background_and_each_border_before_child_content() {
+        let tree = layout(
+            "<div style='background-color:#123; border-width:1px 2px 3px 4px;\
+             border-color:red green blue yellow; padding:5px'>\
+             <span style='color:rebeccapurple; background-color:white'>text</span></div>",
+            400.0,
+        );
+        let list = build_display_list(&tree, 400.0, 600.0, false);
+        assert!(matches!(list[0], DisplayItem::ViewportBackground { .. }));
+        assert!(matches!(
+            list[1],
+            DisplayItem::Rect {
+                color: 0x112233,
+                ..
+            }
+        ));
+        assert!(matches!(
+            list[2],
+            DisplayItem::Rect {
+                h: 1.0,
+                color: 0xFF0000,
+                ..
+            }
+        ));
+        assert!(matches!(
+            list[3],
+            DisplayItem::Rect {
+                h: 3.0,
+                color: 0x0000FF,
+                ..
+            }
+        ));
+        assert!(matches!(
+            list[4],
+            DisplayItem::Rect {
+                w: 4.0,
+                color: 0xFFFF00,
+                ..
+            }
+        ));
+        assert!(matches!(
+            list[5],
+            DisplayItem::Rect {
+                w: 2.0,
+                color: 0x008000,
+                ..
+            }
+        ));
+        assert!(matches!(
+            list[6],
+            DisplayItem::Rect {
+                color: 0xFFFFFF,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&list[7], DisplayItem::Text { color: 0x663399, text, .. } if text == "text")
+        );
+    }
+
+    #[test]
+    fn list_markers_inherit_size_color_and_emphasis() {
+        let tree = layout(
+            "<ul style='color:red; font-size:24px; font-weight:bold'><li>item</li></ul>",
+            400.0,
+        );
+        let list = build_display_list(&tree, 400.0, 600.0, false);
+        assert!(list.iter().any(|item| matches!(item,
+            DisplayItem::Text { text, size:24.0, color:0xFF0000, bold:true, .. } if text == "\u{2022}"
+        )));
+    }
+
+    #[test]
+    fn transparent_and_zero_size_text_do_not_emit_glyphs() {
+        let tree = layout(
+            "<p style='color:transparent'>hidden</p>\
+             <p style='font-size:0'>zero</p><p>visible</p>",
+            400.0,
+        );
+        let list = build_display_list(&tree, 400.0, 600.0, false);
+        let text = text_items(&list);
+        assert_eq!(text.len(), 1);
+        assert!(matches!(text[0], DisplayItem::Text { text, .. } if text == "visible"));
     }
 }
