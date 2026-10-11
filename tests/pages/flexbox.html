@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Flexbox — navigation and card rows</title>
+  <style>
+    html, body { margin: 0; background: #faf8f4; color: #18212c; }
+    body { font: 16px/24px sans-serif; }
+    header { display: flex; flex-wrap: wrap; align-items: center;
+      justify-content: space-between; gap: 16px 32px; padding: 16px;
+      background: #18212c; color: white; }
+    header a { color: white; }
+    .brand { font-size: 24px; font-weight: bold; }
+    nav { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+    main { max-width: 700px; margin: 32px auto; }
+    h1 { font-size: 32px; line-height: 40px; margin: 0 0 16px; }
+    h2 { font-size: 24px; line-height: 32px; margin: 0 0 12px; }
+    p { margin: 0 0 16px; }
+    .cards { display: flex; flex-wrap: wrap; gap: 16px;
+      align-items: stretch; margin: 24px 0; }
+    article { display: flex; flex-direction: column; flex: 1 1 180px;
+      min-width: 0; padding: 16px; border: 2px solid #8d9aa6; background: white; }
+    article p { flex: 1; }
+    article a { display: block; margin-top: auto; color: #184f5c; }
+    .wide { flex-basis: 220px; }
+    .compact { flex-basis: 140px; }
+    .status { display: inline-flex; align-items: baseline; gap: 8px;
+      padding: 4px 8px; background: #dfece5; }
+    .status strong { font-size: 20px; }
+    .rail { display: flex; gap: 12px; overflow: auto; padding: 8px;
+      border: 1px solid #8d9aa6; }
+    .rail a { flex: 0 0 180px; padding: 12px; background: #dfece5; color: #184f5c; }
+    @media (width < 500px) {
+      main { margin-top: 24px; }
+      h1 { font-size: 28px; line-height: 36px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="#cards">Rust Browser</a>
+    <nav aria-label="Page navigation">
+      <a href="#cards">Card rows</a>
+      <a href="#status">Inline baseline</a>
+      <a href="#rail">Scrollable row</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Navigation and card rows, as designed.</h1>
+    <p>These rows use flexible bases, internal gaps and real text measurement.
+      Resize the window: cards wrap while the navigation remains usable.</p>
+    <section class="cards" id="cards">
+      <article>
+        <h2>Flexible width</h2>
+        <p>A 180px content basis shares remaining space without turning every
+          card into an equal column.</p>
+        <a href="#rail">Explore the scrollable row</a>
+      </article>
+      <article class="wide">
+        <h2>Room for reading</h2>
+        <p>This card starts from a wider 220px basis. Its column layout lets
+          the text grow and keeps the action at the bottom of the shared row.</p>
+        <a href="#status">Inspect the inline baseline</a>
+      </article>
+      <article class="compact">
+        <h2>A smaller base</h2>
+        <p>A 140px basis still grows and wraps.</p>
+        <a href="#cards">Return to the cards</a>
+      </article>
+    </section>
+    <p id="status">An atomic inline example:
+      <span class="status"><strong>8.10</strong><span>Flexbox layout</span></span>
+      shares this paragraph's baseline.</p>
+    <h2>Scrollable row</h2>
+    <div class="rail" id="rail">
+      <a href="#cards">Flexible bases</a>
+      <a href="#cards">Iterative freezing</a>
+      <a href="#status">Shaped baselines</a>
+      <a href="#rail">Retained scrolling</a>
+    </div>
+  </main>
+</body>
+</html>

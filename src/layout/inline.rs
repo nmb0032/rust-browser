@@ -70,6 +70,8 @@ struct BoxData {
     first: bool,
     last: bool,
     image_size: Option<(f32, f32)>,
+    atomic: Option<Box<LayoutBox>>,
+    atomic_baseline: f32,
     rect: Rect,
     content: Rect,
     text: Vec<TextFragment>,
@@ -181,7 +183,7 @@ fn collect(
     let mut data = BoxData {
         parent,
         node: layout.node_id,
-        style: style.clone(),
+        style: (**style).clone(),
         metrics,
         padding,
         margin,
@@ -189,6 +191,8 @@ fn collect(
         first: layout.inline_start,
         last: layout.inline_end,
         image_size: None,
+        atomic: None,
+        atomic_baseline: 0.0,
         rect: Rect::default(),
         content: Rect::default(),
         text: Vec::new(),
@@ -259,11 +263,54 @@ fn collect(
             "image border height",
             diagnostics,
         );
+        data.atomic_baseline = data.rect.height + data.margin.bottom;
         boxes.push(data);
         if layout.style.position.out_of_flow() {
             tokens.push(Token::Positioned(id));
             return;
         }
+        tokens.push(Token::Image(id));
+        return;
+    }
+    if layout.atomic_inline() {
+        let mut atomic = layout.clone();
+        atomic.reset();
+        let decor = padding.left + padding.right + border.left + border.right;
+        let vertical = padding.top + padding.bottom + border.top + border.bottom;
+        let explicit_width = super::sizing::definite_size(
+            layout,
+            style.width.as_ref(),
+            Some(width),
+            decor,
+            diagnostics,
+        );
+        let height = super::sizing::definite_size(
+            layout,
+            style.height.as_ref(),
+            reference_height,
+            vertical,
+            diagnostics,
+        );
+        let intrinsic = super::positioning::intrinsic_content(layout, width, font, diagnostics);
+        let available = (width - decor - margin.left - margin.right).max(0.0);
+        let used_width =
+            explicit_width.unwrap_or_else(|| available.max(intrinsic.0).min(intrinsic.1));
+        let limits = super::sizing::bounds(layout, true, Some(width), decor, 0.0, diagnostics);
+        super::block::layout_sized(
+            &mut atomic,
+            width,
+            used_width.clamp(limits.0, limits.1),
+            height,
+            (explicit_width.is_some(), true),
+            font,
+            diagnostics,
+        );
+        data.rect = atomic.rect;
+        data.content = atomic.content_rect;
+        data.image_size = Some((atomic.content_rect.width, atomic.content_rect.height));
+        data.atomic_baseline = atomic.first_local_baseline().unwrap_or(atomic.rect.height);
+        data.atomic = Some(Box::new(atomic));
+        boxes.push(data);
         tokens.push(Token::Image(id));
         return;
     }
@@ -432,14 +479,14 @@ impl Assembly<'_> {
             Token::Image(id) => {
                 let b = &self.boxes[id];
                 let above = finite_used(
-                    b.margin.top as f64 + b.rect.height as f64 + b.margin.bottom as f64,
+                    b.margin.top as f64 + b.atomic_baseline as f64,
                     b.node,
                     "image margin height",
                     self.diagnostics,
                 );
                 self.contribute(FontMetrics {
                     above,
-                    below: 0.0,
+                    below: b.rect.height + b.margin.bottom - b.atomic_baseline,
                     ..b.metrics
                 });
                 let advance = Token::Image(id).width(self.boxes);
@@ -701,7 +748,7 @@ impl Assembly<'_> {
                         self.diagnostics,
                     );
                     b.rect.y = finite_used(
-                        baseline as f64 - b.margin.bottom as f64 - b.rect.height as f64,
+                        baseline as f64 - b.atomic_baseline as f64,
                         b.node,
                         "image y",
                         self.diagnostics,
@@ -888,6 +935,15 @@ fn install(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let data = boxes.next().expect("inline preorder geometry");
+    if let Some(mut atomic) = data.atomic {
+        let dx = data.rect.x - atomic.rect.x;
+        super::positioning::translate(&mut atomic, dx, 0.0, diagnostics);
+        super::block::place_block(&mut atomic, data.rect.y as f64, diagnostics);
+        atomic.inline_line = data.inline_line;
+        atomic.margin = data.margin;
+        *layout = *atomic;
+        return;
+    }
     layout.rect = data.rect;
     layout.content_rect = data.content;
     layout.padding = data.padding;

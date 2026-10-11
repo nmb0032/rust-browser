@@ -768,7 +768,7 @@ impl LayoutTree {
         let suppressed = propagated.map(|b| b.box_id);
         self.overflow.clear();
         for b in map.values() {
-            if b.kind != BoxKind::Block
+            if (b.kind != BoxKind::Block && !b.atomic_inline())
                 || b.box_id == self.root.box_id
                 || Some(b.box_id) == suppressed
                 || !(b.style.overflow_x.clips() || b.style.overflow_y.clips())

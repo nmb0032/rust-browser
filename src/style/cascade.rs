@@ -2056,9 +2056,13 @@ fn compute_with_context(
     let (x, y) = (style.overflow_x, style.overflow_y);
     style.overflow_x = x.coupled(y);
     style.overflow_y = y.coupled(x);
-    style.positioned_inline = style.position.out_of_flow() && style.display == Display::Inline;
+    style.positioned_inline = style.position.out_of_flow()
+        && matches!(style.display, Display::Inline | Display::InlineFlex);
     if style.positioned_inline {
-        style.display = Display::Block;
+        style.display = style.display.blockified();
+    }
+    if parent.style.display.is_flex() && !style.position.out_of_flow() {
+        style.display = style.display.blockified();
     }
     ComputedNode { style, colors }
 }
@@ -2105,7 +2109,16 @@ fn absolutize(
             let mut computed = length.computed(context)?.0;
             if matches!(
                 property,
-                Property::Width | Property::Height | Property::Padding(_)
+                Property::Width
+                    | Property::Height
+                    | Property::Padding(_)
+                    | Property::MinWidth
+                    | Property::MinHeight
+                    | Property::MaxWidth
+                    | Property::MaxHeight
+                    | Property::FlexBasis
+                    | Property::RowGap
+                    | Property::ColumnGap
             ) && let Length::Px(value) = &mut computed
             {
                 *value = value.max(0.0);
@@ -2215,6 +2228,50 @@ fn computed_value(
             .clone()
             .map(Value::Length)
             .unwrap_or(Value::Auto),
+        P::MinWidth => style
+            .min_width
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::Auto),
+        P::MinHeight => style
+            .min_height
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::Auto),
+        P::MaxWidth => style
+            .max_width
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::None),
+        P::MaxHeight => style
+            .max_height
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::None),
+        P::FlexDirection => Value::FlexDirection(style.flex_direction),
+        P::FlexWrap => Value::FlexWrap(style.flex_wrap),
+        P::FlexGrow => Value::Number(style.flex_grow),
+        P::FlexShrink => Value::Number(style.flex_shrink),
+        P::FlexBasis => match &style.flex_basis {
+            super::FlexBasis::Auto => Value::Auto,
+            super::FlexBasis::Content => Value::ContentBasis,
+            super::FlexBasis::Length(l) => Value::Length(l.clone()),
+        },
+        P::Order => Value::Integer(style.order),
+        P::JustifyContent => Value::Alignment(style.justify_content),
+        P::AlignItems => Value::Alignment(style.align_items),
+        P::AlignSelf => Value::Alignment(style.align_self),
+        P::AlignContent => Value::Alignment(style.align_content),
+        P::RowGap => style
+            .row_gap
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::None),
+        P::ColumnGap => style
+            .column_gap
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::None),
         P::ContainerType => Value::ContainerType(style.container_type),
         P::ContainerName => Value::ContainerNames(style.container_names.clone()),
         P::Margin(side) => match style.margin.get(side) {
@@ -2294,6 +2351,30 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         (P::Width, Value::Auto) => style.width = None,
         (P::Height, Value::Length(length)) => style.height = Some(length),
         (P::Height, Value::Auto) => style.height = None,
+        (P::MinWidth, Value::Length(l)) => style.min_width = Some(l),
+        (P::MinHeight, Value::Length(l)) => style.min_height = Some(l),
+        (P::MaxWidth, Value::Length(l)) => style.max_width = Some(l),
+        (P::MaxHeight, Value::Length(l)) => style.max_height = Some(l),
+        (P::MinWidth, Value::Auto) => style.min_width = None,
+        (P::MinHeight, Value::Auto) => style.min_height = None,
+        (P::MaxWidth, Value::None) => style.max_width = None,
+        (P::MaxHeight, Value::None) => style.max_height = None,
+        (P::FlexDirection, Value::FlexDirection(v)) => style.flex_direction = v,
+        (P::FlexWrap, Value::FlexWrap(v)) => style.flex_wrap = v,
+        (P::FlexGrow, Value::Number(v)) => style.flex_grow = v,
+        (P::FlexShrink, Value::Number(v)) => style.flex_shrink = v,
+        (P::FlexBasis, Value::Auto) => style.flex_basis = super::FlexBasis::Auto,
+        (P::FlexBasis, Value::ContentBasis) => style.flex_basis = super::FlexBasis::Content,
+        (P::FlexBasis, Value::Length(l)) => style.flex_basis = super::FlexBasis::Length(l),
+        (P::Order, Value::Integer(v)) => style.order = v,
+        (P::JustifyContent, Value::Alignment(v)) => style.justify_content = v,
+        (P::AlignItems, Value::Alignment(v)) => style.align_items = v,
+        (P::AlignSelf, Value::Alignment(v)) => style.align_self = v,
+        (P::AlignContent, Value::Alignment(v)) => style.align_content = v,
+        (P::RowGap, Value::Length(l)) => style.row_gap = Some(l),
+        (P::ColumnGap, Value::Length(l)) => style.column_gap = Some(l),
+        (P::RowGap, Value::None) => style.row_gap = None,
+        (P::ColumnGap, Value::None) => style.column_gap = None,
         (P::ContainerType, Value::ContainerType(kind)) => style.container_type = kind,
         (P::ContainerName, Value::ContainerNames(names)) => style.container_names = names,
         (P::Margin(side), Value::Length(length)) => *style.margin.get_mut(side) = length.into(),

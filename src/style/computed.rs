@@ -141,8 +141,92 @@ pub enum Display {
     Block,
     #[default]
     Inline,
+    Flex,
+    InlineFlex,
     ListItem,
     None,
+}
+
+impl Display {
+    pub fn is_flex(self) -> bool {
+        matches!(self, Self::Flex | Self::InlineFlex)
+    }
+
+    pub(crate) fn blockified(self) -> Self {
+        match self {
+            Self::Inline => Self::Block,
+            Self::InlineFlex => Self::Flex,
+            other => other,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FlexDirection {
+    #[default]
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+
+impl FlexDirection {
+    pub(crate) fn row(self) -> bool {
+        matches!(self, Self::Row | Self::RowReverse)
+    }
+    pub(crate) fn reverse(self) -> bool {
+        matches!(self, Self::RowReverse | Self::ColumnReverse)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FlexWrap {
+    #[default]
+    Nowrap,
+    Wrap,
+    WrapReverse,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum FlexBasis {
+    #[default]
+    Auto,
+    Content,
+    Length(Length),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AlignKeyword {
+    Auto,
+    #[default]
+    Normal,
+    Stretch,
+    FlexStart,
+    FlexEnd,
+    Start,
+    End,
+    SelfStart,
+    SelfEnd,
+    Center,
+    Baseline,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Alignment {
+    pub keyword: AlignKeyword,
+    pub safe: bool,
+}
+
+impl Alignment {
+    pub const fn new(keyword: AlignKeyword) -> Self {
+        Self {
+            keyword,
+            safe: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -272,6 +356,25 @@ pub struct ComputedStyle {
     pub italic: bool,
     pub width: Option<Length>,
     pub height: Option<Length>,
+    /// Physical min/max prerequisites for flex sizing; auto minimum is
+    /// content-based only for a non-scrollable flex main axis.
+    pub min_width: Option<Length>,
+    pub min_height: Option<Length>,
+    pub max_width: Option<Length>,
+    pub max_height: Option<Length>,
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: FlexWrap,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    pub flex_basis: FlexBasis,
+    pub order: i32,
+    pub justify_content: Alignment,
+    pub align_items: Alignment,
+    pub align_self: Alignment,
+    pub align_content: Alignment,
+    /// `None` represents normal (zero in flex layout).
+    pub row_gap: Option<Length>,
+    pub column_gap: Option<Length>,
     pub margin: Edges<LengthOrAuto>,
     pub padding: Edges<Length>,
     pub border_width: Edges<f32>,
@@ -323,6 +426,22 @@ impl Default for ComputedStyle {
             italic: false,
             width: None,
             height: None,
+            min_width: None,
+            min_height: None,
+            max_width: None,
+            max_height: None,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Nowrap,
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: FlexBasis::Auto,
+            order: 0,
+            justify_content: Alignment::default(),
+            align_items: Alignment::default(),
+            align_self: Alignment::new(AlignKeyword::Auto),
+            align_content: Alignment::default(),
+            row_gap: None,
+            column_gap: None,
             margin: Edges::default(),
             padding: Edges::default(),
             border_width: Edges::default(),

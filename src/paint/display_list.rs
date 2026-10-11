@@ -264,7 +264,10 @@ fn append_box_items(
         selected: Option<usize>,
         display_list: &mut Vec<DisplayItem>,
     ) {
-        if layout_box.kind() == BoxKind::Inline && !layout_box.is_replaced_image() {
+        if layout_box.kind() == BoxKind::Inline
+            && !layout_box.is_replaced_image()
+            && !layout_box.style().display.is_flex()
+        {
             for (index, fragment) in layout_box.inline_fragments().iter().enumerate() {
                 if selected.is_some_and(|selected| selected != index) {
                     continue;
@@ -476,7 +479,10 @@ fn append_own_outline(
         for fragment in layout_box.text_fragments() {
             outline(fragment.ink_rect, OUTLINE_COLOR);
         }
-    } else if layout_box.kind() == BoxKind::Inline && !layout_box.is_replaced_image() {
+    } else if layout_box.kind() == BoxKind::Inline
+        && !layout_box.is_replaced_image()
+        && !layout_box.style().display.is_flex()
+    {
         for fragment in layout_box.inline_fragments() {
             outline(fragment.rect, OUTLINE_COLOR);
         }

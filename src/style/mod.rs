@@ -55,9 +55,10 @@ pub use cascade::{
     resolve_with_user_stylesheets_and_environment,
 };
 pub use computed::{
-    BaselineShift, BaselineSource, BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem,
-    Direction, Display, Overflow, Position, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign,
-    WhiteSpaceCollapse, ZIndex,
+    AlignKeyword, Alignment, BaselineShift, BaselineSource, BoxSizing, ComputedStyle,
+    ComputedStyles, Content, ContentItem, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
+    Overflow, Position, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
+    ZIndex,
 };
 pub use container::ContainerSnapshot;
 pub(crate) use stylesheets::report_css_errors;
@@ -91,6 +92,8 @@ mod compat_tests;
 mod container_tests;
 #[cfg(test)]
 mod control_tests;
+#[cfg(test)]
+mod flex_tests;
 #[cfg(test)]
 mod margin_tests;
 #[cfg(test)]

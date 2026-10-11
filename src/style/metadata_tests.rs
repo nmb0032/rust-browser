@@ -69,6 +69,22 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::LineHeight => format!("{:?}", style.line_height),
         P::Width => format!("{:?}", style.width),
         P::Height => format!("{:?}", style.height),
+        P::MinWidth => format!("{:?}", style.min_width),
+        P::MinHeight => format!("{:?}", style.min_height),
+        P::MaxWidth => format!("{:?}", style.max_width),
+        P::MaxHeight => format!("{:?}", style.max_height),
+        P::FlexDirection => format!("{:?}", style.flex_direction),
+        P::FlexWrap => format!("{:?}", style.flex_wrap),
+        P::FlexGrow => format!("{:?}", style.flex_grow),
+        P::FlexShrink => format!("{:?}", style.flex_shrink),
+        P::FlexBasis => format!("{:?}", style.flex_basis),
+        P::Order => format!("{:?}", style.order),
+        P::JustifyContent => format!("{:?}", style.justify_content),
+        P::AlignItems => format!("{:?}", style.align_items),
+        P::AlignSelf => format!("{:?}", style.align_self),
+        P::AlignContent => format!("{:?}", style.align_content),
+        P::RowGap => format!("{:?}", style.row_gap),
+        P::ColumnGap => format!("{:?}", style.column_gap),
         P::ContainerType => format!("{:?}", style.container_type),
         P::ContainerName => format!("{:?}", style.container_names),
         P::Margin(side) => format!("{:?}", style.margin.get(side)),
@@ -190,17 +206,17 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 72, 686, 63]);
-    assert_eq!(longhands.len(), 52);
+    assert_eq!(counts, [0, 91, 667, 63]);
+    assert_eq!(longhands.len(), 68);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 51);
+    assert_eq!(all.len(), 67);
     longhands.remove(&Property::Direction);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **71 partial**, **686 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **90 partial**, **667 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**52 longhands**, **19 shorthands**"));
+    assert!(report.contains("**68 longhands**, **22 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -557,7 +573,7 @@ fn missing_unknown_and_unsupported_metadata_never_becomes_a_catch_all_parser() {
         "opacity:0.5",
         "font-stretch:normal",
         "-webkit-text-stroke-color:red",
-        "display:flex",
+        "display:inline-grid",
         "display:grid",
         "width:min-content",
         "height:fit-content",

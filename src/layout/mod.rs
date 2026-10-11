@@ -6,15 +6,19 @@
 //! space. Shared CSS2 stacking phases drive both paint and reverse-order hits.
 //! Padding-edge overflow clips and document-owned nested scroll offsets are
 //! carried as spatial ancestry independently of flattened stacking groups.
+//! Flex containers share intrinsic/block sizing helpers, iterative flexible
+//! lengths, wrapped/reversed axes, baseline alignment and atomic inline-flex.
 //! Paragraph bidi and advanced language-dependent text tailoring are deferred.
 //! Consumes computed styles, never CSS source.
 
 mod block;
+mod flex;
 mod geometry;
 mod inline;
 mod overflow;
 mod positioning;
 mod replaced;
+mod sizing;
 mod stacking;
 mod tree;
 
@@ -31,6 +35,8 @@ pub use tree::{
 
 #[cfg(test)]
 mod collapse_tests;
+#[cfg(test)]
+mod flex_tests;
 #[cfg(test)]
 mod inline_tests;
 #[cfg(test)]

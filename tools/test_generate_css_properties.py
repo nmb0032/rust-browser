@@ -16,8 +16,12 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 52)
-        self.assertEqual(len(supported), 72)
+        self.assertEqual(len(longhands), 68)
+        self.assertEqual(len(supported), 91)
+        self.assertEqual(supported["flex"]["targets"], ["flex-grow", "flex-shrink", "flex-basis"])
+        self.assertEqual(supported["flex-flow"]["targets"], ["flex-direction", "flex-wrap"])
+        self.assertEqual(supported["gap"]["targets"], ["row-gap", "column-gap"])
+        self.assertNotIn("grid-template-columns", supported)
         self.assertEqual(supported["overflow"]["targets"], ["overflow-x", "overflow-y"])
         self.assertNotIn("overflow-inline", supported)
         self.assertNotIn("scrollbar-color", supported)
@@ -61,7 +65,7 @@ class GenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "alias differs from spec"):
             generator.engine_registry(self.data, engine)
         engine = copy.deepcopy(self.engine)
-        engine["aliases"]["-webkit-flex"] = "flex"
+        engine["aliases"]["-webkit-transform"] = "transform"
         with self.assertRaisesRegex(ValueError, "no canonical handler"):
             generator.engine_registry(self.data, engine)
         engine = copy.deepcopy(self.engine)

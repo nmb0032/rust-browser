@@ -92,12 +92,15 @@ pub struct LayoutBox {
     pub(super) coordinate_space: CoordinateSpace,
     pub(super) flow_width: f32,
     pub(super) definite_height: Option<f32>,
+    pub(super) definite_width: bool,
     pub(super) inline_line: Option<usize>,
+    pub(super) is_flex_item: bool,
+    pub(super) flex_static: Option<super::flex::StaticPosition>,
     pub(super) node_id: Option<NodeId>,
     pub(super) tag_name: String,
     pub(super) kind: BoxKind,
     pub(super) text: Option<String>,
-    pub(super) style: ComputedStyle,
+    pub(super) style: Box<ComputedStyle>,
     pub(super) rect: Rect,
     pub(super) content_rect: Rect,
     pub(super) padding: Edges<f32>,
@@ -141,6 +144,9 @@ impl LayoutBox {
     pub fn is_anonymous(&self) -> bool {
         self.node_id.is_none()
     }
+    pub fn is_flex_item(&self) -> bool {
+        self.is_flex_item
+    }
     pub fn pseudo_element(&self) -> Option<PseudoElement> {
         self.pseudo
     }
@@ -175,10 +181,22 @@ impl LayoutBox {
     pub fn line_boxes(&self) -> &[LineBox] {
         &self.line_boxes
     }
+    pub(super) fn atomic_inline(&self) -> bool {
+        self.style.display == Display::InlineFlex && !self.style.position.out_of_flow()
+    }
+    pub(super) fn local_root(&self) -> bool {
+        self.kind == BoxKind::Block || self.atomic_inline()
+    }
 
     /// Before finalization, descendants' baselines relative to this border
     /// origin are used to position an outside marker in the parent's flow.
     pub(super) fn first_local_baseline(&self) -> Option<f32> {
+        if self.style.display.is_flex() {
+            let mut items: Vec<_> = self.children.iter().filter(|c| c.is_flex_item).collect();
+            items.sort_by_key(|c| c.style.order);
+            let first = items.first()?;
+            return Some(first.first_local_baseline().unwrap_or(first.rect.height) + first.rect.y);
+        }
         self.line_boxes
             .first()
             .map(|line| line.baseline)
@@ -186,7 +204,7 @@ impl LayoutBox {
                 self.children.iter().find_map(|child| {
                     child.first_local_baseline().map(|baseline| {
                         baseline
-                            + if child.kind == BoxKind::Block {
+                            + if child.local_root() {
                                 child.rect.y
                             } else {
                                 0.0
@@ -223,7 +241,9 @@ impl LayoutBox {
         self.coordinate_space = CoordinateSpace::Document;
         self.flow_width = 0.0;
         self.definite_height = None;
+        self.definite_width = false;
         self.inline_line = None;
+        self.flex_static = None;
         self.rect = Rect::default();
         self.content_rect = Rect::default();
         self.margin = Edges::default();
@@ -501,7 +521,7 @@ pub(super) fn absolutize_y(
     offset: f64,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let child_offset = if layout_box.kind == BoxKind::Block {
+    let child_offset = if layout_box.local_root() {
         offset + layout_box.rect.y as f64
     } else {
         offset
@@ -519,6 +539,9 @@ pub(super) fn absolutize_y(
         "absolute content y",
         diagnostics,
     );
+    if let Some(anchor) = &mut layout_box.flex_static {
+        anchor.area.y += offset as f32;
+    }
     for fragment in &mut layout_box.text_fragments {
         fragment.y = finite_used(
             fragment_offset + fragment.y as f64,
@@ -648,6 +671,7 @@ struct Construction {
     next: usize,
     parent: Option<usize>,
     positioned: Option<usize>,
+    flex_parent: bool,
 }
 
 impl Construction {
@@ -780,10 +804,15 @@ fn build_box(
     identity: &mut Construction,
 ) -> Option<LayoutBox> {
     let node = document.node(node_id)?;
-    let style = styles
-        .get(node_id)
-        .expect("every node in this document snapshot must have a computed style")
-        .clone();
+    let mut style = Box::new(
+        styles
+            .get(node_id)
+            .expect("every node in this document snapshot must have a computed style")
+            .clone(),
+    );
+    if identity.flex_parent && node.as_element().is_some() && !style.position.out_of_flow() {
+        style.display = style.display.blockified();
+    }
     if style.display == Display::None {
         return None;
     }
@@ -793,8 +822,8 @@ fn build_box(
         }
         NodeKind::Element(element) => {
             let kind = match style.display {
-                Display::Block | Display::ListItem => BoxKind::Block,
-                Display::Inline => BoxKind::Inline,
+                Display::Block | Display::ListItem | Display::Flex => BoxKind::Block,
+                Display::Inline | Display::InlineFlex => BoxKind::Inline,
                 Display::None => return None,
             };
             (format!("<{}>", element.tag_name()), kind, None)
@@ -806,6 +835,7 @@ fn build_box(
     };
     let box_id = identity.allocate();
     let parent_box = identity.parent.replace(box_id);
+    let flex_parent = std::mem::replace(&mut identity.flex_parent, style.display.is_flex());
     let position_parent = identity.positioned;
     if style.position != style::Position::Static {
         identity.positioned = Some(box_id);
@@ -894,7 +924,10 @@ fn build_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         definite_height: None,
+        definite_width: false,
         inline_line: None,
+        is_flex_item: flex_parent && !style.position.out_of_flow() && kind != BoxKind::Text,
+        flex_static: None,
         node_id: Some(node_id),
         tag_name,
         kind,
@@ -919,11 +952,14 @@ fn build_box(
         inline_start: true,
         inline_end: true,
     };
-    if kind == BoxKind::Block && layout_box.image.is_none() {
+    if layout_box.style.display.is_flex() && layout_box.image.is_none() {
+        normalize_flex_children(&mut layout_box, identity);
+    } else if kind == BoxKind::Block && layout_box.image.is_none() {
         normalize_block_children(&mut layout_box, identity);
     }
     identity.parent = parent_box;
     identity.positioned = position_parent;
+    identity.flex_parent = flex_parent;
     Some(layout_box)
 }
 
@@ -951,6 +987,35 @@ fn normalize_block_children(parent: &mut LayoutBox, identity: &mut Construction)
     flush_inline_run(parent, &mut run, identity);
 }
 
+fn normalize_flex_children(parent: &mut LayoutBox, identity: &mut Construction) {
+    fn flush(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: &mut Construction) {
+        if run.iter().all(|b| {
+            b.text.as_ref().is_none_or(|s| {
+                s.chars()
+                    .all(|c| matches!(c, ' ' | '\n' | '\r' | '\t' | '\u{c}'))
+            })
+        }) {
+            run.clear();
+            return;
+        }
+        flush_inline_run(parent, run, identity);
+        if let Some(item) = parent.children.last_mut() {
+            item.tag_name = "#anonymous-flex-item".into();
+            item.is_flex_item = true;
+        }
+    }
+    let mut run = Vec::new();
+    for child in std::mem::take(&mut parent.children) {
+        if child.kind == BoxKind::Text {
+            run.push(child);
+        } else {
+            flush(parent, &mut run, identity);
+            parent.children.push(child);
+        }
+    }
+    flush(parent, &mut run, identity);
+}
+
 fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: &mut Construction) {
     // Discard only collapsible text, not empty real inline/pseudo boxes,
     // decorated inline elements, replaced content, or non-CSS spaces (NBSP).
@@ -967,7 +1032,7 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         run.clear();
         return;
     }
-    let mut style = ComputedStyle::inherit(&parent.style);
+    let mut style = Box::new(ComputedStyle::inherit(&parent.style));
     style.display = Display::Block;
     parent.children.push(LayoutBox {
         box_id: identity.allocate(),
@@ -980,7 +1045,10 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         definite_height: None,
+        definite_width: false,
         inline_line: None,
+        is_flex_item: false,
+        flex_static: None,
         node_id: None,
         tag_name: "#anonymous-block".into(),
         kind: BoxKind::Block,
@@ -1009,6 +1077,7 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
 /// the lifted blocks retain DOM inheritance rather than inheriting wrappers.
 fn split_inline(mut inline: LayoutBox) -> Vec<LayoutBox> {
     if inline.kind != BoxKind::Inline
+        || inline.atomic_inline()
         || inline.image.is_some()
         || inline.style.position.out_of_flow()
     {
@@ -1061,7 +1130,10 @@ fn generated_box(
     diagnostics: &mut Vec<Diagnostic>,
     identity: &mut Construction,
 ) -> Option<LayoutBox> {
-    let style = styles.pseudo(node_id, pseudo)?.clone();
+    let mut style = Box::new(styles.pseudo(node_id, pseudo)?.clone());
+    if identity.flex_parent && !style.position.out_of_flow() {
+        style.display = style.display.blockified();
+    }
     if style.display == Display::None {
         return None;
     }
@@ -1078,12 +1150,15 @@ fn generated_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         definite_height: None,
+        definite_width: false,
         inline_line: None,
+        is_flex_item: false,
+        flex_static: None,
         node_id: Some(node_id),
         tag_name: "#generated-text".into(),
         kind: BoxKind::Text,
         text: Some(text),
-        style: ComputedStyle::inherit(&style),
+        style: Box::new(ComputedStyle::inherit(&style)),
         rect: Rect::default(),
         content_rect: Rect::default(),
         padding: Edges::default(),
@@ -1100,17 +1175,23 @@ fn generated_box(
         inline_start: true,
         inline_end: true,
     };
-    Some(LayoutBox {
+    let mut generated = LayoutBox {
         box_id,
         parent_box: identity.parent,
         position_parent: identity.positioned,
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         definite_height: None,
+        definite_width: false,
         inline_line: None,
+        is_flex_item: identity.flex_parent && !style.position.out_of_flow(),
+        flex_static: None,
         node_id: Some(node_id),
         tag_name: format!("::{}", pseudo.name()),
-        kind: if matches!(style.display, Display::Block | Display::ListItem) {
+        kind: if matches!(
+            style.display,
+            Display::Block | Display::ListItem | Display::Flex
+        ) {
             BoxKind::Block
         } else {
             BoxKind::Inline
@@ -1132,7 +1213,11 @@ fn generated_box(
         marker_text: None,
         inline_start: true,
         inline_end: true,
-    })
+    };
+    if generated.style.display.is_flex() {
+        normalize_flex_children(&mut generated, identity);
+    }
+    Some(generated)
 }
 
 fn generated_text(

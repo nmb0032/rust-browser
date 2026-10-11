@@ -12,8 +12,9 @@ use crate::css::{
 };
 
 use super::{
-    BaselineShift, BaselineSource, BoxSizing, Content, ContentItem, Direction, Display, Overflow,
-    Position, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
+    AlignKeyword, Alignment, BaselineShift, BaselineSource, BoxSizing, Content, ContentItem,
+    Direction, Display, FlexDirection, FlexWrap, Overflow, Position, TextAlign, TextAlignLast,
+    TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -48,6 +49,22 @@ pub(super) enum Property {
     LineHeight,
     Width,
     Height,
+    MinWidth,
+    MinHeight,
+    MaxWidth,
+    MaxHeight,
+    FlexDirection,
+    FlexWrap,
+    FlexGrow,
+    FlexShrink,
+    FlexBasis,
+    Order,
+    JustifyContent,
+    AlignItems,
+    AlignSelf,
+    AlignContent,
+    RowGap,
+    ColumnGap,
     ContainerType,
     ContainerName,
     Margin(Side),
@@ -91,6 +108,13 @@ pub(super) enum Value {
     Length(Length),
     NumberMath(Arc<MathExpression>),
     Auto,
+    None,
+    ContentBasis,
+    Number(f32),
+    Integer(i32),
+    FlexDirection(FlexDirection),
+    FlexWrap(FlexWrap),
+    Alignment(Alignment),
     Family(FontFamily),
     Weight(FontWeight),
     RelativeWeight(bool),
@@ -204,6 +228,41 @@ pub(super) fn parse_tokens_with_context(
         return Some(vec![Value::Wide(wide); properties.len()]);
     }
     match parser {
+        Parser::Flex => flex(&tokens),
+        Parser::FlexFlow => {
+            if tokens.is_empty() || tokens.len() > 2 {
+                return None;
+            }
+            let mut direction = None;
+            let mut wrap = None;
+            for token in &tokens {
+                let one = std::slice::from_ref(token);
+                if let Some(v) = value(Property::FlexDirection, one) {
+                    if direction.replace(v).is_some() {
+                        return None;
+                    }
+                } else {
+                    if wrap.replace(value(Property::FlexWrap, one)?).is_some() {
+                        return None;
+                    }
+                }
+            }
+            Some(vec![
+                direction.unwrap_or(Value::FlexDirection(FlexDirection::Row)),
+                wrap.unwrap_or(Value::FlexWrap(FlexWrap::Nowrap)),
+            ])
+        }
+        Parser::Gap => {
+            let (row, column) = match tokens.as_slice() {
+                [a] => (a, a),
+                [a, b] => (a, b),
+                _ => return None,
+            };
+            Some(vec![
+                value(Property::RowGap, std::slice::from_ref(row))?,
+                value(Property::ColumnGap, std::slice::from_ref(column))?,
+            ])
+        }
         Parser::Overflow => {
             let (x, y) = match tokens.as_slice() {
                 [x] => (x, x),
@@ -374,6 +433,12 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     if generated_properties::simple(property) {
         return generated_properties::simple_value(property, tokens);
     }
+    if matches!(
+        property,
+        P::JustifyContent | P::AlignItems | P::AlignSelf | P::AlignContent
+    ) {
+        return alignment(property, tokens).map(Value::Alignment);
+    }
     if property == P::Content {
         return content(tokens).map(Value::Content);
     }
@@ -407,7 +472,10 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::AlignmentBaseline
         | P::BaselineSource
         | P::BoxSizing
+        | P::FlexDirection
+        | P::FlexWrap
         | P::ContainerType => unreachable!("generated simple dispatch or content"),
+        P::JustifyContent | P::AlignItems | P::AlignSelf | P::AlignContent => unreachable!(),
         P::ContainerName => unreachable!(),
         P::BaselineShift => {
             (token.number()? == 0.0).then_some(Value::BaselineShift(BaselineShift::Zero))
@@ -425,9 +493,44 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
                 Some(Value::ZIndex(ZIndex::Integer(integer)))
             }
         }
-        P::Width | P::Height | P::Margin(_) | P::Inset(_) if lower == "auto" => Some(Value::Auto),
+        P::Width
+        | P::Height
+        | P::MinWidth
+        | P::MinHeight
+        | P::FlexBasis
+        | P::Margin(_)
+        | P::Inset(_)
+            if lower == "auto" =>
+        {
+            Some(Value::Auto)
+        }
+        P::MaxWidth | P::MaxHeight if lower == "none" => Some(Value::None),
+        P::FlexBasis if lower == "content" => Some(Value::ContentBasis),
+        P::RowGap | P::ColumnGap if lower == "normal" => Some(Value::None),
+        P::FlexGrow | P::FlexShrink => {
+            let n = token.number()?;
+            (n.is_finite() && n >= 0.0).then_some(Value::Number(n))
+        }
+        P::Order => {
+            let Component::Token(TokenKind::Number(n)) = token else {
+                return None;
+            };
+            Some(Value::Integer(n.representation.parse().ok()?))
+        }
         P::FontSize => font_size(token),
-        P::Width | P::Height | P::Margin(_) | P::Inset(_) | P::Padding(_) | P::BorderWidth(_) => {
+        P::Width
+        | P::Height
+        | P::MinWidth
+        | P::MinHeight
+        | P::MaxWidth
+        | P::MaxHeight
+        | P::FlexBasis
+        | P::RowGap
+        | P::ColumnGap
+        | P::Margin(_)
+        | P::Inset(_)
+        | P::Padding(_)
+        | P::BorderWidth(_) => {
             let length = if matches!(property, P::BorderWidth(_)) {
                 match lower.as_str() {
                     "thin" => Length::Px(1.0),
@@ -483,6 +586,107 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
             Some(Value::LineHeight(height))
         }
     }
+}
+
+fn alignment(property: Property, tokens: &[Component]) -> Option<Alignment> {
+    use AlignKeyword as A;
+    let (safe, token) = match tokens {
+        [token] => (false, token),
+        [modifier, token] if modifier.is_ident("safe") || modifier.is_ident("unsafe") => {
+            (modifier.is_ident("safe"), token)
+        }
+        [first, baseline]
+            if first.is_ident("first")
+                && baseline.is_ident("baseline")
+                && property != Property::JustifyContent =>
+        {
+            return Some(Alignment::new(A::Baseline));
+        }
+        _ => return None,
+    };
+    let keyword = match token.ident()?.to_ascii_lowercase().as_str() {
+        "auto" if property == Property::AlignSelf => A::Auto,
+        "normal" => A::Normal,
+        "stretch" if property != Property::JustifyContent => A::Stretch,
+        "flex-start" => A::FlexStart,
+        "flex-end" => A::FlexEnd,
+        "start" => A::Start,
+        "end" => A::End,
+        "self-start" if matches!(property, Property::AlignItems | Property::AlignSelf) => {
+            A::SelfStart
+        }
+        "self-end" if matches!(property, Property::AlignItems | Property::AlignSelf) => A::SelfEnd,
+        "center" => A::Center,
+        "baseline" if property != Property::JustifyContent => A::Baseline,
+        "space-between"
+            if matches!(property, Property::JustifyContent | Property::AlignContent) =>
+        {
+            A::SpaceBetween
+        }
+        "space-around" if matches!(property, Property::JustifyContent | Property::AlignContent) => {
+            A::SpaceAround
+        }
+        "space-evenly" if matches!(property, Property::JustifyContent | Property::AlignContent) => {
+            A::SpaceEvenly
+        }
+        _ => return None,
+    };
+    if tokens.len() == 2
+        && !matches!(
+            keyword,
+            A::FlexStart | A::FlexEnd | A::Start | A::End | A::SelfStart | A::SelfEnd | A::Center
+        )
+    {
+        return None;
+    }
+    Some(Alignment { keyword, safe })
+}
+
+fn flex(tokens: &[Component]) -> Option<Vec<Value>> {
+    if let [token] = tokens {
+        if token.is_ident("none") {
+            return Some(vec![Value::Number(0.0), Value::Number(0.0), Value::Auto]);
+        }
+        if token.is_ident("auto") {
+            return Some(vec![Value::Number(1.0), Value::Number(1.0), Value::Auto]);
+        }
+    }
+    if tokens.is_empty() || tokens.len() > 3 {
+        return None;
+    }
+    let mut numbers = Vec::new();
+    let mut basis = None;
+    let mut basis_between_factors = false;
+    for token in tokens {
+        if let Some(n) = token.number() {
+            if n < 0.0 || !n.is_finite() {
+                return None;
+            }
+            if numbers.len() < 2 {
+                if basis_between_factors {
+                    return None;
+                }
+                numbers.push(n);
+            } else if n == 0.0 && basis.is_none() {
+                basis = Some(Value::Length(Length::Px(0.0)));
+            } else {
+                return None;
+            }
+        } else {
+            basis_between_factors = numbers.len() == 1;
+            if basis
+                .replace(value(Property::FlexBasis, std::slice::from_ref(token))?)
+                .is_some()
+            {
+                return None;
+            }
+        }
+    }
+    Some(vec![
+        Value::Number(numbers.first().copied().unwrap_or(1.0)),
+        Value::Number(numbers.get(1).copied().unwrap_or(1.0)),
+        basis.unwrap_or(Value::Length(Length::Percent(0.0))),
+    ])
 }
 
 fn container_names(tokens: &[Component]) -> Option<Vec<String>> {

@@ -65,7 +65,7 @@ keeping the codebase small enough to learn from.
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
 | CSS | `src/css` | Resumable CSS Syntax tokenizer and token-based rule parsing with bounded diagnostics/recovery; source-retaining AST, three-valued MQ range/dimension/preference/input conditions, typed container establishment, attribute/combinator/structural selector matching and specificity, colors, dimension-checked bounded math, contextual lengths including container units, and angle/time/resolution parsers. |
 | Style | `src/style` | Embedded/external/inline and optional user sheets, origin/importance/layer cascade with rollback candidates, nested media/supports/container conditions, nesting and scoped/namespace-aware matching, bounded typed registrations, indexed/Bloom matching, typed values and atomic shorthands, token-based custom properties, font/root/viewport/container length computation against immutable real layout snapshots, inherited styles keyed by `NodeId`, and `--dump=style`. |
-| Layout | `src/layout` | Block/inline box generation with anonymous block wrappers and block-in-inline continuations; percentage/math used values, non-replaced block size containment and definite length heights, image sizing, naive spacing/text flow, list markers, fragment-aware hit testing, and explicit device-pixel rectangle quantization. |
+| Layout | `src/layout` | Horizontal block/inline/flex box generation, anonymous formatting boxes and atomic inline-flex; shaped baseline lines, normal width/margin equations, physical flex min/max prerequisites, positioned/relative/fixed layout, retained overflow scrolling, order-modified stacking/hits, and device-pixel rectangle quantization. |
 | Paint | `src/paint` | Rasterizes text, backgrounds, borders, and shared RGBA images with clipping, scaling, alpha blending, and scrolling. |
 | Media | `src/media` | Bounded PNG/JPEG/GIF/WebP decoding, with shared intrinsic-size image data. |
 | Window | `src/ui` | CSS-pixel resize/scale/theme restyle-layout-paint with bounded container and pointer feedback, click navigation, back/forward shortcuts, scroll restoration, and current URL/loading/error titles. |
@@ -2495,8 +2495,101 @@ and the CSSOM parts covered here meet the conformance gate.
   scroll snapping and advanced/styled scrollbar behavior remain 8.19. No WPT
   conformance or full-browser parity is claimed. **8.10 and later are not
   implemented by this step; milestone 8 is not complete.**
-- [ ] **8.10 Implement flexbox.**
+- [x] **8.10 Implement flexbox.**
   *You'll see:* navigation bars and card rows as designed.
+
+  `src/layout/flex.rs` implements real horizontal-writing flex formatting,
+  rather than mapping `display:flex` to block layout or equal-width columns.
+  The style pipeline types `flex-direction`, `flex-wrap`, `flex-flow`,
+  `flex-grow`, `flex-shrink`, `flex-basis`, `flex`, `order`, `justify-content`,
+  `align-items`, `align-self`, `align-content`, `gap`, `row-gap` and
+  `column-gap`. Shorthands expand atomically through the existing
+  CSS-wide/variable/origin/layer cascade. Contextual font/root/viewport/container
+  lengths are computed by the existing selected-font length pipeline.
+
+  **Construction and identity:** direct elements and generated before/after
+  boxes are individually blockified; adjacent text nodes alone become
+  anonymous flex items, and whitespace-only text sequences are ignored.
+  Ordinary inline siblings are not merged into an anonymous block/item.
+  Empty decorated items, images, list markers, nested flex containers and
+  inline-flex containers retain their semantic identities. Absolute/fixed
+  children are not items: their static-position rectangle uses the container
+  content box, its axes and alignment, after their final border/margin size is
+  known. Layout sorting never mutates the DOM or the source-order box vector.
+
+  **Flexible lengths:** bases come from definite lengths/percentages,
+  applicable preferred sizes or intrinsic text/image content. Indefinite
+  percentage bases use content, with a diagnostic; cyclic percentage gaps
+  contribute zero, also diagnosed. Hypothetical outer sizes collect lines,
+  including decorations/margins and only internal gutters. CSS Flexbox
+  [9.7](https://www.w3.org/TR/css-flexbox-1/#resolve-flexible-lengths) freezes
+  inflexible items, distributes positive free space or scaled shrink space,
+  preserves factor sums below one, clamps targets and iterates min/max
+  violations until frozen. This includes a zero content-box floor, unequal
+  bases, zero factors, negative free space and border-box bases smaller than
+  their decorations.
+
+  **Sizing prerequisites (not completion of 8.15):** `src/layout/sizing.rs`
+  shares physical `min-width`, `min-height`, `max-width`, `max-height`
+  length/percentage constraints with block and positioned layout. A
+  non-scrollable flex main axis has a content-based automatic minimum, capped
+  by applicable specified/max/transferred image suggestions; `min-width:0`
+  and scroll-container overflow permit shrinking below min-content.
+  Intrinsic flex widths use the explicitly published
+  [9.9.1.1 ideal algorithm](https://www.w3.org/TR/css-flexbox-1/#intrinsic-main-sizes),
+  including its fractional-factor behavior. That algorithm is not claimed
+  to match the specification's still-unspecified web-compatible replacement.
+  Normal and positioned shrink-to-fit, inline-flex and nested item measurement
+  use the same intrinsic helpers, not a second text/replaced formatter.
+
+  **Cross sizing and placement:** definite stretch reflows descendants with
+  physical min/max bounds, while an indefinite used cross size does not
+  silently make percentage descendants definite. Content-sized inline-flex
+  and positioned shrink-to-fit retain an indefinite main reference even after
+  allocating a finite used width; percentage bases then use intrinsic content.
+  Shaped row baselines include
+  fallback glyph faces and image-bottom synthesis. Main/cross auto margins,
+  line distribution, safe positional alignment, wrapping, wrap-reverse and
+  row/column reversals map physical and logical starts independently of RTL.
+  Flex containers/items establish independent margin boundaries. Items reuse
+  unchanged measurements and are formatted in local coordinates; final
+  placement precedes the existing one-time coordinate finalization and
+  positioned/relative pass. Styles live behind a layout-owned box pointer to
+  keep recursive construction's stack footprint bounded after adding fields.
+
+  **Paint, hits and retained frames:** flex items paint atomically in
+  order-modified order. Static flex-item integer `z-index` creates a real
+  stacking context; auto descendants escape faux groups as appropriate.
+  Inline-flex remains an atomic source-line participant and ignores a static
+  integer `z-index` unless itself a flex item. The shared reverse paint order
+  drives hits without changing node/link IDs. Existing spatial clipping and
+  document-owned scroll offsets apply to flex and atomic inline-flex; frame
+  resize, pointer restyle, container feedback and asynchronous downloaded-font
+  snapshots retain the latest scroll state and selected metrics.
+
+  `tests/pages/flexbox.html` demonstrates wrapping navigation, unequal-base
+  card rows with column actions, an atomic inline baseline and a scrollable
+  rail. Deterministic CLI style/layout/value/display-list assertions and
+  sampled raster pixels cover the actual rows, gutters and background.
+  Regression tests exercise exact grow/shrink/freeze thresholds, factor sums,
+  min/max/decorations, definite/indefinite percentages, all four directions,
+  RTL/wrap reversal, auto margins, stretch/descendant reflow, baselines,
+  generated/anonymous/empty/replaced items, positioned static alignment,
+  order/contexts/hits, repeated nested layout and frame/font/scroll feedback.
+  The all-features suite passes **662 tests**, plus formatting, strict
+  all-target clippy, benchmark compilation and offline generator tests/checks.
+  CSS coverage is generated from the engine overlay: **68 longhands** and
+  **22 shorthands**, still classified partial, with no WPT/parity claim.
+
+  **Finite limits:** horizontal writing only; no grid, floats/tables,
+  `visibility:collapse` struts, pagination, intrinsic-size keyword grammar,
+  `aspect-ratio` property, complete replaced min/max ratio constraints,
+  paragraph bidi, last-baseline groups or generalized Box Alignment.
+  Column and `align-content` baseline alignment diagnose a flex-start
+  fallback. Cyclic intrinsic percentage decorations and multi-line column
+  intrinsic cross sizing remain partial. These are not CSS Flexbox WPT
+  conformance or full-browser parity results. **8.11 remains unimplemented;
+  milestone 8 is not complete.**
 - [ ] **8.11 Implement grid.**
   *You'll see:* grid-based page layouts.
 - [ ] **8.12 Implement floats and tables.**

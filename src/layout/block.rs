@@ -55,7 +55,11 @@ struct ChildrenFlow {
 enum BlockMode {
     Root(Option<f32>),
     Flow(Option<f32>),
-    Positioned { width: f32, height: Option<f32> },
+    Positioned {
+        width: f32,
+        height: Option<f32>,
+        definite: (bool, bool),
+    },
 }
 
 fn layout_block(
@@ -68,6 +72,10 @@ fn layout_block(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> BlockFlow {
     layout_box.flow_width = available_width;
+    layout_box.definite_width = match mode {
+        BlockMode::Positioned { definite, .. } => definite.0,
+        _ => true,
+    };
     let containing_height = match mode {
         BlockMode::Root(height) | BlockMode::Flow(height) => height,
         BlockMode::Positioned { .. } => None,
@@ -130,7 +138,7 @@ fn layout_block(
         BlockMode::Positioned { height, .. } => height,
         _ => explicit_height,
     };
-    let replaced_size = layout_box.image.as_ref().map(|image| {
+    let mut replaced_size = layout_box.image.as_ref().map(|image| {
         let metrics = font_metrics(font, style, layout_box.node_id, diagnostics);
         let line_height = metrics.above + metrics.below;
         image.size(
@@ -144,7 +152,7 @@ fn layout_block(
             font,
         )
     });
-    let (width, left, right) = if let BlockMode::Positioned { width, .. } = mode {
+    let (mut width, mut left, mut right) = if let BlockMode::Positioned { width, .. } = mode {
         (
             f64::from(width),
             f64::from(margins.left.unwrap_or(0.0)),
@@ -163,7 +171,41 @@ fn layout_block(
             containing_direction,
         )
     };
+    if !matches!(mode, BlockMode::Positioned { .. }) {
+        let bounds = super::sizing::bounds(
+            layout_box,
+            true,
+            Some(available_width),
+            horizontal,
+            0.0,
+            diagnostics,
+        );
+        let constrained = (width as f32).clamp(bounds.0, bounds.1);
+        if constrained != width as f32 {
+            (width, left, right) = solve_width(
+                available_width as f64,
+                horizontal as f64,
+                Some(constrained as f64),
+                margins.left.map(f64::from),
+                margins.right.map(f64::from),
+                containing_direction,
+            );
+        }
+    }
     let width = finite_used(width, layout_box.node_id, "width equation", diagnostics);
+    if let Some(image) = &layout_box.image
+        && explicit_height.is_none()
+        && replaced_size.is_some_and(|size| size.0 != width)
+    {
+        let metrics = font_metrics(font, &layout_box.style, layout_box.node_id, diagnostics);
+        replaced_size = Some(image.size(
+            &layout_box.style,
+            Some(width),
+            None,
+            metrics.above + metrics.below,
+            font,
+        ));
+    }
     let margin = crate::css::values::Edges {
         left: finite_used(
             left,
@@ -203,8 +245,20 @@ fn layout_block(
     );
     layout_box.padding = padding;
     layout_box.margin = margin;
-    layout_box.definite_height = explicit_height;
+    layout_box.definite_height = if matches!(
+        mode,
+        BlockMode::Positioned {
+            definite: (_, false),
+            ..
+        }
+    ) {
+        None
+    } else {
+        explicit_height
+    };
     let collapse_children = matches!(mode, BlockMode::Flow(_))
+        && !layout_box.style.display.is_flex()
+        && !layout_box.is_flex_item
         && layout_box.image.is_none()
         && layout_box.style.container_type == ContainerType::Normal
         && !layout_box.style.overflow_x.scroll_container()
@@ -233,6 +287,15 @@ fn layout_block(
             layout_box.text_fragments.push(fragment);
         }
         height as f64
+    } else if layout_box.style.display.is_flex() {
+        super::flex::layout_flex(
+            layout_box,
+            (content_x, content_y, width),
+            explicit_height,
+            layout_box.definite_height,
+            font,
+            diagnostics,
+        ) as f64
     } else {
         children_flow = flow_children(
             layout_box,
@@ -253,6 +316,15 @@ fn layout_block(
         }
     });
     let height = finite_used(height, layout_box.node_id, "height", diagnostics);
+    let bounds = super::sizing::bounds(
+        layout_box,
+        false,
+        containing_height,
+        vertical,
+        0.0,
+        diagnostics,
+    );
+    let height = height.clamp(bounds.0, bounds.1);
     if !matches!(mode, BlockMode::Positioned { .. })
         && containing_height.is_none()
         && layout_box
@@ -261,10 +333,6 @@ fn layout_block(
             .as_ref()
             .is_some_and(|length| length.has_percentage())
     {
-        eprintln!(
-            "CSS at {:?}: percentage height has no definite containing block height in block layout; using auto",
-            layout_box.node_id
-        );
         diagnostics.push(Diagnostic {
             node_id: layout_box.node_id,
             message: "percentage height has no definite containing block height in block layout; using auto".into(),
@@ -312,12 +380,36 @@ pub(super) fn layout_positioned(
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    layout_sized(
+        layout_box,
+        reference_width,
+        width,
+        height,
+        (true, true),
+        font,
+        diagnostics,
+    );
+}
+
+pub(super) fn layout_sized(
+    layout_box: &mut LayoutBox,
+    reference_width: f32,
+    width: f32,
+    height: Option<f32>,
+    definite: (bool, bool),
+    font: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     layout_block(
         layout_box,
         0.0,
         reference_width,
         layout_box.style.direction,
-        BlockMode::Positioned { width, height },
+        BlockMode::Positioned {
+            width,
+            height,
+            definite,
+        },
         font,
         diagnostics,
     );
@@ -355,7 +447,8 @@ fn assign_marker(
 }
 
 /// CSS2 10.3.3 after resolving lengths and box-sizing, or 10.3.4 after
-/// determining a supported replaced image's width. No intrinsic/min/max sizing.
+/// determining a supported replaced image's width. Physical bounds are applied
+/// by the caller before resolving this equation again.
 fn solve_width(
     containing: f64,
     decorations: f64,
@@ -532,7 +625,12 @@ fn flow_children(
     }
 }
 
-fn place_block(layout_box: &mut LayoutBox, y: f64, diagnostics: &mut Vec<Diagnostic>) {
+pub(super) fn place_block(layout_box: &mut LayoutBox, y: f64, diagnostics: &mut Vec<Diagnostic>) {
+    if let Some(marker) = &mut layout_box.list_marker {
+        let dy = y as f32 - layout_box.rect.y;
+        marker.y += dy;
+        marker.baseline += dy;
+    }
     layout_box.rect.y = finite_used(y, layout_box.node_id, "border y", diagnostics);
     layout_box.content_rect.y = finite_used(
         y + layout_box.content_rect.y as f64,

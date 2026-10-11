@@ -47,6 +47,9 @@ fn translate_own(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diag
     }
     rect(&mut b.rect, dx, dy, id, diagnostics);
     rect(&mut b.content_rect, dx, dy, id, diagnostics);
+    if let Some(anchor) = &mut b.flex_static {
+        rect(&mut anchor.area, dx, dy, id, diagnostics);
+    }
     for f in &mut b.inline_fragments {
         rect(&mut f.rect, dx, dy, id, diagnostics);
         rect(&mut f.content_rect, dx, dy, id, diagnostics);
@@ -70,7 +73,7 @@ fn translate_own(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diag
     }
 }
 
-fn translate(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diagnostic>) {
+pub(super) fn translate(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diagnostic>) {
     translate_own(b, dx, dy, diagnostics);
     for child in &mut b.children {
         translate(child, dx, dy, diagnostics);
@@ -154,12 +157,12 @@ fn relative(b: &mut LayoutBox, height: Option<f32>, diagnostics: &mut Vec<Diagno
                 relative_offset(b, height, direction, diagnostics),
             )
         });
-        let height = if b.kind == BoxKind::Block {
+        let height = if b.local_root() {
             b.definite_height
         } else {
             height
         };
-        let direction = if b.kind == BoxKind::Block {
+        let direction = if b.local_root() {
             b.style.direction
         } else {
             direction
@@ -226,7 +229,7 @@ fn collect_containing(
             width: (rect.width - border.left - border.right).max(0.0),
             height: (rect.height - border.top - border.bottom).max(0.0),
         };
-        let rect = if b.kind == BoxKind::Inline && b.image.is_none() {
+        let rect = if b.kind == BoxKind::Inline && b.image.is_none() && !b.atomic_inline() {
             let first = padding_rect(b.inline_fragments.first().map_or(b.rect, |f| f.rect));
             let last = padding_rect(b.inline_fragments.last().map_or(b.rect, |f| f.rect));
             let start = map.get(&b.box_id).map_or(first, |cb| cb.rect);
@@ -485,12 +488,38 @@ fn position_box(
             .min(intrinsic.1 as f64)
     });
     let width = finite_used(width, b.node_id, "positioned width equation", diagnostics);
+    let bounds = super::sizing::bounds(b, true, Some(cb.rect.width), horizontal, 0.0, diagnostics);
+    let width = width.clamp(bounds.0, bounds.1);
     let height = y
         .stretched()
         .map(|height| finite_used(height, b.node_id, "positioned height equation", diagnostics));
+    let anchor = b.flex_static;
     b.reset();
-    block::layout_positioned(b, cb.rect.width, width, height, font, diagnostics);
+    block::layout_sized(
+        b,
+        cb.rect.width,
+        width,
+        height,
+        (
+            x.size.is_some() || x.start.is_some() && x.end.is_some(),
+            true,
+        ),
+        font,
+        diagnostics,
+    );
     absolutize_y(b, 0.0, diagnostics);
+    if let Some(anchor) = anchor {
+        let (sx, sy) = anchor.offset(
+            b.rect.width + b.margin.left + b.margin.right,
+            b.rect.height + b.margin.top + b.margin.bottom,
+        );
+        if x.start.is_none() && x.end.is_none() {
+            x.static_start = (anchor.area.x + sx - cb.rect.x) as f64;
+        }
+        if y.start.is_none() && y.end.is_none() {
+            y.static_start = (anchor.area.y + sy - cb.rect.y) as f64;
+        }
+    }
     let (x, left, right) = x.solve(b.content_rect.width as f64);
     let (y, top, bottom) = y.solve(b.content_rect.height as f64);
     let dx = finite_used(
@@ -518,7 +547,7 @@ fn position_box(
     relative(b, b.definite_height, diagnostics);
 }
 
-fn intrinsic_content(
+pub(super) fn intrinsic_content(
     b: &LayoutBox,
     reference: f32,
     font: &crate::text::FontContext,
@@ -526,6 +555,9 @@ fn intrinsic_content(
 ) -> (f32, f32) {
     if b.style.container_type != crate::css::container::ContainerType::Normal {
         return (0.0, 0.0);
+    }
+    if b.style.display.is_flex() {
+        return super::flex::intrinsic_widths(b, reference, font, diagnostics);
     }
     if let Some(image) = &b.image {
         let metrics = super::inline::font_metrics(font, &b.style, b.node_id, diagnostics);
@@ -557,6 +589,8 @@ fn intrinsic_content(
                     vertical,
                 )
             });
+        let height_limits = super::sizing::bounds(b, false, None, vertical, 0.0, diagnostics);
+        let height = height.map(|h| h.clamp(height_limits.0, height_limits.1));
         let width = image
             .size(&b.style, None, height, metrics.above + metrics.below, font)
             .0;
@@ -586,7 +620,9 @@ fn intrinsic_content(
                 + child.style.border_width.left
                 + child.style.border_width.right;
             let margin = margins.left.unwrap_or(0.0) + margins.right.unwrap_or(0.0);
-            if let Some(width) = &child.style.width {
+            if let Some(width) = &child.style.width
+                && !width.has_percentage()
+            {
                 let width = child.style.box_sizing.content_size(
                     resolve_length(
                         width,

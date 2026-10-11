@@ -21,7 +21,7 @@ struct Group<'a> {
     level: Option<i32>,
     parent: usize,
     order: usize,
-    boxes: Vec<(&'a LayoutBox, usize)>,
+    boxes: Vec<(&'a LayoutBox, usize, usize)>,
 }
 
 pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
@@ -32,7 +32,11 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
             flow
         };
         boxes.push((b, flow));
-        for child in &b.children {
+        let mut children: Vec<_> = b.children.iter().collect();
+        if b.style.display.is_flex() {
+            children.sort_by_key(|child| child.style.order);
+        }
+        for child in children {
             flatten(child, flow, boxes);
         }
     }
@@ -59,7 +63,10 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
             if Some(id) == root_element || id == root {
                 return root;
             }
-            if ancestor.style.position != Position::Static {
+            if ancestor.style.position != Position::Static
+                || ancestor.atomic_inline()
+                || ancestor.is_flex_item
+            {
                 return id;
             }
             candidate = ancestor.parent_box;
@@ -70,6 +77,8 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         let id = group_id(b);
         if id != root && !groups.contains_key(&id) {
             let owner = definitions[&id];
+            let real = matches!(owner.style.z_index, ZIndex::Integer(_))
+                && (owner.style.position != Position::Static || owner.is_flex_item);
             let mut parent = owner.parent_box;
             let mut context = root;
             while let Some(id) = parent {
@@ -77,8 +86,13 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 if Some(id) == root_element || id == root {
                     break;
                 }
-                if ancestor.style.position != Position::Static
+                if (ancestor.style.position != Position::Static || ancestor.is_flex_item)
                     && matches!(ancestor.style.z_index, ZIndex::Integer(_))
+                    || !real
+                        && owner.style.position == Position::Static
+                        && (ancestor.style.position != Position::Static
+                            || ancestor.is_flex_item
+                            || ancestor.atomic_inline())
                 {
                     context = id;
                     break;
@@ -87,7 +101,8 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
             }
             let level = match owner.style.z_index {
                 ZIndex::Auto => None,
-                ZIndex::Integer(z) => Some(z),
+                ZIndex::Integer(z) if real => Some(z),
+                ZIndex::Integer(_) => None,
             };
             groups.insert(
                 id,
@@ -100,7 +115,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 },
             );
         }
-        groups.get_mut(&id).unwrap().boxes.push((b, *flow));
+        groups.get_mut(&id).unwrap().boxes.push((b, *flow, order));
     }
     fn paint<'a>(
         id: usize,
@@ -112,7 +127,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         let own = |b: &LayoutBox| {
             b.box_id == group.owner || id == group.parent && Some(b.box_id) == root_element
         };
-        for (b, _) in &group.boxes {
+        for (b, _, _) in &group.boxes {
             if own(b) {
                 list.push((b, PaintPhase::Decoration));
             }
@@ -130,8 +145,8 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         }
         // Block backgrounds/borders precede ALL in-flow inline foreground,
         // including text in an earlier sibling that overflows a later block.
-        for (b, _) in &group.boxes {
-            if !own(b) && b.kind == BoxKind::Block {
+        for (b, _, _) in &group.boxes {
+            if !own(b) && b.local_root() {
                 list.push((b, PaintPhase::Decoration));
             }
         }
@@ -139,8 +154,9 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         // would reverse overlapping lines or relatively moved inline fragments.
         // Within each source line, decorations and foreground interleave.
         let mut foreground = Vec::new();
-        for (order, (b, flow)) in group.boxes.iter().enumerate() {
-            if b.kind == BoxKind::Block {
+        for (b, flow, order) in &group.boxes {
+            let order = *order;
+            if b.local_root() {
                 if b.image.is_some() || b.list_marker.is_some() || !b.text_fragments.is_empty() {
                     foreground.push((*flow, 0, order, 0, *b, PaintPhase::Content));
                 }
@@ -175,20 +191,42 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 }
             }
         }
+        let inline_group = |g: &Group<'_>| {
+            let owner = g.boxes[0].0;
+            owner.atomic_inline() && owner.style.position == Position::Static && !owner.is_flex_item
+        };
+        for (_, g) in children.iter().filter(|(_, g)| inline_group(g)) {
+            let (b, flow, order) = g.boxes[0];
+            foreground.push((
+                flow,
+                b.inline_line.unwrap_or(0),
+                order,
+                2,
+                b,
+                PaintPhase::Content,
+            ));
+        }
         foreground.sort_by_key(|(flow, line, order, phase, _, _)| (*flow, *line, *order, *phase));
         for (_, _, _, _, b, phase) in foreground {
-            list.push((b, phase));
+            if b.atomic_inline() && b.style.position == Position::Static && !b.is_flex_item {
+                paint(b.box_id, root_element, groups, list);
+            } else {
+                list.push((b, phase));
+            }
         }
         // Basic overlays stay in their owning CSS2 paint group. Positioned
         // descendants still follow the existing context ordering.
-        for (b, _) in &group.boxes {
+        for (b, _, _) in &group.boxes {
             if b.kind == BoxKind::Block
                 && (b.style.overflow_x.user_scrollable() || b.style.overflow_y.user_scrollable())
             {
                 list.push((b, PaintPhase::Scrollbars));
             }
         }
-        for (child, _) in children.iter().filter(|(_, g)| g.level.unwrap_or(0) >= 0) {
+        for (child, _) in children
+            .iter()
+            .filter(|(_, g)| g.level.unwrap_or(0) >= 0 && !inline_group(g))
+        {
             paint(**child, root_element, groups, list);
         }
     }

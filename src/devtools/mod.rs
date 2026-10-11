@@ -2,6 +2,29 @@ use crate::dom::{Document, NodeKind};
 use crate::layout::{BoxKind, LayoutBox, LayoutTree};
 use crate::paint::DisplayItem;
 
+fn flex_summary(style: &crate::style::ComputedStyle) -> String {
+    format!(
+        "display={:?} flex-direction={:?} flex-wrap={:?} flex-grow={} flex-shrink={} flex-basis={:?} order={} justify-content={:?} align-items={:?} align-self={:?} align-content={:?} gap={:?}/{:?} min-size={:?}/{:?} max-size={:?}/{:?}",
+        style.display,
+        style.flex_direction,
+        style.flex_wrap,
+        style.flex_grow,
+        style.flex_shrink,
+        style.flex_basis,
+        style.order,
+        style.justify_content,
+        style.align_items,
+        style.align_self,
+        style.align_content,
+        style.row_gap,
+        style.column_gap,
+        style.min_width,
+        style.min_height,
+        style.max_width,
+        style.max_height
+    )
+}
+
 /// Explicit length stages, with used/actual geometry from the laid-out tree.
 /// "Actual" here is unclipped rectangle quantization, not glyph rasterization.
 pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
@@ -49,6 +72,15 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
         )
         .unwrap();
         writeln!(output, "  computed width: {:?}", layout_box.style().width).unwrap();
+        if layout_box.style().display.is_flex() || layout_box.is_flex_item() {
+            writeln!(
+                output,
+                "  computed flex: {}",
+                flex_summary(layout_box.style())
+            )
+            .unwrap();
+            writeln!(output, "  used flex-item: {}", layout_box.is_flex_item()).unwrap();
+        }
         writeln!(
             output,
             "  computed position: {:?} inset={:?} z-index={:?}",
@@ -243,6 +275,9 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
             }
         };
         writeln!(output, "  display: {:?}", style.display).unwrap();
+        if style.display.is_flex() {
+            writeln!(output, "  flex: {}", flex_summary(style)).unwrap();
+        }
         writeln!(output, "  overflow-x: {:?}", style.overflow_x).unwrap();
         writeln!(output, "  overflow-y: {:?}", style.overflow_y).unwrap();
         writeln!(
@@ -678,6 +713,13 @@ fn dump_layout_box(tree: &LayoutTree, layout_box: &LayoutBox, depth: usize) {
         layout_box.style().overflow_x,
         layout_box.style().overflow_y
     );
+    if layout_box.style().display.is_flex() || layout_box.is_flex_item() {
+        println!(
+            "{indent}  flex-item={} {}",
+            layout_box.is_flex_item(),
+            flex_summary(layout_box.style())
+        );
+    }
     if let Some(container) = tree.box_scroll_container(layout_box) {
         println!(
             "{indent}  clip-port={:?} scroll-extent={:?} scroll-range={:?} scroll-offset={:?}",
