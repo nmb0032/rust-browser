@@ -1,4 +1,7 @@
-use crate::style::{Diagnostic, Direction, Display};
+use crate::{
+    css::container::ContainerType,
+    style::{Diagnostic, Direction, Display},
+};
 
 use super::{
     BoxKind, LayoutBox, ListMarker, Rect,
@@ -6,15 +9,57 @@ use super::{
     tree::{finite_used, resolve_edges, resolve_length, resolve_line_height, resolve_margins},
 };
 
-pub(super) fn layout_block(
+/// An adjoining set must retain both extrema until all its members are known.
+/// Reducing a mixed-sign set to a scalar before merging loses information.
+#[derive(Clone, Copy, Debug, Default)]
+struct MarginStrut {
+    positive: f32,
+    negative: f32,
+}
+
+impl MarginStrut {
+    fn new(margin: f32) -> Self {
+        Self {
+            positive: margin.max(0.0),
+            negative: margin.min(0.0),
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self {
+            positive: self.positive.max(other.positive),
+            negative: self.negative.min(other.negative),
+        }
+    }
+
+    fn value(self) -> f64 {
+        self.positive as f64 + self.negative as f64
+    }
+}
+
+struct BlockFlow {
+    before: MarginStrut,
+    after: MarginStrut,
+    through: bool,
+}
+
+#[derive(Default)]
+struct ChildrenFlow {
+    height: f64,
+    before: MarginStrut,
+    after: MarginStrut,
+    all_through: bool,
+}
+
+fn layout_block(
     layout_box: &mut LayoutBox,
     x: f32,
-    y: f32,
     available_width: f32,
     containing_direction: Direction,
+    is_root: bool,
     font: &fontdue::Font,
     diagnostics: &mut Vec<Diagnostic>,
-) -> f32 {
+) -> BlockFlow {
     let style = &layout_box.style;
     let margins = resolve_margins(style, available_width, layout_box.node_id, diagnostics);
     let padding = resolve_edges(
@@ -112,12 +157,9 @@ pub(super) fn layout_block(
         "border x",
         diagnostics,
     );
-    let border_y = finite_used(
-        y as f64 + margin.top as f64,
-        layout_box.node_id,
-        "border y",
-        diagnostics,
-    );
+    // Block descendants use coordinates relative to this border origin.
+    // Placement changes only this box; tree.rs absolutizes the tree once.
+    let border_y = 0.0;
     let content_x = finite_used(
         border_x as f64 + border.left as f64 + padding.left as f64,
         layout_box.node_id,
@@ -132,6 +174,15 @@ pub(super) fn layout_block(
     );
     layout_box.padding = padding;
     layout_box.margin = margin;
+    let collapse_children = !is_root
+        && layout_box.image.is_none()
+        && layout_box.style.container_type == ContainerType::Normal;
+    let collapse_top = collapse_children && border.top == 0.0 && padding.top == 0.0;
+    let collapse_bottom = collapse_children
+        && explicit_height.is_none()
+        && border.bottom == 0.0
+        && padding.bottom == 0.0;
+    let mut children_flow = ChildrenFlow::default();
     let natural_height = if let Some((_, height)) = replaced_size {
         if let Some(image) = &layout_box.image
             && let Some(fragment) = image.alt_fragment(
@@ -146,22 +197,27 @@ pub(super) fn layout_block(
         {
             layout_box.text_fragments.push(fragment);
         }
-        height
+        height as f64
     } else {
-        layout_children(layout_box, content_x, content_y, width, font, diagnostics)
+        children_flow = flow_children(
+            layout_box,
+            (content_x, content_y, width),
+            (collapse_top, collapse_bottom),
+            font,
+            diagnostics,
+        );
+        children_flow.height
     };
     // Size containment removes descendant intrinsic block-size contributions.
     // Children still lay out and may overflow this content box.
-    let height = explicit_height.unwrap_or_else(|| {
-        if layout_box.image.is_none()
-            && layout_box.style.container_type == crate::css::container::ContainerType::Size
-        {
+    let height = explicit_height.map(f64::from).unwrap_or_else(|| {
+        if layout_box.image.is_none() && layout_box.style.container_type == ContainerType::Size {
             0.0
         } else {
-            natural_height
+            natural_height.max(0.0)
         }
     });
-    let height = finite_used(height as f64, layout_box.node_id, "height", diagnostics);
+    let height = finite_used(height, layout_box.node_id, "height", diagnostics);
     if layout_box
         .style
         .height
@@ -199,12 +255,16 @@ pub(super) fn layout_block(
             diagnostics,
         ),
     };
-    finite_used(
-        margin.top as f64 + layout_box.rect.height as f64 + margin.bottom as f64,
-        layout_box.node_id,
-        "margin height",
-        diagnostics,
-    )
+    BlockFlow {
+        before: MarginStrut::new(margin.top).merge(children_flow.before),
+        after: MarginStrut::new(margin.bottom).merge(children_flow.after),
+        through: collapse_children
+            && collapse_top
+            && border.bottom == 0.0
+            && padding.bottom == 0.0
+            && explicit_height.is_none_or(|height| height == 0.0)
+            && children_flow.all_through,
+    }
 }
 
 /// CSS2 10.3.3 after resolving lengths and box-sizing, or 10.3.4 after
@@ -255,7 +315,27 @@ pub(super) fn layout_children(
     font: &fontdue::Font,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> f32 {
-    let mut cursor_y = y;
+    let result = flow_children(layout_box, (x, y, width), (false, false), font, diagnostics);
+    finite_used(
+        result.height.max(0.0),
+        layout_box.node_id,
+        "block flow height",
+        diagnostics,
+    )
+}
+
+fn flow_children(
+    layout_box: &mut LayoutBox,
+    (x, y, width): (f32, f32, f32),
+    (collapse_top, collapse_bottom): (bool, bool),
+    font: &fontdue::Font,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ChildrenFlow {
+    let mut cursor_y = y as f64;
+    let mut pending = MarginStrut::default();
+    let mut before = MarginStrut::default();
+    let mut at_start = true;
+    let mut all_through = true;
     let line_height = resolve_line_height(
         &layout_box.style.line_height,
         layout_box.style.font_size,
@@ -264,24 +344,44 @@ pub(super) fn layout_children(
     );
     let mut flow = InlineFlow::new(x, y, width, line_height);
     let ordered = layout_box.tag_name == "<ol>";
+    let is_document = layout_box.tag_name == "#document";
     let mut list_index = 0;
     for child in &mut layout_box.children {
         if child.kind == BoxKind::Block {
-            cursor_y = finite_used(
-                cursor_y as f64 + flow.content_height(),
-                layout_box.node_id,
-                "block flow y",
-                diagnostics,
-            );
-            let child_height = layout_block(
+            // Construction normally separates inline runs into anonymous
+            // blocks, but the document flow uses the same separator rule.
+            if flow.has_line {
+                cursor_y += flow.content_height();
+                at_start = false;
+                all_through = false;
+            }
+            let child_flow = layout_block(
                 child,
                 x,
-                cursor_y,
                 width,
                 layout_box.style.direction,
+                is_document && !child.is_anonymous(),
                 font,
                 diagnostics,
             );
+            pending = pending.merge(child_flow.before);
+            let child_y = if at_start && collapse_top {
+                y as f64
+            } else {
+                cursor_y + pending.value()
+            };
+            place_block(child, child_y, diagnostics);
+            if child_flow.through {
+                pending = pending.merge(child_flow.after);
+            } else {
+                if at_start && collapse_top {
+                    before = pending;
+                }
+                cursor_y = child_y + child.rect.height as f64;
+                pending = child_flow.after;
+                at_start = false;
+                all_through = false;
+            }
             if child.style.display == Display::ListItem {
                 list_index += 1;
                 let text = child.marker_text.clone().unwrap_or_else(|| {
@@ -301,21 +401,59 @@ pub(super) fn layout_children(
                     style,
                 });
             }
-            cursor_y = finite_used(
-                cursor_y as f64 + child_height as f64,
-                layout_box.node_id,
-                "block flow y",
-                diagnostics,
+            // Root margins never adjoin another box's margins.
+            if is_document && !child.is_anonymous() {
+                cursor_y += pending.value();
+                pending = MarginStrut::default();
+            }
+            flow = InlineFlow::new(
+                x,
+                finite_used(cursor_y, layout_box.node_id, "block flow y", diagnostics),
+                width,
+                line_height,
             );
-            flow = InlineFlow::new(x, cursor_y, width, line_height);
         } else {
             layout_inline(child, &mut flow, font, diagnostics);
         }
     }
-    finite_used(
-        cursor_y as f64 + flow.content_height() - y as f64,
+    if flow.has_line {
+        cursor_y += flow.content_height();
+        at_start = false;
+        all_through = false;
+    }
+    let after = if at_start && collapse_top {
+        // The entire empty chain adjoins the parent's top margin, even if a
+        // bottom decoration or definite height prevents its own through-collapse.
+        before = pending;
+        MarginStrut::default()
+    } else if collapse_bottom {
+        pending
+    } else {
+        cursor_y += pending.value();
+        MarginStrut::default()
+    };
+    ChildrenFlow {
+        height: cursor_y - y as f64,
+        before,
+        after,
+        all_through,
+    }
+}
+
+fn place_block(layout_box: &mut LayoutBox, y: f64, diagnostics: &mut Vec<Diagnostic>) {
+    layout_box.rect.y = finite_used(y, layout_box.node_id, "border y", diagnostics);
+    layout_box.content_rect.y = finite_used(
+        y + layout_box.content_rect.y as f64,
         layout_box.node_id,
-        "block flow height",
+        "content y",
         diagnostics,
-    )
+    );
+    for fragment in &mut layout_box.text_fragments {
+        fragment.y = finite_used(
+            y + fragment.y as f64,
+            layout_box.node_id,
+            "image text y",
+            diagnostics,
+        );
+    }
 }

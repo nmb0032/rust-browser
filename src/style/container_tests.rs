@@ -88,6 +88,37 @@ fn centered_containers_use_content_width_feedback_and_stay_stable_across_resizes
 }
 
 #[test]
+fn margin_collapsing_and_containment_preserve_content_geometry_feedback() {
+    let mut frame = frame(
+        "<!doctype html><style>body{margin:0;font:16px/20px serif}\
+         #owner{container:owner / inline-size;width:50%;margin:10px 0 15px}\
+         #a{height:20px;margin:30px 0 20px}#empty{margin:-10px 0 50px}\
+         #b{height:20px;margin:15px 0 35px;width:50cqw}\
+         @container owner (width >= 300px){#b{color:blue}}\
+         </style><section id='owner'><div id='a'></div><div id='empty'></div><div id='b'></div></section>",
+    );
+    for (viewport, width) in [(848.0, 400.0), (448.0, 200.0), (848.0, 400.0)] {
+        frame.set_media_environment(MediaEnvironment::new(viewport, 600.0));
+        let tree = layout(&mut frame);
+        let owner = box_for(&tree, id(&frame, "owner"));
+        let a = box_for(&tree, id(&frame, "a"));
+        let b = box_for(&tree, id(&frame, "b"));
+        assert_eq!(owner.content_rect().width, width);
+        assert_eq!(owner.content_rect().height, 145.0);
+        assert_eq!(a.rect().y - owner.content_rect().y, 30.0);
+        assert_eq!(b.rect().y - a.rect().y - a.rect().height, 40.0);
+        assert_eq!(b.content_rect().width, width / 2.0);
+        assert_eq!(
+            b.style().color,
+            Some(if width >= 300.0 { 0x0000ff } else { 0x000000 })
+        );
+        assert!(tree.diagnostics().is_empty());
+        assert!(frame.stylesheets.diagnostics.is_empty());
+        assert_eq!(layout(&mut frame), tree);
+    }
+}
+
+#[test]
 fn anonymous_wrappers_and_inline_continuations_never_replace_real_container_geometry() {
     let mut frame = frame(
         "<style>\

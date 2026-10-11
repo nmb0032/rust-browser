@@ -269,6 +269,49 @@ impl LayoutTree {
                 &mut self.diagnostics,
             ),
         };
+        absolutize_y(&mut self.root, 0.0, &mut self.diagnostics);
+    }
+}
+
+/// Blocks were laid out around their own zero border origin; inline boxes
+/// share their containing block's coordinates. Convert each box exactly once,
+/// including paint fragments and markers, without rerunning used-value math.
+fn absolutize_y(layout_box: &mut LayoutBox, offset: f64, diagnostics: &mut Vec<Diagnostic>) {
+    let child_offset = if layout_box.kind == BoxKind::Block {
+        offset + layout_box.rect.y as f64
+    } else {
+        offset
+    };
+    layout_box.rect.y = finite_used(
+        offset + layout_box.rect.y as f64,
+        layout_box.node_id,
+        "absolute border y",
+        diagnostics,
+    );
+    layout_box.content_rect.y = finite_used(
+        offset + layout_box.content_rect.y as f64,
+        layout_box.node_id,
+        "absolute content y",
+        diagnostics,
+    );
+    for fragment in &mut layout_box.text_fragments {
+        fragment.y = finite_used(
+            offset + fragment.y as f64,
+            layout_box.node_id,
+            "absolute text y",
+            diagnostics,
+        );
+    }
+    if let Some(marker) = &mut layout_box.list_marker {
+        marker.y = finite_used(
+            offset + marker.y as f64,
+            layout_box.node_id,
+            "absolute marker y",
+            diagnostics,
+        );
+    }
+    for child in &mut layout_box.children {
+        absolutize_y(child, child_offset, diagnostics);
     }
 }
 

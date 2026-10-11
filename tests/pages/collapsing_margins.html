@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Collapsing margins - Milestone 8.3</title>
+  <style>
+    body { margin: 0; background: #e6ebef; color: #203040; font: 16px/20px serif; }
+    main { width: 560px; margin: 20px auto; padding: 20px; border: 2px solid #386080; background: white; }
+    h1 { font-size: 24px; line-height: 30px; margin: 0 0 20px; }
+    section { padding: 1px 0; margin: 20px 0; background: #edf5fa; }
+    p { margin: 0; }
+    .paragraph { margin: 16px 0; background: #c5e4cb; }
+    .first { margin-bottom: 20px; background: #b8d8ed; }
+    .empty { margin: -10px 0 50px; }
+    .nested-empty { margin: -30px 0 40px; }
+    .last { margin-top: 15px; background: #f6dfb4; }
+    .parent { margin: 10px 0 15px; background: #b8d8ed; }
+    .child { height: 20px; margin: 30px 0 35px; background: #c5e4cb; }
+    .overlap { margin-top: -10px; background: #f6dfb4; }
+    .contained { container-type: inline-size; margin: 10px 0 15px; background: #b8d8ed; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Collapsing vertical margins</h1>
+    <section>
+      <p class="paragraph">First paragraph: 16px margins.</p>
+      <p class="paragraph">Second paragraph: the gap is 16px, not 32px.</p>
+    </section>
+    <section>
+      <p class="first">Before nested empty blocks.</p>
+      <div class="empty"><div class="nested-empty"></div></div>
+      <p class="last">After: the gap is 50 - 30 = 20px.</p>
+    </section>
+    <section>
+      <div class="parent"><div class="child">Escaped child margins.</div></div>
+      <p>Parent and child share a top edge; parent height is 20px.</p>
+    </section>
+    <section>
+      <p>Negative margins may overlap content.</p>
+      <p class="overlap">This line overlaps the preceding line by 10px.</p>
+    </section>
+    <section>
+      <div class="contained"><div class="child">Contained margins remain inside.</div></div>
+      <p>Inline-size containment stops parent/child collapsing.</p>
+    </section>
+  </main>
+</body>
+</html>

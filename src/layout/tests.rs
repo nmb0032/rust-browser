@@ -911,7 +911,8 @@ fn box_model_resolves_content_width_padding_border_and_margins() {
     assert_eq!(div.content_rect().x, 86.0);
     assert_eq!(div.content_rect().y, 41.0);
     assert_eq!(div.rect().height, 34.0);
-    assert_eq!(find(tree.root(), "<p>").unwrap().rect().y, 94.0);
+    // The div's 10px bottom and paragraph's 16px top collapse to 16px.
+    assert_eq!(find(tree.root(), "<p>").unwrap().rect().y, 84.0);
 }
 
 #[test]

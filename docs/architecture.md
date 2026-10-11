@@ -442,8 +442,10 @@ until its closing tag or EOF, including across chunk boundaries. This is not
 a complete raw-text tokenizer. The original whole-sheet/inline-list CSS
 rejection was replaced by token-based recovery in 7.2; invalid/unsupported
 selectors and typed values are still ignored with diagnostics. At-rules,
-media-query semantics, advanced selectors, alpha colors, margin collapsing,
-auto margins, and font-face selection are still deferred. `font-family` is
+media-query semantics, advanced selectors, alpha colors, and font-face
+selection are still deferred at this initial pipeline stage. Steps 8.2–8.3
+add horizontal auto margins and normal-flow vertical margin collapsing.
+`font-family` is
 computed and inherited, but rasterization uses the bundled face. Nonzero
 border widths originally painted solid rectangular strips without a
 `border-style` model; 7.5 adds visible-style widths and basic border patterns.
@@ -1841,11 +1843,11 @@ and the CSSOM parts covered here meet the conformance gate.
 
   **Remaining naive behavior:** This is box generation, not complete
   browser layout parity. The existing viewport gutter, height sizing,
-  additive vertical margins, word wrapping, and inline bounding rectangles
-  remain.
-  Margin collapsing, proper baseline-aligned line boxes, per-line inline
+  word wrapping, and inline bounding rectangles remain. Step 8.3 replaces
+  additive vertical margins with adjoining margin sets.
+  Proper baseline-aligned line boxes, per-line inline
   decoration fragments, Unicode line breaking, and `white-space` handling
-  remain unimplemented. Those remain for 8.3–8.5 and later steps;
+  remain unimplemented. Those remain for 8.4–8.5 and later steps;
   Milestone 8 is not complete.
 - [x] **8.2 Compute widths and auto margins.** Implement the CSS 2 width
   equations, including `margin: auto` centering.
@@ -1891,14 +1893,73 @@ and the CSSOM parts covered here meet the conformance gate.
   **Supported scope, not browser parity:** This is the CSS2 equation for
   the existing horizontal normal-flow block/replaced-image subset, not
   complete CSS2 sizing. The viewport gutter, image sizing cap/alt fallback,
-  additive vertical margins, indefinite percentage-height fallback, naive
+  indefinite percentage-height fallback, naive
   text wrapping/inline bounding boxes, and limited display types remain.
-  No min/max/intrinsic sizing keywords, margin collapse, positioned/floated/
+  Step 8.3 adds vertical margin collapsing. No min/max/intrinsic sizing
+  keywords, positioned/floated/
   table/flex/grid layout, writing modes, logical margins, HTML `dir`
-  semantics, or bidi text are added. Those remain in 8.3 and later steps;
+  semantics, or bidi text are added. Those remain in later steps;
   Milestone 8 is not complete.
-- [ ] **8.3 Collapse margins.** Implement vertical margin collapsing.
+- [x] **8.3 Collapse margins.** Implement vertical margin collapsing.
   *You'll see:* spacing between paragraphs matches browsers.
+
+  The supported horizontal normal-flow block, list-item, anonymous-block,
+  and replaced-image subset now uses CSS2.2 §8.3.1 adjoining margin sets.
+  Each set retains its largest positive and most negative component until
+  placement, rather than repeatedly collapsing pairs into scalars. Adjacent
+  siblings collapse; first-child top margins propagate through undecorated
+  parent top edges, and last-child bottom margins propagate through
+  undecorated auto-height parent bottom edges. Empty auto/zero-height blocks
+  collapse through recursively, including nested empty chains and phantom
+  anonymous blocks/inline continuations. Empty boxes keep CSS through-box
+  positions without contributing their provisional positions to flow height.
+
+  Relevant padding/border edges, genuine text lines (even at zero
+  `line-height`), line breaks, replaced content, and definite positive heights
+  prevent through-collapse where appropriate. A definite height still allows
+  first-child top collapse, but prevents last-child bottom collapse. Outside
+  list markers do not become normal-flow separators; generated content uses
+  its existing block/inline formatting. Root-element margins never collapse,
+  and the synthetic document's deliberate 24px gutter stays separate.
+  Existing `container-type: size` and `inline-size` formatting/containment
+  boundaries prevent parent/child and own through-collapse, while their
+  external margins may collapse with siblings and their descendants may
+  collapse with each other. Size containment retains its existing zero
+  auto content-height behavior.
+
+  Negative sets can overlap boxes and reduce parent auto heights. Flow uses
+  wider signed intermediates, flooring only final used content heights at
+  zero. Computed values and each box's resolved `used_margins()` remain
+  unchanged by the group effect; horizontal and inline margins are not
+  collapsed. Descendants are laid out once in local block coordinates, then
+  finalized once into document geometry, including text/image fragments and
+  markers. Paint, hit testing, node bounds, outlines, and container feedback
+  consume that finalized geometry. Relayout resets geometry and diagnostics;
+  extreme unrepresentable results retain the diagnostic 0px compatibility
+  fallback instead of storing infinity.
+
+  **Visible check:** `cargo run -- tests/pages/collapsing_margins.html
+  --dump=layout` shows the first two paragraphs at `y=133.0` and `y=169.0`,
+  each 20px high: their 16px margins produce a 16px gap, not 32px.
+  The nested empty-chain example has a 20px gap (`50 - 30`), the escaped
+  parent/child boxes share `y=339.0` and height 20px, the negative example
+  overlaps by 10px, and the inline-size-contained child remains 30px below
+  its parent's content edge. `--dump=values` preserves the individual used
+  margins. Open without a dump and press F12 to inspect the boxes. Focused
+  sign/empty-chain/edge/height/root/containment/inline/pseudo/replaced/resize/
+  diagnostic regressions, geometry-consumer and container-feedback tests,
+  and CLI layout/value assertions cover this step.
+
+  **Supported scope, not full browser parity:** Indefinite percentage heights
+  still report the existing diagnostic and behave as auto, including for
+  collapse decisions. Phantom detection follows the currently supported
+  inline content/decorations; word splitting, NBSP/`white-space` behavior,
+  line-break heights, baselines, and per-line decorations remain naive.
+  No `min-height`, clearance/floats, overflow-created formatting contexts,
+  positioned/inline-block/table/flex/grid layout, or writing modes are added.
+  Those require their later sizing/formatting/property milestones. The
+  existing image sizing cap/alt fallback and viewport gutter remain.
+  Milestone 8 is not complete; stop here for review before 8.4.
 - [ ] **8.4 Implement inline layout.** Build line boxes with baselines,
   `line-height`, `vertical-align: baseline`, and `text-align`, and split inline
   boxes across lines.

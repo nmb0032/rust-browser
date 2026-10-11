@@ -105,6 +105,14 @@ pub(super) fn layout_inline(
         layout_box.node_id,
         diagnostics,
     );
+    if left != 0.0
+        || right != 0.0
+        || extra_height != 0.0
+        || margin.left != 0.0
+        || margin.right != 0.0
+    {
+        flow.has_line = true;
+    }
     let start = Rect {
         x: flow.current_x,
         y: flow.y,
@@ -311,6 +319,8 @@ fn layout_image(
         layout_box.node_id,
         diagnostics,
     );
+    // Even a zero-sized replaced box is content, not a phantom inline.
+    flow.has_line = true;
     if box_height > 0.0 {
         flow.line_height = flow.line_height.max(finite_used(
             margin.top as f64 + box_height as f64 + margin.bottom as f64,
@@ -318,7 +328,6 @@ fn layout_image(
             "image margin height",
             diagnostics,
         ));
-        flow.has_line = true;
     }
     flow.pending_space = false;
 }
