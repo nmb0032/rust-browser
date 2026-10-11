@@ -1,4 +1,4 @@
-# Native headless reftests (milestones 8.13–8.18)
+# Native headless reftests (milestones 8.13–8.19)
 
 Run from the repository root:
 
@@ -37,6 +37,12 @@ layout engine, or UI capture path. Normal interactive loading remains unchanged.
   on both pages if used with reftests. Offsets are native harness configuration,
   **not WPT HTML metadata**; future wptrunner tests requiring scrolling will need
   equivalent script/testdriver setup.
+- Frozen offsets are instant and unsnapped by default. `--snap-scroll` uses the
+  production instant programmatic snap boundary. `--fragment VALUE` resolves
+  `:target` and reveals settled nested scrollports using an instant override.
+  Fragment input is bounded to 4096 bytes. These remain harness configuration,
+  not WPT scrolling/readiness metadata; the complete options are recorded in
+  each manifest. See [scrolling.md](scrolling.md).
 - Device dimensions must be integral, positive and at most **4096×4096**; scales
   are finite **0.125–8**. Fractional device dimensions are rejected, not rounded.
   Scroll inputs must be finite with magnitude at most 1,000,000 CSS pixels;
@@ -167,6 +173,13 @@ metadata and are never fetched. Bounded data-font sources remain supported.
 Existing production HTML/CSS/image/font byte, import and decode limits apply.
 
 ## Test format and enumeration
+
+Milestone 8.19 adds **five** independent pairs in `tests/reftests-scrolling`:
+root/nested sticky, programmatic snap, styled thin scrollbars and nested fragment
+margin/padding/target reveal. Each subdirectory requires its own offset/fragment
+configuration; `cargo test --all-features --test scrolling` runs those production
+paths at scales 1/2 and verifies the actual CLI's snap/fragment PNGs. The existing
+29 zero-time and six timed pairs are preserved unchanged.
 
 Tests use [WPT reftest HTML format](https://web-platform-tests.org/writing-tests/reftests.html):
 

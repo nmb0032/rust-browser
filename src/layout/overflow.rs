@@ -9,6 +9,8 @@ use crate::{
 };
 
 use super::{BoxKind, CoordinateSpace, LayoutBox, LayoutTree, PaintPhase, Rect, tree::finite_used};
+mod scrolling;
+pub use scrolling::ScrollBehavior;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollOffset {
@@ -22,11 +24,33 @@ pub struct ScrollState {
     identity: std::sync::Arc<()>,
     nodes: HashMap<ScrollKey, ScrollOffset>,
     viewport: ScrollOffset,
+    clock: f64,
+    motions: HashMap<Option<ScrollKey>, scrolling::Motion>,
+    gestures: HashMap<Option<ScrollKey>, scrolling::Gesture>,
+    snapped: HashMap<(Option<ScrollKey>, bool), NodeId>,
 }
 
 impl ScrollState {
     pub(crate) fn same_document(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.identity, &other.identity)
+    }
+    pub fn needs_tick(&self) -> bool {
+        !self.motions.is_empty() || !self.gestures.is_empty()
+    }
+    pub fn next_deadline(&self) -> Option<f64> {
+        self.gestures
+            .values()
+            .map(|g| g.deadline)
+            .min_by(f64::total_cmp)
+    }
+    pub fn has_animations(&self) -> bool {
+        !self.motions.is_empty()
+    }
+    pub fn viewport_scroll(&self) -> ScrollOffset {
+        self.viewport
+    }
+    pub(crate) fn set_time(&mut self, seconds: f64) {
+        self.clock = seconds;
     }
 }
 
@@ -144,8 +168,11 @@ pub struct Scrollbar {
     pub vertical: bool,
     pub spatial: SpatialState,
     pub coordinate_space: CoordinateSpace,
+    pub thumb_color: crate::css::values::ResolvedColor,
+    pub track_color: crate::css::values::ResolvedColor,
     key: ScrollKey,
     range: ScrollRange,
+    pub(crate) viewport: bool,
 }
 
 impl Scrollbar {
@@ -279,12 +306,19 @@ fn clamped(offset: ScrollOffset, range: ScrollRange) -> ScrollOffset {
 }
 
 impl LayoutTree {
-    /// Basic overlay tracks: no reserved gutter or CSS scrollbar styling.
+    /// Styled overlay tracks; no reserved gutter.
     pub fn scrollbars(&self) -> Vec<Scrollbar> {
         if !self
             .overflow
             .values()
             .any(|c| c.overflow_x.user_scrollable() || c.overflow_y.user_scrollable())
+            && !self.root_element().is_some_and(|b| {
+                b.style
+                    .scrolling
+                    .get(crate::style::scrolling::Property::Color)
+                    != crate::style::scrolling::Value::Color(None)
+                    || b.style.scrolling.width() == crate::style::scrolling::Width::Thin
+            })
         {
             return Vec::new();
         }
@@ -298,6 +332,9 @@ impl LayoutTree {
                 continue;
             };
             let r = container.port;
+            if b.style.scrolling.width() == crate::style::scrolling::Width::None {
+                continue;
+            }
             let offset = self.offset_for(key);
             let show = |mode: Overflow, min: f32, max: f32| {
                 mode == Overflow::Scroll || mode == Overflow::Auto && max > min
@@ -312,7 +349,14 @@ impl LayoutTree {
                 container.range.min.y,
                 container.range.max.y,
             );
-            let thickness = 6.0f32.min(r.width).min(r.height);
+            let thickness = (if b.style.scrolling.width() == crate::style::scrolling::Width::Thin {
+                3.0f32
+            } else {
+                6.0f32
+            })
+            .min(r.width)
+            .min(r.height);
+            let (thumb_color, track_color) = b.style.scrolling.colors(b.style.text_color);
             if thickness <= 0.0 {
                 continue;
             }
@@ -385,11 +429,15 @@ impl LayoutTree {
                     vertical: is_vertical,
                     spatial: decoration[&b.box_id],
                     coordinate_space: b.coordinate_space,
+                    thumb_color,
+                    track_color,
                     key,
                     range: container.range,
+                    viewport: false,
                 });
             }
         }
+        bars.extend(self.viewport_scrollbars());
         bars
     }
 
@@ -407,6 +455,12 @@ impl LayoutTree {
         let bars = self.scrollbars();
         if bars.is_empty() {
             return None;
+        }
+        if let Some(bar) = bars
+            .iter()
+            .find(|bar| bar.viewport && bar.contains(x, y, root_scroll))
+        {
+            return Some(*bar);
         }
         let decoration = self.spatial_states(false);
         let content = self.spatial_states(true);
@@ -456,11 +510,11 @@ impl LayoutTree {
     }
 
     pub fn drag_scrollbar(&mut self, bar: Scrollbar, x: f32, y: f32, grab: f32) -> bool {
-        let Some(bar) = self
-            .scrollbars()
-            .into_iter()
-            .find(|current| current.key == bar.key && current.vertical == bar.vertical)
-        else {
+        let Some(bar) = self.scrollbars().into_iter().find(|current| {
+            current.key == bar.key
+                && current.vertical == bar.vertical
+                && current.viewport == bar.viewport
+        }) else {
             return false;
         };
         let (x, y) = bar.point(x, y, self.viewport_scroll().y);
@@ -498,13 +552,30 @@ impl LayoutTree {
             "scrollbar position",
             &mut self.diagnostics,
         );
-        let old = self.offset_for(bar.key);
+        let old = if bar.viewport {
+            self.viewport_scroll()
+        } else {
+            self.offset_for(bar.key)
+        };
         let next = if bar.vertical {
             ScrollOffset { y: position, ..old }
         } else {
             ScrollOffset { x: position, ..old }
         };
-        self.scroll_state.nodes.insert(bar.key, next);
+        if bar.viewport {
+            self.scroll_state.viewport = next;
+        } else {
+            self.scroll_state.nodes.insert(bar.key, next);
+        }
+        self.cancel_scroll_axis(
+            if bar.viewport {
+                None
+            } else {
+                Some(bar.key.node)
+            },
+            !bar.vertical,
+            bar.vertical,
+        );
         self.report_spatial_failures();
         old != next
     }
@@ -587,13 +658,19 @@ impl LayoutTree {
 
     pub(crate) fn spatial_states(&self, own: bool) -> HashMap<usize, SpatialState> {
         let map = definitions(&self.root);
+        let sticky = self.sticky_offsets(&map);
         map.values()
-            .map(|b| (b.box_id, self.spatial(b, own, &map)))
+            .map(|b| {
+                (
+                    b.box_id,
+                    self.spatial_metrics(b, own, &map, &sticky, &mut Vec::new()),
+                )
+            })
             .collect()
     }
 
     fn spatial(&self, b: &LayoutBox, own: bool, map: &Definitions<'_>) -> SpatialState {
-        self.spatial_metrics(b, own, map, &mut Vec::new())
+        self.spatial_metrics(b, own, map, &self.sticky_offsets(map), &mut Vec::new())
     }
 
     fn spatial_metrics(
@@ -601,6 +678,7 @@ impl LayoutTree {
         b: &LayoutBox,
         own: bool,
         map: &Definitions<'_>,
+        sticky: &HashMap<usize, ScrollOffset>,
         reports: &mut Vec<crate::style::Diagnostic>,
     ) -> SpatialState {
         let before = reports.len();
@@ -623,7 +701,13 @@ impl LayoutTree {
             0.0
         };
         let mut dy = 0.0f64;
-        for ancestor in lineage(b, map, own) {
+        for ancestor in lineage(b, map, true) {
+            let shift = sticky.get(&ancestor.box_id).copied().unwrap_or_default();
+            dx += shift.x as f64;
+            dy += shift.y as f64;
+            if !own && ancestor.box_id == b.box_id {
+                continue;
+            }
             if let Some(container) = self.overflow.get(&ancestor.box_id) {
                 let r = container.port;
                 state.clip = state.clip.intersect(ClipRect {
@@ -664,6 +748,12 @@ impl LayoutTree {
             );
             let mut count = 0;
             for ancestor in path {
+                let shift = sticky.get(&ancestor.box_id).copied().unwrap_or_default();
+                matrix = matrix.then(super::Mat4::translation(
+                    shift.x as f64,
+                    shift.y as f64,
+                    0.0,
+                ));
                 let effects = &ancestor.style.effects;
                 matrix = matrix.then(effects.matrix(
                     ancestor.rect,
@@ -729,12 +819,133 @@ impl LayoutTree {
         state
     }
 
+    fn sticky_offsets(&self, map: &Definitions<'_>) -> HashMap<usize, ScrollOffset> {
+        use crate::css::values::{LengthContext, LengthOrAuto};
+        let mut result: HashMap<usize, ScrollOffset> = HashMap::new();
+        let mut candidates: Vec<_> = map
+            .values()
+            .filter(|b| b.style.position == Position::Sticky)
+            .copied()
+            .collect();
+        candidates.sort_by_key(|b| lineage(b, map, true).len());
+        for b in candidates {
+            let path = lineage(b, map, false);
+            let nearest = path.iter().rposition(|a| {
+                self.overflow.get(&a.box_id).is_some_and(|c| {
+                    c.overflow_x.scroll_container() || c.overflow_y.scroll_container()
+                })
+            });
+            let port = nearest.map_or(self.viewport_overflow.port, |i| {
+                self.overflow[&path[i].box_id].port
+            });
+            let mut scrolled =
+                nearest.map_or(self.viewport_scroll(), |i| self.box_scroll_offset(path[i]));
+            let mut inherited = ScrollOffset::default();
+            for a in path.iter().skip(nearest.map_or(0, |i| i + 1)) {
+                let shift = result.get(&a.box_id).copied().unwrap_or_default();
+                inherited.x += shift.x;
+                inherited.y += shift.y;
+                let offset = self.box_scroll_offset(a);
+                scrolled.x += offset.x;
+                scrolled.y += offset.y;
+            }
+            let cb =
+                b.parent_box
+                    .and_then(|id| map.get(&id))
+                    .map_or(self.root.content_rect, |parent| {
+                        self.overflow
+                            .get(&parent.box_id)
+                            .filter(|c| {
+                                c.overflow_x.scroll_container() || c.overflow_y.scroll_container()
+                            })
+                            .map_or(parent.content_rect, |c| parent.content_rect.union(c.extent))
+                    });
+            let inset = |l: &LengthOrAuto, size: f32| match l {
+                LengthOrAuto::Auto => None,
+                LengthOrAuto::Length(l) => l
+                    .used(&LengthContext::default(), size)
+                    .map(|v| v.0)
+                    .filter(|v| v.is_finite()),
+            };
+            // End inset is reduced when the sticky view rectangle is smaller
+            // than the border box; the margin box remains in its flow CB.
+            let axis = |start: f32,
+                        size: f32,
+                        port_start: f32,
+                        port_size: f32,
+                        scroll: f32,
+                        inherited: f32,
+                        low: Option<f32>,
+                        high: Option<f32>,
+                        cb_start: f32,
+                        cb_size: f32,
+                        margin_start: f32,
+                        margin_end: f32,
+                        reverse: bool| {
+                let (mut lo, mut hi) = (low.unwrap_or(0.0), high.unwrap_or(0.0));
+                let shortage = (size - (port_size - lo - hi)).max(0.0);
+                if reverse {
+                    lo -= shortage;
+                } else {
+                    hi -= shortage;
+                }
+                let visual = start + inherited - scroll;
+                let mut shift = 0.0f32;
+                if low.is_some() {
+                    shift = shift.max(port_start + lo - visual);
+                }
+                if high.is_some() {
+                    shift = shift.min(port_start + port_size - hi - visual - size);
+                }
+                let lower = (cb_start - (start - margin_start)).min(0.0);
+                let upper = (cb_start + cb_size - (start + size + margin_end)).max(0.0);
+                shift.clamp(lower, upper)
+            };
+            let (rx, ry) = scroll_reversals(&b.style);
+            let shift = ScrollOffset {
+                x: axis(
+                    b.rect.x,
+                    b.rect.width,
+                    port.x,
+                    port.width,
+                    scrolled.x,
+                    inherited.x,
+                    inset(&b.style.inset.left, port.width),
+                    inset(&b.style.inset.right, port.width),
+                    cb.x,
+                    cb.width,
+                    b.margin.left,
+                    b.margin.right,
+                    rx,
+                ),
+                y: axis(
+                    b.rect.y,
+                    b.rect.height,
+                    port.y,
+                    port.height,
+                    scrolled.y,
+                    inherited.y,
+                    inset(&b.style.inset.top, port.height),
+                    inset(&b.style.inset.bottom, port.height),
+                    cb.y,
+                    cb.height,
+                    b.margin.top,
+                    b.margin.bottom,
+                    ry,
+                ),
+            };
+            result.insert(b.box_id, shift);
+        }
+        result
+    }
+
     fn report_spatial_failures(&mut self) {
         let map = definitions(&self.root);
+        let sticky = self.sticky_offsets(&map);
         let mut reports = Vec::new();
         for b in map.values() {
             for own in [false, true] {
-                self.spatial_metrics(b, own, &map, &mut reports);
+                self.spatial_metrics(b, own, &map, &sticky, &mut reports);
             }
         }
         for report in reports {
@@ -818,6 +1029,7 @@ impl LayoutTree {
             })
             .collect();
         for (id, container) in nodes {
+            self.cancel_scroll_axis(Some(id.node), delta.x != 0.0, delta.y != 0.0);
             let old = self.offset_for(id);
             let next = consume(
                 old,
@@ -828,9 +1040,22 @@ impl LayoutTree {
             );
             changed |= old != next;
             self.scroll_state.nodes.insert(id, next);
+            self.record_gesture(Some(id), old, next);
+            let overscroll = self.scroll_style(Some(id.node));
+            if container.overflow_x.scroll_container()
+                && overscroll.overscroll(false) != crate::style::scrolling::Overscroll::Auto
+            {
+                delta.x = 0.0;
+            }
+            if container.overflow_y.scroll_container()
+                && overscroll.overscroll(true) != crate::style::scrolling::Overscroll::Auto
+            {
+                delta.y = 0.0;
+            }
         }
 
         let old = self.viewport_scroll();
+        self.cancel_scroll_axis(None, delta.x != 0.0, delta.y != 0.0);
         let next = consume(
             old,
             self.viewport_overflow,
@@ -840,6 +1065,7 @@ impl LayoutTree {
         );
         changed |= old != next;
         self.scroll_state.viewport = next;
+        self.record_gesture(None, old, next);
         self.report_spatial_failures();
         changed
     }
@@ -1084,6 +1310,7 @@ impl LayoutTree {
             }
         }
         self.set_viewport_scroll(self.scroll_state.viewport);
+        self.resnap();
     }
 }
 

@@ -16,8 +16,8 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 198)
-        self.assertEqual(len(supported), 254)
+        self.assertEqual(len(longhands), 222)
+        self.assertEqual(len(supported), 285)
         for name in ("aspect-ratio", "object-fit", "object-position"):
             self.assertIn(name, supported)
         self.assertNotIn("display", self.engine["simple_values"])
@@ -28,7 +28,11 @@ class GenerationTests(unittest.TestCase):
         self.assertNotIn("grid-template", supported)
         self.assertEqual(supported["overflow"]["targets"], ["overflow-x", "overflow-y"])
         self.assertIn("overflow-inline", supported)
-        self.assertNotIn("scrollbar-color", supported)
+        self.assertIn("scrollbar-color", supported)
+        self.assertIn("scroll-snap-type", supported)
+        self.assertNotIn("scrollbar-gutter", supported)
+        self.assertEqual(supported["overscroll-behavior"]["targets"],
+                         ["overscroll-behavior-x", "overscroll-behavior-y"])
         self.assertNotIn("direction", supported["all"]["targets"])
         self.assertNotIn("unicode-bidi", supported["all"]["targets"])
         self.assertEqual(supported["-webkit-box-sizing"]["targets"], ["box-sizing"])

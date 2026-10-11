@@ -42,6 +42,7 @@ fn style(source: &str) -> ComputedStyle {
 fn projection(style: &ComputedStyle, property: Property) -> String {
     use Property as P;
     match property {
+        P::Scrolling(p) => format!("{:?}", style.scrolling.get(p)),
         P::Animation(p) => format!("{:?}", style.motion.get(p)),
         P::Effect(p) => format!("{:?}", style.effects.get(p)),
         P::Typography(p) => format!("{:?}", style.typography.get(p)),
@@ -235,18 +236,18 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 254, 504, 63]);
-    assert_eq!(longhands.len(), 198);
+    assert_eq!(counts, [0, 285, 473, 63]);
+    assert_eq!(longhands.len(), 222);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 196);
+    assert_eq!(all.len(), 220);
     longhands.remove(&Property::Direction);
     longhands.remove(&Property::UnicodeBidi);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **253 partial**, **504 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **284 partial**, **473 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**198 longhands**, **55 shorthands**"));
+    assert!(report.contains("**222 longhands**, **62 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -335,6 +336,7 @@ fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule()
         inherited,
         [
             "color",
+            "scrollbar-color",
             "-webkit-text-fill-color",
             "border-collapse",
             "border-spacing",

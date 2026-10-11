@@ -2402,7 +2402,7 @@ and the CSSOM parts covered here meet the conformance gate.
   transforms/effect-created containing blocks/contexts are added in 8.17 below;
   integer math/animation and paged media remain absent. Fixed auto follows CSS2 (not the modern rule
   that fixed unconditionally creates a context). Overflow clips/nested scroll
-  containers are supplied by 8.9, sticky remains 8.19, and broader fragment hit testing
+  containers are supplied by 8.9, sticky is supplied by 8.19, and broader fragment hit testing
   remains milestone 9. No WPT or full browser parity is claimed.
   Cyclic descendant percentage sizing during intrinsic measurement uses the
   available containing width, not a complete CSS Sizing percentage-cycle model
@@ -2496,7 +2496,7 @@ and the CSSOM parts covered here meet the conformance gate.
   transforms and paged media remain their later steps. No scroll anchoring,
   smooth scrolling, keyboard focus reveal inside panels, styled/reserved
   scrollbar gutters or root scrollbar UI is claimed. Sticky positioning,
-  scroll snapping and advanced/styled scrollbar behavior remain 8.19. No WPT
+  scroll snapping and advanced/styled scrollbar behavior are supplied by 8.19 below. No WPT
   conformance or full-browser parity is claimed. **8.10 and later are not
   implemented by this step; milestone 8 is not complete.**
 - [x] **8.10 Implement flexbox.**
@@ -3308,12 +3308,71 @@ and the CSSOM parts covered here meet the conformance gate.
   `target/reftests/m818-time0-scale1`, `m818-time0-scale2`,
   `m818-time1-scale1` and `m818-time1-scale2`.
   This checkbox records the **bounded working implementation**, not external/
-  full-WPT conformance. **Milestone 8 remains incomplete; 8.19 and later work
-  are untouched.**
-- [ ] **8.19 Complete scrolling.** Implement `position: sticky`, scroll
-  snapping, `scroll-behavior`, overscroll behavior, scrollbar styling, and
-  scrolling to fragments.
+  full-WPT conformance. **Milestone 8 remains incomplete; scrolling continues
+  in 8.19 below.**
+- [x] **8.19 Complete scrolling.**
   *You'll see:* sticky headers and snap carousels behave correctly.
+
+  **Working production path:** sticky keeps normal-flow allocations, adjoining
+  margins and semantic containing blocks, creates an auto-z stacking context
+  and derives translations from current root/nested hidden/auto offsets,
+  opposing/logical insets and containing-block ends. Nested translations,
+  transformed planes and viewport-fixed escape share actual paint, inverse
+  link/wheel hits and scrollbar drag; no layout rectangle is scrolled in place.
+  Persistent document-owned state survives Frame clones, resources/fonts and
+  resize without reusing construction IDs or drifting static geometry.
+
+  **CSS/input:** generated dispatch adds 24 scrolling longhands/seven atomic
+  shorthands (222 longhands/62 shorthands total). Typed physical/logical snap
+  axes/align/stop, padding/margin, auto/smooth, per-axis overscroll and scrollbar
+  color/width use normal variables/wide/rollback/inheritance. Native wheel
+  scrolling remains immediate, snaps at a winit gesture end or a 120 ms idle
+  deadline, and chains each axis according to auto/contain/none even at zero
+  range. Programmatic and keyboard/fragment requests honor explicit/CSS
+  behavior. Smooth scrolling samples an explicit shared motion clock before
+  CSS scroll/view timelines and sticky paint; same-axis wheel or pointer input
+  interrupts it. Native scheduling ticks only running motion or pending
+  deadlines, then idles. Snap targets retain DOM identity for layout re-snap,
+  support mandatory/proximity/always-stop, negative origins, oversized-target
+  escape intervals, clipped/nested target filtering and actual joint targets
+  on both axes.
+
+  **Visible styling/navigation:** panel overlays use resolved inherited
+  scrollbar color and non-inherited 6/3/0 px width; none removes paint and input,
+  not range. Explicit root color/thin styling opts into viewport overlays while
+  preserving the historical undecorated root default. Strict percent/UTF-8
+  fragment decoding selects first exact ID before legacy anchor name; native
+  same-document navigation retains identity, updates `:target` and reveals
+  nested ports inside-out through shared margin/padding/behavior/snap requests.
+  Pending navigation follows resource/font layout until settled. Contents
+  targets use descendant geometry/source style, inline targets the first
+  visual fragment; masks/clipping do not require a pre-existing visible hit.
+  View timeline auto insets now use actual source scroll-padding.
+
+  **Evidence and honest limits:** `tests/pages/scrolling.html` is diagnostic-free
+  through the native renderer. Five independent exact reference pairs at
+  scales 1/2 cover root/nested sticky, snap, styled scrollbar and fragment
+  pixels; `--snap-scroll` and `--fragment` use the same production boundary
+  without scripts or sleeps. All 29 ordinary and six timed reference pairs
+  are preserved. Rust tests cover real input/layout/paint/links, stable clones/
+  relayout, logical/negative origins, margin/containing ends, snap selection/
+  reversal/stop/re-snap, smooth interruption/idle/CSS timeline order,
+  containment, inverse styled scrollbar drag/none/root styling and encoded/
+  contents fragment reveal. Finite engine UA timing/proximity policies,
+  transformed-quad bound approximations, native gesture gaps, absent OS bounce,
+  unsupported reserved gutters/vendor scrollbar styling and missing JS/DOM
+  scroll/event APIs are documented in [scrolling.md](scrolling.md); this is not
+  a full WPT conformance gate. Full-feature tests pass **910 tests** (804 library
+  and 106 integration), including the unchanged original line-break tests.
+  Formatting, strict all-target/all-feature Clippy, benchmark compilation,
+  seven offline CSS generator tests, CSS/replaced-fixture generator checks and
+  `git diff --check` pass. Native CLI references pass all 29 time-zero, six
+  one-second and five scrolling pairs at both scales exactly. Evidence/logs
+  reside in `target/reftests/m819-time0-scale1`, `m819-time0-scale2`,
+  `m819-time1-scale1`, `m819-time1-scale2`, `m819-scrolling-*-scale1/2` and
+  `target/m819-tests.log`; the demo PNG is `target/scrolling-demo.png`.
+  **Only 8.19 is implemented here; 8.20 and later
+  remain untouched, and milestone 8 is incomplete.**
 - [ ] **8.20 Add fragmentation and printing layout.** Implement multicolumn
   layout, CSS Fragmentation, and paged media with `@page`.
   *You'll see:* multicolumn articles and print preview pages split

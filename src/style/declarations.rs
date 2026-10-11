@@ -23,6 +23,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum Property {
+    Scrolling(super::scrolling::Property),
     Animation(super::animation::Property),
     Effect(super::effects::Property),
     Typography(super::typography::Property),
@@ -114,6 +115,8 @@ pub(super) enum LogicalSide {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum LogicalProperty {
+    ScrollPadding(LogicalSide),
+    ScrollMargin(LogicalSide),
     Margin(LogicalSide),
     Padding(LogicalSide),
     Inset(LogicalSide),
@@ -186,6 +189,10 @@ impl Property {
         let v = style.writing_mode.vertical();
         match self {
             Self::Logical(l) => match l {
+                L::ScrollPadding(s) => {
+                    Self::Scrolling(super::scrolling::Property::Padding(side(s)))
+                }
+                L::ScrollMargin(s) => Self::Scrolling(super::scrolling::Property::Margin(side(s))),
                 L::Margin(s) => Self::Margin(side(s)),
                 L::Padding(s) => Self::Padding(side(s)),
                 L::Inset(s) => Self::Inset(side(s)),
@@ -265,6 +272,7 @@ pub(super) enum WideKeyword {
 
 #[derive(Clone, Debug)]
 pub(super) enum Value {
+    Scrolling(super::scrolling::Value),
     Animation(super::animation::Value),
     Effect(super::effects::Value),
     Typography(super::typography::Value),
@@ -756,6 +764,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     }
     use Property as P;
     match property {
+        P::Scrolling(p) => return super::scrolling::parse(p, tokens).map(Value::Scrolling),
         P::Animation(p) => return super::animation::parse(p, tokens).map(Value::Animation),
         P::Effect(p) => return super::effects::parse(p, tokens).map(Value::Effect),
         P::Typography(p) => return super::typography::parse(p, tokens).map(Value::Typography),
@@ -821,7 +830,8 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     };
     let lower = token.ident().unwrap_or("").to_ascii_lowercase();
     match property {
-        P::Animation(_)
+        P::Scrolling(_)
+        | P::Animation(_)
         | P::Effect(_)
         | P::Typography(_)
         | P::Content

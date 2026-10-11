@@ -2731,6 +2731,9 @@ fn compute_color_value(
     property: Property,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Value> {
+    if let Value::Scrolling(v) = value {
+        return super::scrolling::compute_colors(v, current).map(Value::Scrolling);
+    }
     if let Value::Effect(v) = value {
         return super::effects::compute_colors(v, current).map(Value::Effect);
     }
@@ -2774,6 +2777,7 @@ fn absolutize(
     reference: f32,
 ) -> Option<Value> {
     match value {
+        Value::Scrolling(v) => super::scrolling::compute(v, context).map(Value::Scrolling),
         Value::Animation(v) => super::animation::compute(v, context).map(Value::Animation),
         Value::Typography(typography::Value::Length(length)) => Some(Value::Typography(
             typography::Value::Length(length.computed(context)?.0),
@@ -2879,6 +2883,7 @@ fn computed_value(
     let style = &parent.style;
     use Property as P;
     match property {
+        P::Scrolling(p) => Value::Scrolling(style.scrolling.get(p)),
         P::Animation(p) => Value::Animation(style.motion.get(p)),
         P::Logical(_) => computed_value(value, property.physical(style), parent, initial),
         P::Effect(p) => Value::Effect(style.effects.get(p)),
@@ -3009,6 +3014,7 @@ fn computed_value(
 fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, value: Value) {
     use Property as P;
     match (property, value) {
+        (P::Scrolling(p), Value::Scrolling(v)) => style.scrolling.set(p, v),
         (P::Animation(p), Value::Animation(v)) => style.motion.set(p, v),
         (P::Effect(p), Value::Effect(v)) => style.effects.set(p, v),
         (P::Typography(p), Value::Typography(v)) => {

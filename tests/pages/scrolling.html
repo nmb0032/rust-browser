@@ -1,0 +1,45 @@
+<!doctype html>
+<title>Milestone 8.19 — native scrolling</title>
+<style>
+html{scroll-behavior:smooth;scroll-padding-top:70px;scrollbar-color:#305c50 #e0e6e3;scrollbar-width:thin}
+body{margin:0;font:16px/24px sans-serif;color:#18382f;background:#f5f7f5}
+header{position:sticky;top:0;z-index:1;padding:12px;background:#e0e6e3}
+h1{font-size:24px;margin:0}
+main{padding:20px}
+a{color:#305c50}
+.panel{width:320px;height:180px;overflow:auto;border:2px solid #305c50;scrollbar-color:#305c50 #e0e6e3;scrollbar-width:thin;scroll-padding:24px;scroll-behavior:smooth;overscroll-behavior:contain}
+.label{position:sticky;top:0;background:#e0e6e3;padding:8px}
+.space{height:240px}
+#destination{scroll-margin-top:8px;background:#c6e2d6;padding:12px}
+#destination:target{background:#a7d5c2}
+.carousel{display:flex;width:360px;height:130px;overflow:auto;scroll-snap-type:x mandatory;scroll-padding-inline:12px;scrollbar-width:thin;overscroll-behavior-x:contain}
+.slide{flex:0 0 220px;scroll-snap-align:start;scroll-margin-inline:6px;background:#c6e2d6;margin-right:20px;padding:12px}
+.stop{scroll-snap-stop:always;background:#e0e6e3}
+.rtl{direction:rtl}
+.end{height:450px}
+</style>
+<header><h1>Native scrolling</h1><a href="#destination">Reveal nested destination</a> · <a href="#top">Top</a></header>
+<main>
+<h2>Sticky scrollport and nested fragment</h2>
+<p>Wheel or arrow keys over the panel. Its sticky label remains visible; containment prevents wheel chaining at the end. The link above uses a smooth, inside-out reveal.</p>
+<div class=panel id=panel>
+  <div class=label>Sticky label — styled thin scrollbar</div>
+  <div class=space></div>
+  <div id=destination>Nested fragment destination</div>
+  <div class=space></div>
+</div>
+<h2>Gesture-end snapping</h2>
+<p>Horizontal wheel or arrow keys over the carousel. Snapping happens when the gesture ends, not on every wheel delta. The second slide is an always-stop target.</p>
+<div class=carousel id=carousel>
+ <div class=slide>First snap target</div>
+ <div class="slide stop">Always stop</div>
+ <div class=slide>Third snap target</div>
+ <div class=slide>Fourth snap target</div>
+</div>
+<h2>RTL negative-origin scrolling</h2>
+<div class="carousel rtl" id=rtl>
+ <div class=slide>RTL first</div><div class=slide>RTL second</div><div class=slide>RTL third</div>
+</div>
+<p>No JavaScript, simulated bounce or reserved scrollbar gutters are used.</p>
+<div class=end></div>
+</main>

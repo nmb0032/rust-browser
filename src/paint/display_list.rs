@@ -203,24 +203,48 @@ pub(crate) fn build_display_list(
         if phase == PaintPhase::Scrollbars {
             for bar in scrollbars
                 .iter()
-                .filter(|bar| bar.owner == layout_box.box_id)
+                .filter(|bar| bar.owner == layout_box.box_id && !bar.viewport)
             {
                 display_list.push(DisplayItem::Spatial(Box::new(bar.spatial)));
                 spatial = bar.spatial;
-                for (rect, color) in [(bar.track, 0xd8d8d8), (bar.thumb, 0x737373)] {
-                    display_list.push(DisplayItem::Rect {
-                        x: rect.x,
-                        y: rect.y,
-                        w: rect.width,
-                        h: rect.height,
-                        color,
-                    });
+                for (rect, color) in [(bar.track, bar.track_color), (bar.thumb, bar.thumb_color)] {
+                    let (rgb, alpha) = color.to_srgb8();
+                    if alpha == 255 {
+                        display_list.push(DisplayItem::Rect {
+                            x: rect.x,
+                            y: rect.y,
+                            w: rect.width,
+                            h: rect.height,
+                            color: rgb,
+                        });
+                    } else {
+                        display_list.push(DisplayItem::ColorRect {
+                            x: rect.x,
+                            y: rect.y,
+                            w: rect.width,
+                            h: rect.height,
+                            color,
+                        });
+                    }
                 }
             }
         }
     }
     for _ in groups {
         display_list.push(DisplayItem::EndLayer);
+    }
+    for bar in scrollbars.iter().filter(|b| b.viewport) {
+        display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Viewport));
+        display_list.push(DisplayItem::Spatial(Box::new(bar.spatial)));
+        for (r, color) in [(bar.track, bar.track_color), (bar.thumb, bar.thumb_color)] {
+            display_list.push(DisplayItem::ColorRect {
+                x: r.x,
+                y: r.y,
+                w: r.width,
+                h: r.height,
+                color,
+            });
+        }
     }
     if show_outlines {
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));

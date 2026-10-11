@@ -50,6 +50,12 @@ struct Args {
     /// Programmatic panel offset, element-id:X:Y (repeatable).
     #[arg(long, value_parser = panel)]
     panel_scroll: Vec<rust_browser::screenshot::PanelScroll>,
+    /// Apply snap selection to configured offsets, without smooth animation.
+    #[arg(long)]
+    snap_scroll: bool,
+    /// Same-document fragment to reveal after resources settle.
+    #[arg(long)]
+    fragment: Option<String>,
 
     /// Freeze declarative animations for native screenshots/reftests: 500ms,
     /// 0.5s, or bare milliseconds. Default zero; no scripts are executed.
@@ -112,6 +118,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         scale: args.device_scale,
         scroll: args.scroll,
         panels: args.panel_scroll,
+        snap_scroll: args.snap_scroll,
+        fragment: args.fragment,
         animation_time: args.animation_time,
     };
     if let Some(suite) = args.reftests {

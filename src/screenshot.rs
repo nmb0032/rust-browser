@@ -26,6 +26,10 @@ pub struct Options {
     pub scale: f64,
     pub scroll: ScrollOffset,
     pub panels: Vec<PanelScroll>,
+    /// Interpret configured offsets as instant programmatic snap requests.
+    pub snap_scroll: bool,
+    /// Same-document native fragment navigation after resources settle.
+    pub fragment: Option<String>,
     /// Frozen document timeline in seconds (default zero).
     pub animation_time: f64,
 }
@@ -38,6 +42,8 @@ impl Default for Options {
             scale: 1.0,
             scroll: ScrollOffset::default(),
             panels: Vec::new(),
+            snap_scroll: false,
+            fragment: None,
             animation_time: 0.0,
         }
     }
@@ -56,6 +62,7 @@ impl Options {
             || self.panels.len() > 128
             || !crate::style::animation::valid_time(self.animation_time)
             || self.animation_time < 0.0
+            || self.fragment.as_ref().is_some_and(|f| f.len() > 4096)
         {
             return Err(io::Error::other(
                 "invalid screenshot options: integral device dimensions 1..4096, scale 0.125..8, at most 128 panels, finite animation time 0..1000000000 seconds required",
@@ -205,6 +212,10 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
         .into());
     }
     check_ready(frame)?;
+    if let Some(fragment) = &options.fragment {
+        frame.url.set_fragment(Some(fragment));
+        frame.refresh_target();
+    }
     let fonts = FontContext::bundled();
     frame.set_media_environment(options.environment());
     // Viewport changes can activate font rules not requested during initial load.
@@ -225,7 +236,12 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
     let mut tree = frame.layout_with_container_queries(&fonts);
     frame.load_pending_effect_images(|_| Ok(()), || false)?;
     tree.effect_images = frame.effect_images.clone();
-    tree.set_viewport_scroll(options.scroll);
+    tree.cancel_scroll_animations();
+    if options.snap_scroll {
+        tree.request_scroll(None, options.scroll, crate::layout::ScrollBehavior::Instant)?;
+    } else {
+        tree.set_viewport_scroll(options.scroll);
+    }
     for panel in &options.panels {
         let ids = frame
             .document
@@ -245,8 +261,19 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
             ))
             .into());
         }
-        tree.set_scroll_offset(ids[0], panel.offset);
+        if options.snap_scroll {
+            tree.request_scroll(
+                Some(ids[0]),
+                panel.offset,
+                crate::layout::ScrollBehavior::Instant,
+            )?;
+        } else {
+            tree.set_scroll_offset(ids[0], panel.offset);
+        }
     }
+    // Explicit screenshot offsets are frozen/instant, not CSSOM requests.
+    // A URL fragment is a real navigation and reveals nested scrollports.
+    frame.scroll_to_fragment(&mut tree, crate::layout::ScrollBehavior::Instant)?;
     frame.retain_scroll_state(&tree);
     tree = frame.sample_scroll_animations(tree, &fonts);
     if !frame.stylesheets.diagnostics.is_empty() || !tree.diagnostics().is_empty() {

@@ -20,7 +20,7 @@ use crate::paint::{self, DisplayItem};
 use crate::{
     css::media::MediaEnvironment,
     dom::{Document, NodeId},
-    engine::{FragmentTarget, Frame, LoadEvent, Navigation, link_url},
+    engine::{Frame, LoadEvent, Navigation, link_url},
     layout::LayoutTree,
 };
 
@@ -139,7 +139,33 @@ impl BrowserWindow {
     }
 
     fn scroll_by(&mut self, delta: f32) {
-        self.scroll_by_axes(crate::layout::ScrollOffset { x: 0.0, y: delta });
+        self.scroll_key_by(crate::layout::ScrollOffset { x: 0.0, y: delta });
+    }
+
+    fn scroll_key_by(&mut self, delta: crate::layout::ScrollOffset) {
+        let Some(window) = &self.window else { return };
+        let scale = window.scale_factor();
+        let (x, y) = self.cursor.map_or((-1.0, -1.0), |(x, y)| {
+            input::document_point(x, y, scale, 0.0)
+        });
+        if let Err(error) = self
+            .layout_tree
+            .sample_scrolling(self.animation_origin.elapsed().as_secs_f64())
+        {
+            eprintln!("Scroll clock: {error}");
+        }
+        match self.layout_tree.scroll_key(x, y, delta) {
+            Ok(true) => {
+                self.animation_deadline = None;
+                self.fragment_scroll_pending = false;
+                self.scroll_offset = self.layout_tree.viewport_scroll().y;
+                Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+                self.rebuild_display_list();
+                self.request_redraw();
+            }
+            Ok(false) => {}
+            Err(error) => eprintln!("Keyboard scroll: {error}"),
+        }
     }
 
     fn scroll_by_axes(&mut self, delta: crate::layout::ScrollOffset) {
@@ -150,12 +176,20 @@ impl BrowserWindow {
         let (x, y) = self.cursor.map_or((-1.0, -1.0), |(x, y)| {
             input::document_point(x, y, scale_factor, 0.0)
         });
-        self.layout_tree
-            .set_viewport_scroll(crate::layout::ScrollOffset {
-                y: self.scroll_offset,
-                ..self.layout_tree.viewport_scroll()
-            });
-        if self.layout_tree.scroll_wheel(x, y, delta) {
+        let sampled = match self
+            .layout_tree
+            .sample_scrolling(self.animation_origin.elapsed().as_secs_f64())
+        {
+            Ok(changed) => changed,
+            Err(error) => {
+                eprintln!("Scroll clock: {error}");
+                false
+            }
+        };
+        let changed = self.layout_tree.scroll_wheel(x, y, delta);
+        self.animation_deadline = None;
+        Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+        if changed || sampled {
             self.fragment_scroll_pending = false;
             self.scroll_offset = self.layout_tree.viewport_scroll().y;
             Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
@@ -226,6 +260,11 @@ impl BrowserWindow {
                 }
                 Ok(LoadEvent::Finished) => {
                     if font_loading {
+                        if self.fragment_scroll_pending {
+                            self.scroll_to_fragment();
+                            self.fragment_scroll_pending = self.frame.has_pending_web_fonts()
+                                || self.frame.has_pending_effect_images();
+                        }
                         continue;
                     }
                     self.is_loading = false;
@@ -234,7 +273,8 @@ impl BrowserWindow {
                     } else if self.fragment_scroll_pending {
                         self.scroll_to_fragment();
                     }
-                    self.fragment_scroll_pending = false;
+                    self.fragment_scroll_pending = self.frame.has_pending_web_fonts()
+                        || self.frame.has_pending_effect_images();
                     self.update_title();
                 }
                 Err(TryRecvError::Empty) => break,
@@ -336,42 +376,33 @@ impl BrowserWindow {
     }
 
     fn set_scroll(&mut self, offset: f32) {
-        let Some(window) = &self.window else {
+        if self.window.is_none() {
             return;
-        };
-        let height = window
-            .inner_size()
-            .to_logical::<f32>(window.scale_factor())
-            .height;
-        self.scroll_offset = offset.clamp(0.0, paint::max_scroll_offset(&self.layout_tree, height));
+        }
+        self.layout_tree.cancel_scroll_axis(None, false, true);
         self.layout_tree
             .set_viewport_scroll(crate::layout::ScrollOffset {
-                y: self.scroll_offset,
+                y: offset,
                 ..self.layout_tree.viewport_scroll()
             });
         self.scroll_offset = self.layout_tree.viewport_scroll().y;
         Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
-        if self.frame.animations().has_scroll_effects() {
-            self.rebuild_display_list();
-        }
+        self.rebuild_display_list();
         self.update_cursor();
         self.update_interaction(InteractionEvent::Pointer);
         self.request_redraw();
     }
 
     fn scroll_to_fragment(&mut self) {
-        let Some(fragment) = self.navigation.history.current().url.fragment() else {
-            return;
-        };
-        match self.frame.fragment_target(fragment) {
-            Some(FragmentTarget::Top) => self.set_scroll(0.0),
-            Some(FragmentTarget::Node(id)) => {
-                if let Some(rect) = self.layout_tree.node_rect(id) {
-                    self.set_scroll(rect.y);
-                }
-            }
-            None => {}
+        self.animation_deadline = None;
+        if let Err(error) = Arc::make_mut(&mut self.frame)
+            .scroll_to_fragment(&mut self.layout_tree, crate::layout::ScrollBehavior::Auto)
+        {
+            eprintln!("Fragment scroll: {error}");
         }
+        self.scroll_offset = self.layout_tree.viewport_scroll().y;
+        self.rebuild_display_list();
+        self.request_redraw();
     }
 
     fn navigate(&mut self, url: url::Url) {
@@ -386,7 +417,8 @@ impl BrowserWindow {
             Arc::make_mut(&mut self.frame).refresh_target();
             self.rebuild_display_list();
             self.scroll_to_fragment();
-            self.fragment_scroll_pending = false;
+            self.fragment_scroll_pending =
+                self.frame.has_pending_web_fonts() || self.frame.has_pending_effect_images();
             self.update_title();
         } else {
             self.begin_navigation(None);
@@ -571,12 +603,22 @@ fn render_for_window_size(
         ..frame.media_environment()
     };
     frame.set_media_environment(environment);
+    let external_scroll = scroll != frame.scroll_state().viewport_scroll().y;
     let mut tree = frame.layout_with_container_queries(font);
-    let scroll = scroll.clamp(0.0, paint::max_scroll_offset(&tree, logical.height));
-    tree.set_viewport_scroll(crate::layout::ScrollOffset {
-        y: scroll,
-        ..tree.viewport_scroll()
-    });
+    let range = tree.viewport_scroll_container().range;
+    let scroll = scroll.clamp(
+        range.min.y,
+        range
+            .max
+            .y
+            .min(paint::max_scroll_offset(&tree, logical.height)),
+    );
+    if external_scroll {
+        tree.set_viewport_scroll(crate::layout::ScrollOffset {
+            y: scroll,
+            ..tree.viewport_scroll()
+        });
+    }
     let scroll = tree.viewport_scroll().y;
     frame.retain_scroll_state(&tree);
     tree = frame.sample_scroll_animations(tree, font);
@@ -632,6 +674,7 @@ impl ApplicationHandler for BrowserWindow {
                     let scale = self.window.as_ref().expect("active window").scale_factor();
                     let (x, y) = input::document_point(position.x, position.y, scale, 0.0);
                     if self.layout_tree.drag_scrollbar(bar, x, y, grab) {
+                        self.scroll_offset = self.layout_tree.viewport_scroll().y;
                         Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
                         self.rebuild_display_list();
                         self.request_redraw();
@@ -656,6 +699,11 @@ impl ApplicationHandler for BrowserWindow {
                     self.update_interaction(InteractionEvent::Pointer);
                     return;
                 }
+                if state == ElementState::Pressed {
+                    self.layout_tree.cancel_scroll_animations();
+                    Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+                    self.fragment_scroll_pending = false;
+                }
                 if state == ElementState::Pressed
                     && let Some((x, y)) = self.cursor
                 {
@@ -666,6 +714,7 @@ impl ApplicationHandler for BrowserWindow {
                         self.scrollbar_drag = Some((bar, grab));
                         self.pressed_link = None;
                         if self.layout_tree.drag_scrollbar(bar, x, y, grab) {
+                            self.scroll_offset = self.layout_tree.viewport_scroll().y;
                             Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
                             self.rebuild_display_list();
                             self.request_redraw();
@@ -710,7 +759,7 @@ impl ApplicationHandler for BrowserWindow {
                     .inner_size();
                 self.resize_surface(size.width, size.height);
             }
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
                 let scale_factor = self
                     .window
                     .as_ref()
@@ -727,6 +776,15 @@ impl ApplicationHandler for BrowserWindow {
                     },
                 };
                 self.scroll_by_axes(scroll_delta);
+                if phase == winit::event::TouchPhase::Ended
+                    || phase == winit::event::TouchPhase::Cancelled
+                {
+                    self.layout_tree.finish_scroll_gesture();
+                    Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+                    self.scroll_offset = self.layout_tree.viewport_scroll().y;
+                    self.rebuild_display_list();
+                    self.request_redraw();
+                }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Some(direction) = input::history_shortcut(&event.logical_key, self.modifiers)
@@ -744,6 +802,24 @@ impl ApplicationHandler for BrowserWindow {
                     }
                     Key::Named(NamedKey::ArrowDown) => self.scroll_by(paint::LINE_HEIGHT),
                     Key::Named(NamedKey::ArrowUp) => self.scroll_by(-paint::LINE_HEIGHT),
+                    Key::Named(NamedKey::ArrowLeft) => {
+                        self.scroll_key_by(crate::layout::ScrollOffset {
+                            x: -paint::LINE_HEIGHT,
+                            y: 0.0,
+                        })
+                    }
+                    Key::Named(NamedKey::ArrowRight) => {
+                        self.scroll_key_by(crate::layout::ScrollOffset {
+                            x: paint::LINE_HEIGHT,
+                            y: 0.0,
+                        })
+                    }
+                    Key::Named(NamedKey::PageDown) => self
+                        .scroll_by(self.layout_tree.viewport_scroll_container().port.height * 0.9),
+                    Key::Named(NamedKey::PageUp) => self
+                        .scroll_by(-self.layout_tree.viewport_scroll_container().port.height * 0.9),
+                    Key::Named(NamedKey::Home) => self.scroll_by(-1.0e9),
+                    Key::Named(NamedKey::End) => self.scroll_by(1.0e9),
                     _ => {}
                 }
             }
@@ -779,7 +855,9 @@ impl ApplicationHandler for BrowserWindow {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.receive_load_events();
-        if self.frame.animations().needs_tick() && self.window.is_some() {
+        if (self.frame.animations().needs_tick() || self.frame.scroll_state().needs_tick())
+            && self.window.is_some()
+        {
             let now = Instant::now();
             if self
                 .animation_deadline
@@ -792,7 +870,16 @@ impl ApplicationHandler for BrowserWindow {
                     self.rebuild_display_list();
                     self.request_redraw();
                 }
-                self.animation_deadline = Some(now + Duration::from_millis(16));
+                self.animation_deadline = if self.frame.animations().needs_tick()
+                    || self.frame.scroll_state().has_animations()
+                {
+                    Some(now + Duration::from_millis(16))
+                } else {
+                    self.frame
+                        .scroll_state()
+                        .next_deadline()
+                        .map(|t| self.animation_origin + Duration::from_secs_f64(t))
+                };
             }
         } else {
             self.animation_deadline = None;
@@ -804,7 +891,9 @@ impl ApplicationHandler for BrowserWindow {
         {
             eprintln!("Could not start font loader: {error}");
         }
-        if self.frame.animations().needs_tick() && self.window.is_some() {
+        if (self.frame.animations().needs_tick() || self.frame.scroll_state().needs_tick())
+            && self.window.is_some()
+        {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 self.animation_deadline.unwrap_or_else(Instant::now),
             ));
@@ -826,6 +915,51 @@ impl ApplicationHandler for BrowserWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_resize_renderer_samples_root_smooth_scroll_without_old_offset_overwrite() {
+        let document = crate::html::parser::parse("<!doctype html><style>html,body{margin:0}html{scroll-behavior:smooth}#s{position:sticky;top:0;height:20px;background:red}#tail{height:800px}</style><div id=s></div><div id=tail></div>").unwrap();
+        let mut frame = Frame::new(url::Url::parse("https://example.test/").unwrap(), document);
+        let font = crate::text::FontContext::bundled();
+        let (mut tree, _, _) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(300, 200),
+            1.0,
+            &font,
+            false,
+            0.0,
+        );
+        tree.request_scroll(
+            None,
+            crate::layout::ScrollOffset { x: 0.0, y: 200.0 },
+            crate::layout::ScrollBehavior::Auto,
+        )
+        .unwrap();
+        frame.retain_scroll_state(&tree);
+        frame.set_animation_time(0.14).unwrap();
+        let (tree, _, scroll) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(600, 400),
+            2.0,
+            &font,
+            false,
+            0.0,
+        );
+        assert!((scroll - 100.0).abs() < 0.01);
+        assert_eq!(tree.viewport_scroll().y, scroll);
+        let snapshot = frame.clone();
+        frame.set_animation_time(1.0).unwrap();
+        let (_, _, scroll) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(600, 400),
+            2.0,
+            &font,
+            false,
+            100.0,
+        );
+        assert_eq!(scroll, 200.0);
+        assert!(!frame.scroll_state().needs_tick());
+        assert_eq!(snapshot.scroll_state().viewport_scroll().y, 100.0);
+    }
     use crate::{css::values::Length, html::parser};
 
     #[test]

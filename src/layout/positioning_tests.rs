@@ -579,12 +579,12 @@ fn position_inset_zindex_cascade_reset_variables_and_strict_grammar() {
     assert_eq!(get("c").position, Position::Fixed);
     assert_eq!(get("c").z_index, ZIndex::Integer(7));
     assert_eq!(get("c").inset.left, LengthOrAuto::Length(Length::Px(-3.0)));
-    assert_eq!(get("d").position, Position::Relative);
+    assert_eq!(get("d").position, Position::Sticky);
     assert_eq!(get("d").z_index, ZIndex::Integer(2));
     assert_eq!(get("d").inset.left, LengthOrAuto::Length(Length::Px(3.0)));
     assert_eq!(get("e").position, Position::Absolute);
     assert_eq!(get("e").z_index, ZIndex::Integer(2));
-    assert_eq!(result.stylesheets.diagnostics.len(), 4);
+    assert_eq!(result.stylesheets.diagnostics.len(), 3);
     let (_, tree) = layout("", 248.0, 200.0);
     assert!(tree.root().rect().height.is_finite());
 }

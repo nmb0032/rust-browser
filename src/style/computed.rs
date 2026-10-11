@@ -513,6 +513,7 @@ pub enum Position {
     #[default]
     Static,
     Relative,
+    Sticky,
     Absolute,
     Fixed,
 }
@@ -584,6 +585,7 @@ impl BoxSizing {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComputedStyle {
+    pub scrolling: super::scrolling::Scrolling,
     pub motion: super::animation::Motion,
     pub container_type: crate::css::container::ContainerType,
     pub container_names: Vec<String>,
@@ -693,6 +695,7 @@ pub struct ComputedStyle {
 impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
+            scrolling: super::scrolling::Scrolling::default(),
             motion: super::animation::Motion::default(),
             container_type: crate::css::container::ContainerType::Normal,
             container_names: Vec::new(),
@@ -799,6 +802,7 @@ impl ComputedStyle {
 
     pub(crate) fn inherit(parent: &Self) -> Self {
         Self {
+            scrolling: parent.scrolling.inherit(),
             custom_properties: parent.custom_properties.clone(),
             direction: parent.direction,
             writing_mode: parent.writing_mode,

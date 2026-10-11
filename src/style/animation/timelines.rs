@@ -176,12 +176,20 @@ impl Snapshot {
         reverse |= min < 0.0 && max == 0.0;
         let (mut value, mut bounds) = if let Some((subject, insets)) = &view {
             let rect = self.nodes.get(subject)?.rect?;
-            let lo = insets[0]
-                .as_ref()
-                .map_or(0.0, |l| l.resolve(source_style.font_size, size));
-            let hi = insets[1]
-                .as_ref()
-                .map_or(0.0, |l| l.resolve(source_style.font_size, size));
+            use crate::css::values::Side;
+            let (low_side, high_side) = if x {
+                (Side::Left, Side::Right)
+            } else {
+                (Side::Top, Side::Bottom)
+            };
+            let lo = insets[usize::from(reverse)].as_ref().map_or_else(
+                || source_style.scrolling.edge(low_side, true, size),
+                |l| l.resolve(source_style.font_size, size),
+            );
+            let hi = insets[usize::from(!reverse)].as_ref().map_or_else(
+                || source_style.scrolling.edge(high_side, true, size),
+                |l| l.resolve(source_style.font_size, size),
+            );
             let near = start + lo;
             let far = start + size - hi;
             let pos = if x { rect.x } else { rect.y };

@@ -145,11 +145,13 @@ HTML/JavaScript milestone 10 has been implemented.
   sources are inactive, leaving underlying styles.
 - View cover/contain/entry/exit/entry-crossing/exit-crossing ranges, percentage
   or computed-length range offsets, and one/two insets are geometry-driven.
-  Insets use the defining element's computed units; `auto` is zero because
-  scroll-padding is not implemented. Pausing retains sampled timeline time.
+  Insets use the defining element's computed units; since 8.19 `auto` uses
+  the source scrollport's physical scroll-padding, with reverse logical axes
+  mapped to the corresponding start/end side. Pausing retains sampled timeline time.
   A completed layout/scroll snapshot feeds one additional sampled layout,
   without an unbounded feedback loop. Scroll-only motion advances on input
-  updates, not continuous document-clock redraws.
+  updates (including 8.19 smooth-scroll samples), not continuous idle
+  document-clock redraws.
 
 ## Explicit finite boundaries
 
@@ -167,7 +169,7 @@ trees or transform lists.
 
 `linear()`, timeline-scope/sibling timeline lookup, scoped/style/container
 keyframes definitions, custom-property keyframe animation, vendor animation
-aliases, scroll-padding, discrete display transitions, transform matrix
+aliases, discrete display transitions, transform matrix
 decomposition/perspective interpolation, unequal-axis rotations, drop-shadow
 interpolation, gradient/mask/path/track-list interpolation and full additive/
 iteration accumulation remain outside this step. These are rejected or

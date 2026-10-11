@@ -45,6 +45,7 @@ pub mod metadata;
 pub mod typography;
 pub use grid::{GridAutoFlow, GridLine, GridRepeat, GridTrack, TrackBreadth, TrackSize};
 mod property;
+pub mod scrolling;
 mod stylesheets;
 mod variables;
 pub(crate) use cascade::resolve_animated;

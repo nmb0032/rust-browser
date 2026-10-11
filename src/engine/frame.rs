@@ -144,10 +144,28 @@ impl Frame {
     }
 
     pub fn fragment_target(&self, fragment: &str) -> Option<FragmentTarget> {
+        self.fragment_target_checked(fragment).ok().flatten()
+    }
+
+    pub fn fragment_target_checked(
+        &self,
+        fragment: &str,
+    ) -> Result<Option<FragmentTarget>, &'static str> {
         if fragment.is_empty() {
-            return Some(FragmentTarget::Top);
+            return Ok(Some(FragmentTarget::Top));
         }
-        let decoded = percent_encoding::percent_decode_str(fragment).decode_utf8_lossy();
+        let bytes = fragment.as_bytes();
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'%'
+                && (!bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+                    || !bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit))
+            {
+                return Err("fragment contains malformed percent encoding");
+            }
+        }
+        let decoded = percent_encoding::percent_decode_str(fragment)
+            .decode_utf8()
+            .map_err(|_| "fragment is not UTF-8")?;
         for by_id in [true, false] {
             let target = self.document.preorder().find(|id| {
                 self.document
@@ -163,12 +181,40 @@ impl Frame {
                     })
             });
             if let Some(id) = target {
-                return Some(FragmentTarget::Node(id));
+                return Ok(Some(FragmentTarget::Node(id)));
             }
         }
-        decoded
+        Ok(decoded
             .eq_ignore_ascii_case("top")
-            .then_some(FragmentTarget::Top)
+            .then_some(FragmentTarget::Top))
+    }
+
+    /// Retained native/headless fragment boundary, after resource layout.
+    pub fn scroll_to_fragment(
+        &mut self,
+        tree: &mut LayoutTree,
+        behavior: layout::ScrollBehavior,
+    ) -> Result<bool, &'static str> {
+        if !self.scroll_state.same_document(tree.scroll_state()) {
+            return Err("fragment layout belongs to another document");
+        }
+        let Some(fragment) = self.url.fragment() else {
+            return Ok(false);
+        };
+        let changed = match self.fragment_target_checked(fragment)? {
+            Some(FragmentTarget::Top) => {
+                tree.request_scroll(None, layout::ScrollOffset::default(), behavior)?
+            }
+            Some(FragmentTarget::Node(node)) => tree.scroll_into_view_with_style(
+                &self.document,
+                node,
+                self.styles.get(node),
+                behavior,
+            )?,
+            None => false,
+        };
+        self.retain_scroll_state(tree);
+        Ok(changed)
     }
 
     pub fn is_same_document(&self, url: &Url) -> bool {
@@ -248,7 +294,9 @@ impl Frame {
     /// Explicit document clock. Native UI supplies a monotonic Instant offset;
     /// headless callers supply deterministic seconds, never sleep.
     pub fn set_animation_time(&mut self, seconds: f64) -> Result<(), &'static str> {
-        self.animations.set_time(seconds)
+        self.animations.set_time(seconds)?;
+        self.scroll_state.set_time(seconds);
+        Ok(())
     }
 
     /// One bounded scroll/layout feedback sample from completed geometry. The
@@ -358,6 +406,9 @@ impl Frame {
             );
             let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
             if next == snapshot {
+                if let Err(error) = tree.sample_scrolling(self.animations.time()) {
+                    eprintln!("Scroll clock: {error}");
+                }
                 self.retain_scroll_state(&tree);
                 return self.sample_scroll_animations(tree, &font);
             }
@@ -373,7 +424,10 @@ impl Frame {
             node_id: None,
             message,
         });
-        let tree = last.expect("at least one feedback layout pass");
+        let mut tree = last.expect("at least one feedback layout pass");
+        if let Err(error) = tree.sample_scrolling(self.animations.time()) {
+            eprintln!("Scroll clock: {error}");
+        }
         self.retain_scroll_state(&tree);
         self.sample_scroll_animations(tree, &font)
     }

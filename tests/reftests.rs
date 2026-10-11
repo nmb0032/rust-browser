@@ -627,6 +627,8 @@ fn scale_root_scroll_panel_scroll_and_fixed_pixels_use_native_spatial_states() {
             offset: ScrollOffset { x: 0.0, y: 30.0 },
         }],
         animation_time: 0.0,
+        snap_scroll: false,
+        fragment: None,
     };
     let actual = screenshot::capture(&path, &workspace.0, &options).unwrap();
     assert_eq!((actual.width, actual.height), (400, 320));

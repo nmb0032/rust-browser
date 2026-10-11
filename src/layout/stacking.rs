@@ -80,7 +80,8 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         let id = group_id(b);
         if id != root && !groups.contains_key(&id) {
             let owner = definitions[&id];
-            let real = owner.style.effects.context()
+            let real = owner.style.position == Position::Sticky
+                || owner.style.effects.context()
                 || matches!(owner.style.z_index, ZIndex::Integer(_))
                     && (owner.style.position != Position::Static || owner.is_layout_item());
             let mut parent = owner.parent_box;
@@ -90,7 +91,8 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 if Some(id) == root_element || id == root {
                     break;
                 }
-                if ancestor.style.effects.context()
+                if ancestor.style.position == Position::Sticky
+                    || ancestor.style.effects.context()
                     || (ancestor.style.position != Position::Static || ancestor.is_layout_item())
                         && matches!(ancestor.style.z_index, ZIndex::Integer(_))
                     || !real

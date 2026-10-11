@@ -8709,8 +8709,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["overscroll-behavior-x", "overscroll-behavior-y"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "overscroll-behavior-block",
@@ -8754,8 +8754,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "overscroll-behavior-y",
@@ -8769,8 +8769,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "padding",
@@ -9226,7 +9226,7 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Keywords(&["absolute", "fixed", "relative", "static"]),
+        grammar: Grammar::Keywords(&["absolute", "fixed", "relative", "static", "sticky"]),
         support: Support::Partial,
     },
     PropertyMetadata {
@@ -10067,8 +10067,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-initial-target",
@@ -10102,8 +10102,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
             "scroll-margin-left",
         ],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-block",
@@ -10117,8 +10117,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["scroll-margin-block-start", "scroll-margin-block-end"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-block-end",
@@ -10132,8 +10132,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-block-start",
@@ -10147,8 +10147,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-bottom",
@@ -10162,8 +10162,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-inline",
@@ -10177,8 +10177,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["scroll-margin-inline-start", "scroll-margin-inline-end"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-inline-end",
@@ -10192,8 +10192,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-inline-start",
@@ -10207,8 +10207,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-left",
@@ -10222,8 +10222,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-right",
@@ -10237,8 +10237,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-margin-top",
@@ -10252,8 +10252,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-marker-group",
@@ -10289,8 +10289,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
             "scroll-padding-left",
         ],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-block",
@@ -10304,8 +10304,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["scroll-padding-block-start", "scroll-padding-block-end"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-block-end",
@@ -10319,8 +10319,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-block-start",
@@ -10334,8 +10334,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-bottom",
@@ -10349,8 +10349,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-inline",
@@ -10364,8 +10364,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["scroll-padding-inline-start", "scroll-padding-inline-end"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-inline-end",
@@ -10379,8 +10379,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-inline-start",
@@ -10394,8 +10394,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-left",
@@ -10409,8 +10409,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-right",
@@ -10424,8 +10424,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-padding-top",
@@ -10439,8 +10439,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-snap-align",
@@ -10454,8 +10454,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-snap-stop",
@@ -10469,8 +10469,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-snap-type",
@@ -10484,8 +10484,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scroll-target-group",
@@ -10559,8 +10559,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "scrollbar-gutter",
@@ -10589,8 +10589,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "shape-image-threshold",
@@ -18260,6 +18260,9 @@ pub(super) fn parser(name: &str) -> Option<Parser> {
         "overflow-wrap" => Parser::Longhand,
         "overflow-x" => Parser::Longhand,
         "overflow-y" => Parser::Longhand,
+        "overscroll-behavior" => Parser::Pair,
+        "overscroll-behavior-x" => Parser::Longhand,
+        "overscroll-behavior-y" => Parser::Longhand,
         "padding" => Parser::Four,
         "padding-block" => Parser::Pair,
         "padding-block-end" => Parser::Longhand,
@@ -18281,9 +18284,37 @@ pub(super) fn parser(name: &str) -> Option<Parser> {
         "rotate" => Parser::Longhand,
         "row-gap" => Parser::Longhand,
         "scale" => Parser::Longhand,
+        "scroll-behavior" => Parser::Longhand,
+        "scroll-margin" => Parser::Four,
+        "scroll-margin-block" => Parser::Pair,
+        "scroll-margin-block-end" => Parser::Longhand,
+        "scroll-margin-block-start" => Parser::Longhand,
+        "scroll-margin-bottom" => Parser::Longhand,
+        "scroll-margin-inline" => Parser::Pair,
+        "scroll-margin-inline-end" => Parser::Longhand,
+        "scroll-margin-inline-start" => Parser::Longhand,
+        "scroll-margin-left" => Parser::Longhand,
+        "scroll-margin-right" => Parser::Longhand,
+        "scroll-margin-top" => Parser::Longhand,
+        "scroll-padding" => Parser::Four,
+        "scroll-padding-block" => Parser::Pair,
+        "scroll-padding-block-end" => Parser::Longhand,
+        "scroll-padding-block-start" => Parser::Longhand,
+        "scroll-padding-bottom" => Parser::Longhand,
+        "scroll-padding-inline" => Parser::Pair,
+        "scroll-padding-inline-end" => Parser::Longhand,
+        "scroll-padding-inline-start" => Parser::Longhand,
+        "scroll-padding-left" => Parser::Longhand,
+        "scroll-padding-right" => Parser::Longhand,
+        "scroll-padding-top" => Parser::Longhand,
+        "scroll-snap-align" => Parser::Longhand,
+        "scroll-snap-stop" => Parser::Longhand,
+        "scroll-snap-type" => Parser::Longhand,
         "scroll-timeline" => Parser::Animation,
         "scroll-timeline-axis" => Parser::Longhand,
         "scroll-timeline-name" => Parser::Longhand,
+        "scrollbar-color" => Parser::Longhand,
+        "scrollbar-width" => Parser::Longhand,
         "table-layout" => Parser::Longhand,
         "text-align" => Parser::TextAlign,
         "text-align-all" => Parser::Longhand,
@@ -18336,6 +18367,30 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         "align-self" => vec![Property::AlignSelf],
         "alignment-baseline" => vec![Property::AlignmentBaseline],
         "all" => vec![
+            Property::Scrolling(super::scrolling::Property::Behavior),
+            Property::Scrolling(super::scrolling::Property::SnapType),
+            Property::Scrolling(super::scrolling::Property::SnapAlign),
+            Property::Scrolling(super::scrolling::Property::SnapStop),
+            Property::Scrolling(super::scrolling::Property::Color),
+            Property::Scrolling(super::scrolling::Property::Width),
+            Property::Scrolling(super::scrolling::Property::OverscrollX),
+            Property::Scrolling(super::scrolling::Property::OverscrollY),
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Top)),
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Right)),
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Bottom)),
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Left)),
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Top)),
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Right)),
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Bottom)),
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Left)),
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineStart)),
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineEnd)),
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockStart)),
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockEnd)),
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineStart)),
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineEnd)),
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockStart)),
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockEnd)),
             Property::Animation(super::animation::Property::Name),
             Property::Animation(super::animation::Property::Duration),
             Property::Animation(super::animation::Property::Delay),
@@ -18951,6 +19006,16 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         )],
         "overflow-x" => vec![Property::OverflowX],
         "overflow-y" => vec![Property::OverflowY],
+        "overscroll-behavior" => vec![
+            Property::Scrolling(super::scrolling::Property::OverscrollX),
+            Property::Scrolling(super::scrolling::Property::OverscrollY),
+        ],
+        "overscroll-behavior-x" => {
+            vec![Property::Scrolling(super::scrolling::Property::OverscrollX)]
+        }
+        "overscroll-behavior-y" => {
+            vec![Property::Scrolling(super::scrolling::Property::OverscrollY)]
+        }
         "padding" => vec![
             Property::Padding(Side::Top),
             Property::Padding(Side::Right),
@@ -18993,12 +19058,94 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         "rotate" => vec![Property::Effect(super::effects::Property::Rotate)],
         "row-gap" => vec![Property::RowGap],
         "scale" => vec![Property::Effect(super::effects::Property::Scale)],
+        "scroll-behavior" => vec![Property::Scrolling(super::scrolling::Property::Behavior)],
+        "scroll-margin" => vec![
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Top)),
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Right)),
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Bottom)),
+            Property::Scrolling(super::scrolling::Property::Margin(Side::Left)),
+        ],
+        "scroll-margin-block" => vec![
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockStart)),
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockEnd)),
+        ],
+        "scroll-margin-block-end" => vec![Property::Logical(LogicalProperty::ScrollMargin(
+            LogicalSide::BlockEnd,
+        ))],
+        "scroll-margin-block-start" => vec![Property::Logical(LogicalProperty::ScrollMargin(
+            LogicalSide::BlockStart,
+        ))],
+        "scroll-margin-bottom" => vec![Property::Scrolling(super::scrolling::Property::Margin(
+            Side::Bottom,
+        ))],
+        "scroll-margin-inline" => vec![
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineStart)),
+            Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineEnd)),
+        ],
+        "scroll-margin-inline-end" => vec![Property::Logical(LogicalProperty::ScrollMargin(
+            LogicalSide::InlineEnd,
+        ))],
+        "scroll-margin-inline-start" => vec![Property::Logical(LogicalProperty::ScrollMargin(
+            LogicalSide::InlineStart,
+        ))],
+        "scroll-margin-left" => vec![Property::Scrolling(super::scrolling::Property::Margin(
+            Side::Left,
+        ))],
+        "scroll-margin-right" => vec![Property::Scrolling(super::scrolling::Property::Margin(
+            Side::Right,
+        ))],
+        "scroll-margin-top" => vec![Property::Scrolling(super::scrolling::Property::Margin(
+            Side::Top,
+        ))],
+        "scroll-padding" => vec![
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Top)),
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Right)),
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Bottom)),
+            Property::Scrolling(super::scrolling::Property::Padding(Side::Left)),
+        ],
+        "scroll-padding-block" => vec![
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockStart)),
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockEnd)),
+        ],
+        "scroll-padding-block-end" => vec![Property::Logical(LogicalProperty::ScrollPadding(
+            LogicalSide::BlockEnd,
+        ))],
+        "scroll-padding-block-start" => vec![Property::Logical(LogicalProperty::ScrollPadding(
+            LogicalSide::BlockStart,
+        ))],
+        "scroll-padding-bottom" => vec![Property::Scrolling(super::scrolling::Property::Padding(
+            Side::Bottom,
+        ))],
+        "scroll-padding-inline" => vec![
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineStart)),
+            Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineEnd)),
+        ],
+        "scroll-padding-inline-end" => vec![Property::Logical(LogicalProperty::ScrollPadding(
+            LogicalSide::InlineEnd,
+        ))],
+        "scroll-padding-inline-start" => vec![Property::Logical(LogicalProperty::ScrollPadding(
+            LogicalSide::InlineStart,
+        ))],
+        "scroll-padding-left" => vec![Property::Scrolling(super::scrolling::Property::Padding(
+            Side::Left,
+        ))],
+        "scroll-padding-right" => vec![Property::Scrolling(super::scrolling::Property::Padding(
+            Side::Right,
+        ))],
+        "scroll-padding-top" => vec![Property::Scrolling(super::scrolling::Property::Padding(
+            Side::Top,
+        ))],
+        "scroll-snap-align" => vec![Property::Scrolling(super::scrolling::Property::SnapAlign)],
+        "scroll-snap-stop" => vec![Property::Scrolling(super::scrolling::Property::SnapStop)],
+        "scroll-snap-type" => vec![Property::Scrolling(super::scrolling::Property::SnapType)],
         "scroll-timeline" => vec![
             Property::Animation(super::animation::Property::ScrollAxis),
             Property::Animation(super::animation::Property::ScrollName),
         ],
         "scroll-timeline-axis" => vec![Property::Animation(super::animation::Property::ScrollAxis)],
         "scroll-timeline-name" => vec![Property::Animation(super::animation::Property::ScrollName)],
+        "scrollbar-color" => vec![Property::Scrolling(super::scrolling::Property::Color)],
+        "scrollbar-width" => vec![Property::Scrolling(super::scrolling::Property::Width)],
         "table-layout" => vec![Property::TableLayout],
         "text-align" => vec![Property::TextAlignAll, Property::TextAlignLast],
         "text-align-all" => vec![Property::TextAlignAll],
@@ -19090,6 +19237,56 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
 impl Property {
     pub(super) fn name(self) -> &'static str {
         match self {
+            Self::Scrolling(super::scrolling::Property::Behavior) => "scroll-behavior",
+            Self::Scrolling(super::scrolling::Property::SnapType) => "scroll-snap-type",
+            Self::Scrolling(super::scrolling::Property::SnapAlign) => "scroll-snap-align",
+            Self::Scrolling(super::scrolling::Property::SnapStop) => "scroll-snap-stop",
+            Self::Scrolling(super::scrolling::Property::Color) => "scrollbar-color",
+            Self::Scrolling(super::scrolling::Property::Width) => "scrollbar-width",
+            Self::Scrolling(super::scrolling::Property::OverscrollX) => "overscroll-behavior-x",
+            Self::Scrolling(super::scrolling::Property::OverscrollY) => "overscroll-behavior-y",
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Top)) => "scroll-padding-top",
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Right)) => {
+                "scroll-padding-right"
+            }
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Bottom)) => {
+                "scroll-padding-bottom"
+            }
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Left)) => {
+                "scroll-padding-left"
+            }
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Top)) => "scroll-margin-top",
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Right)) => {
+                "scroll-margin-right"
+            }
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Bottom)) => {
+                "scroll-margin-bottom"
+            }
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Left)) => "scroll-margin-left",
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineStart)) => {
+                "scroll-padding-inline-start"
+            }
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineEnd)) => {
+                "scroll-padding-inline-end"
+            }
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockStart)) => {
+                "scroll-padding-block-start"
+            }
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockEnd)) => {
+                "scroll-padding-block-end"
+            }
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineStart)) => {
+                "scroll-margin-inline-start"
+            }
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineEnd)) => {
+                "scroll-margin-inline-end"
+            }
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockStart)) => {
+                "scroll-margin-block-start"
+            }
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockEnd)) => {
+                "scroll-margin-block-end"
+            }
             Self::Animation(super::animation::Property::Name) => "animation-name",
             Self::Animation(super::animation::Property::Duration) => "animation-duration",
             Self::Animation(super::animation::Property::Delay) => "animation-delay-start",
@@ -19346,6 +19543,30 @@ impl Property {
     }
     pub(super) fn inherited(self) -> bool {
         match self {
+            Self::Scrolling(super::scrolling::Property::Behavior) => false,
+            Self::Scrolling(super::scrolling::Property::SnapType) => false,
+            Self::Scrolling(super::scrolling::Property::SnapAlign) => false,
+            Self::Scrolling(super::scrolling::Property::SnapStop) => false,
+            Self::Scrolling(super::scrolling::Property::Color) => true,
+            Self::Scrolling(super::scrolling::Property::Width) => false,
+            Self::Scrolling(super::scrolling::Property::OverscrollX) => false,
+            Self::Scrolling(super::scrolling::Property::OverscrollY) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Top)) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Right)) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Bottom)) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Left)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Top)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Right)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Bottom)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Left)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineStart)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineEnd)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockStart)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockEnd)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineStart)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineEnd)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockStart)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockEnd)) => false,
             Self::Animation(super::animation::Property::Name) => false,
             Self::Animation(super::animation::Property::Duration) => false,
             Self::Animation(super::animation::Property::Delay) => false,
@@ -19548,6 +19769,30 @@ impl Property {
     }
     pub(super) fn computes_absolute_length(self) -> bool {
         match self {
+            Self::Scrolling(super::scrolling::Property::Behavior) => false,
+            Self::Scrolling(super::scrolling::Property::SnapType) => false,
+            Self::Scrolling(super::scrolling::Property::SnapAlign) => false,
+            Self::Scrolling(super::scrolling::Property::SnapStop) => false,
+            Self::Scrolling(super::scrolling::Property::Color) => false,
+            Self::Scrolling(super::scrolling::Property::Width) => false,
+            Self::Scrolling(super::scrolling::Property::OverscrollX) => false,
+            Self::Scrolling(super::scrolling::Property::OverscrollY) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Top)) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Right)) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Bottom)) => false,
+            Self::Scrolling(super::scrolling::Property::Padding(Side::Left)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Top)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Right)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Bottom)) => false,
+            Self::Scrolling(super::scrolling::Property::Margin(Side::Left)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineStart)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineEnd)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockStart)) => false,
+            Self::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockEnd)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineStart)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineEnd)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockStart)) => false,
+            Self::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockEnd)) => false,
             Self::Animation(super::animation::Property::Name) => false,
             Self::Animation(super::animation::Property::Duration) => false,
             Self::Animation(super::animation::Property::Delay) => false,
@@ -19751,6 +19996,30 @@ impl Property {
 }
 pub(super) fn initial_css(property: Property) -> &'static str {
     match property {
+        Property::Scrolling(super::scrolling::Property::Behavior) => "auto",
+        Property::Scrolling(super::scrolling::Property::SnapType) => "none",
+        Property::Scrolling(super::scrolling::Property::SnapAlign) => "none",
+        Property::Scrolling(super::scrolling::Property::SnapStop) => "normal",
+        Property::Scrolling(super::scrolling::Property::Color) => "auto",
+        Property::Scrolling(super::scrolling::Property::Width) => "auto",
+        Property::Scrolling(super::scrolling::Property::OverscrollX) => "auto",
+        Property::Scrolling(super::scrolling::Property::OverscrollY) => "auto",
+        Property::Scrolling(super::scrolling::Property::Padding(Side::Top)) => "auto",
+        Property::Scrolling(super::scrolling::Property::Padding(Side::Right)) => "auto",
+        Property::Scrolling(super::scrolling::Property::Padding(Side::Bottom)) => "auto",
+        Property::Scrolling(super::scrolling::Property::Padding(Side::Left)) => "auto",
+        Property::Scrolling(super::scrolling::Property::Margin(Side::Top)) => "0",
+        Property::Scrolling(super::scrolling::Property::Margin(Side::Right)) => "0",
+        Property::Scrolling(super::scrolling::Property::Margin(Side::Bottom)) => "0",
+        Property::Scrolling(super::scrolling::Property::Margin(Side::Left)) => "0",
+        Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineStart)) => "auto",
+        Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::InlineEnd)) => "auto",
+        Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockStart)) => "auto",
+        Property::Logical(LogicalProperty::ScrollPadding(LogicalSide::BlockEnd)) => "auto",
+        Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineStart)) => "0",
+        Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::InlineEnd)) => "0",
+        Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockStart)) => "0",
+        Property::Logical(LogicalProperty::ScrollMargin(LogicalSide::BlockEnd)) => "0",
         Property::Animation(super::animation::Property::Name) => "none",
         Property::Animation(super::animation::Property::Duration) => "auto",
         Property::Animation(super::animation::Property::Delay) => "0s",
@@ -20081,6 +20350,7 @@ pub(super) fn simple_value(property: Property, tokens: &[Component]) -> Option<V
             "fixed" => Value::Position(Position::Fixed),
             "relative" => Value::Position(Position::Relative),
             "static" => Value::Position(Position::Static),
+            "sticky" => Value::Position(Position::Sticky),
             _ => return None,
         }),
         Property::OverflowX
@@ -20398,6 +20668,9 @@ pub(super) static SAMPLES: &[(&str, &str)] = &[
     ("overflow-wrap", "anywhere"),
     ("overflow-x", "hidden"),
     ("overflow-y", "scroll"),
+    ("overscroll-behavior", "contain none"),
+    ("overscroll-behavior-x", "contain"),
+    ("overscroll-behavior-y", "none"),
     ("padding", "1px 2px 3px 4px"),
     ("padding-block", "2px 3px"),
     ("padding-block-end", "2px"),
@@ -20419,9 +20692,37 @@ pub(super) static SAMPLES: &[(&str, &str)] = &[
     ("rotate", "y 30deg"),
     ("row-gap", "8px"),
     ("scale", "2 1 1"),
+    ("scroll-behavior", "smooth"),
+    ("scroll-margin", "1px 2px 3px 4px"),
+    ("scroll-margin-block", "2px 4px"),
+    ("scroll-margin-block-end", "2px"),
+    ("scroll-margin-block-start", "2px"),
+    ("scroll-margin-bottom", "2em"),
+    ("scroll-margin-inline", "2px 4px"),
+    ("scroll-margin-inline-end", "2px"),
+    ("scroll-margin-inline-start", "2px"),
+    ("scroll-margin-left", "4px"),
+    ("scroll-margin-right", "-2px"),
+    ("scroll-margin-top", "4px"),
+    ("scroll-padding", "1px 2px 3px 4px"),
+    ("scroll-padding-block", "2px auto"),
+    ("scroll-padding-block-end", "2px"),
+    ("scroll-padding-block-start", "2px"),
+    ("scroll-padding-bottom", "2em"),
+    ("scroll-padding-inline", "2px auto"),
+    ("scroll-padding-inline-end", "2px"),
+    ("scroll-padding-inline-start", "2px"),
+    ("scroll-padding-left", "4px"),
+    ("scroll-padding-right", "auto"),
+    ("scroll-padding-top", "10%"),
+    ("scroll-snap-align", "start center"),
+    ("scroll-snap-stop", "always"),
+    ("scroll-snap-type", "both mandatory"),
     ("scroll-timeline", "--progress inline"),
     ("scroll-timeline-axis", "inline"),
     ("scroll-timeline-name", "--progress"),
+    ("scrollbar-color", "red blue"),
+    ("scrollbar-width", "thin"),
     ("table-layout", "fixed"),
     ("text-align", "center"),
     ("text-align-all", "center"),

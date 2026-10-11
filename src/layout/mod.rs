@@ -37,7 +37,8 @@ mod writing;
 
 pub use geometry::{ActualRect, Rect};
 pub use overflow::{
-    ClipRect, ScrollContainer, ScrollOffset, ScrollRange, ScrollState, Scrollbar, SpatialState,
+    ClipRect, ScrollBehavior, ScrollContainer, ScrollOffset, ScrollRange, ScrollState, Scrollbar,
+    SpatialState,
 };
 pub(crate) use stacking::{PaintPhase, paint_order};
 pub(crate) use tree::build_layout_tree_with_marker_resources;
@@ -65,6 +66,8 @@ mod line_break_tests;
 mod overflow_tests;
 #[cfg(test)]
 mod positioning_tests;
+#[cfg(test)]
+mod scrolling_tests;
 #[cfg(test)]
 mod tests;
 mod transform;
