@@ -25,6 +25,7 @@ pub(super) struct CachedCss {
 
 pub(super) struct CssLoader<'a, C> {
     pub page: &'a url::Url,
+    pub policy: &'a super::resource_policy::ResourcePolicy,
     pub cancelled: &'a C,
     pub declaration_context: style::DeclarationContext,
     pub cache: HashMap<url::Url, Result<Arc<CachedCss>, String>>,
@@ -45,6 +46,7 @@ impl<C: Fn() -> bool> CssLoader<'_, C> {
     ) -> Result<Arc<CachedCss>, Box<dyn Error>> {
         check_cancelled(self.cancelled)?;
         check_page_reference(self.page, url)?;
+        self.policy.check(url)?;
         if depth > MAX_IMPORT_DEPTH {
             return Err(io::Error::other("CSS import depth exceeds 16").into());
         }

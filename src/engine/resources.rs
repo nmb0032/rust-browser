@@ -26,10 +26,12 @@ pub(super) fn load_resources(
 ) -> Result<(), Box<dyn Error>> {
     let base = document_base_url(&frame.document, &frame.url);
     let page_url = frame.url.clone();
+    let policy = frame.resource_policy.clone();
     let mut external = HashMap::new();
     let mut image_cache = HashMap::new();
     let mut css_loader = super::css_imports::CssLoader {
         page: &page_url,
+        policy: &policy,
         cancelled,
         declaration_context: style::DeclarationContext::for_document(&frame.document),
         cache: HashMap::new(),
@@ -101,6 +103,7 @@ pub(super) fn load_resources(
         let result = (|| -> Result<(), Box<dyn Error>> {
             let mut url = base.join(reference)?;
             check_page_reference(&frame.url, &url)?;
+            frame.resource_policy.check(&url)?;
             url.set_fragment(None);
             if is_sheet {
                 let sheet = css_loader.fetch(&url, id, &mut diagnostics, &mut HashSet::new(), 0)?;

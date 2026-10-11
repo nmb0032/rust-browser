@@ -141,15 +141,24 @@ impl WebFonts {
         source: &FontSource,
         base: &url::Url,
         page: &url::Url,
+        policy: &super::resource_policy::ResourcePolicy,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Arc<FontFace>, String> {
         let source_key = match source {
+            FontSource::Local(_) if policy.local() => {
+                return Err(
+                    "local() system font discovery is unsupported in headless tests".into(),
+                );
+            }
             FontSource::Local(name) => format!("local:{name}"),
             FontSource::Url(reference) => {
                 if !reference.starts_with("data:") && reference.len() > 8192 {
                     return Err("font URL exceeds 8192 bytes".into());
                 }
                 let mut url = base.join(reference).map_err(|e| e.to_string())?;
+                if url.scheme() != "data" {
+                    policy.check(&url).map_err(|e| e.to_string())?;
+                }
                 if url.fragment().is_some() {
                     return Err("font URL collection fragments are unsupported; use local() for named collection faces".into());
                 }
@@ -261,6 +270,7 @@ pub(super) fn load(
                 source,
                 rule.url.as_ref().unwrap_or(&base),
                 &frame.url,
+                &frame.resource_policy,
                 cancelled,
             );
             check_cancelled(cancelled)?;

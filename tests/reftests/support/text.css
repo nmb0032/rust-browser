@@ -1,0 +1,4 @@
+@import "fonts.css";
+html { margin: 0; padding: 0; }
+body { margin: 0; font: italic 24px/32px Fixture; }
+.line { height: 32px; }

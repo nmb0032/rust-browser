@@ -1,0 +1,16 @@
+<!doctype html>
+<title>Flex distribution and two-dimensional explicit grid tracks and gaps</title>
+<link rel="help" href="https://www.w3.org/TR/css-flexbox-1/#resolve-flexible-lengths">
+<link rel="help" href="https://www.w3.org/TR/css-grid-1/#track-sizing">
+<link rel="match" href="references/flex-grid-ref.html">
+<style>
+html { margin: 0; padding: 0; }
+body { margin: 0; }
+.flex { display: flex; width: 120px; height: 40px; gap: 10px; }
+.flex div { flex: 1 1 50px; }
+.grid { display: grid; width: 130px; grid-template-columns: 40px 80px; grid-template-rows: 20px 20px; gap: 10px; margin-top: 10px; }
+.green { background: green; } .blue { background: blue; }
+.red { background: red; } .orange { background: orange; }
+</style>
+<div class="flex"><div class="green"></div><div class="blue"></div></div>
+<div class="grid"><div class="green"></div><div class="blue"></div><div class="red"></div><div class="orange"></div></div>

@@ -23,6 +23,15 @@ jobs:
         env:
           HTML5LIB_STRICT: "1"
         run: cargo test --lib --tests -- --show-output
+      - name: Native headless WPT-format reftests (finite supported subset)
+        run: cargo run --quiet -- --reftests tests/reftests --artifacts target/reftests/ci
+      - name: Reftest failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-reftest-evidence
+          path: target/reftests/
+          if-no-files-found: ignore
 
   parser-fuzz:
     runs-on: ubuntu-latest

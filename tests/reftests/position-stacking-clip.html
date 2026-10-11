@@ -1,0 +1,14 @@
+<!doctype html>
+<title>Relative containing block, absolute stacking, clipping and fixed viewport positioning</title>
+<link rel="help" href="https://www.w3.org/TR/CSS22/visuren.html#positioning-scheme">
+<link rel="match" href="references/position-stacking-clip-ref.html">
+<style>
+html { margin: 0; padding: 0; }
+body { margin: 0; height: 1000px; }
+main { position: relative; left: 20px; top: 20px; width: 100px; height: 80px; overflow: hidden; background: #ddd; }
+main div { position: absolute; left: 30px; top: 20px; height: 20px; }
+.front { width: 100px; background: green; z-index: 1; }
+.back { width: 40px; background: red; z-index: 0; }
+.fixed { position: fixed; left: 20px; top: 120px; width: 30px; height: 20px; background: blue; }
+</style>
+<main><div class="front"></div><div class="back"></div></main><div class="fixed"></div>

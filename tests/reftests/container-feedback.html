@@ -1,0 +1,11 @@
+<!doctype html>
+<title>Headless rendering converges size container queries before capture</title>
+<link rel="help" href="https://www.w3.org/TR/css-contain-3/#container-queries">
+<link rel="match" href="references/container-feedback-ref.html">
+<style>
+html, body { margin: 0; padding: 0; }
+main { container-type: inline-size; width: 120px; }
+div { width: 20px; height: 20px; background: green; }
+@container (min-width: 100px) { div { width: 120px; } }
+</style>
+<main><div></div></main>

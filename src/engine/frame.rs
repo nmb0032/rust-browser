@@ -35,6 +35,7 @@ pub struct Frame {
     collected_stylesheets: StylesheetCollection,
     fonts: crate::text::FontContext,
     pub(super) web_fonts: super::web_fonts::WebFonts,
+    pub(crate) resource_policy: super::resource_policy::ResourcePolicy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +77,7 @@ impl Frame {
             collected_stylesheets,
             fonts: crate::text::FontContext::bundled(),
             web_fonts: super::web_fonts::WebFonts::default(),
+            resource_policy: super::resource_policy::ResourcePolicy::default(),
         };
         frame.refresh_target();
         frame

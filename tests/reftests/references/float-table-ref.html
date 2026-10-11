@@ -1,0 +1,14 @@
+<!doctype html>
+<title>Independent rectangles, no floats or tables</title>
+<style>
+html { margin: 0; padding: 0; }
+body { margin: 0; position: relative; }
+div { position: absolute; }
+.float { left: 0; top: 0; width: 30px; height: 30px; background: green; }
+.behind { left: 30px; top: 0; width: 70px; height: 10px; background: blue; }
+.a { left: 0; top: 30px; width: 50px; height: 20px; background: green; }
+.b { left: 50px; top: 30px; width: 50px; height: 20px; background: blue; }
+.c { left: 0; top: 50px; width: 50px; height: 20px; background: red; }
+.d { left: 50px; top: 50px; width: 50px; height: 20px; background: orange; }
+</style>
+<div class="float"></div><div class="behind"></div><div class="a"></div><div class="b"></div><div class="c"></div><div class="d"></div>

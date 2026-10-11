@@ -1,0 +1,17 @@
+<!doctype html>
+<title>Float paint ordering, clearance and fixed table cells</title>
+<link rel="help" href="https://www.w3.org/TR/CSS22/visuren.html#floats">
+<link rel="help" href="https://www.w3.org/TR/CSS22/tables.html#fixed-table-layout">
+<link rel="match" href="references/float-table-ref.html">
+<style>
+html { margin: 0; padding: 0; }
+body { margin: 0; }
+.float { float: left; width: 30px; height: 30px; background: green; }
+.behind { width: 100px; height: 10px; background: blue; }
+table { clear: both; width: 100px; table-layout: fixed; border-spacing: 0; }
+td { height: 20px; padding: 0; }
+.green { background: green; } .blue { background: blue; }
+.red { background: red; } .orange { background: orange; }
+</style>
+<div class="float"></div><div class="behind"></div>
+<table><tr><td class="green"></td><td class="blue"></td></tr><tr><td class="red"></td><td class="orange"></td></tr></table>

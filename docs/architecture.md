@@ -2721,11 +2721,50 @@ and the CSSOM parts covered here meet the conformance gate.
   advanced table height-distribution/conformance algorithms or unsupported
   groove/ridge/inset/outset border styles are claimed. Non-baseline ordinary
   inline `vertical-align` diagnoses baseline fallback; top/middle/bottom cell
-  alignment is supported. **8.13 remains unchecked; milestone 8 is not complete.**
-- [ ] **8.13 Add reftests.** Render test pages and compare screenshots with
+  alignment is supported. **Milestone 8 is not complete.**
+- [x] **8.13 Add reftests.** Render test pages and compare screenshots with
   reference pages or committed images. Use the WPT reftest format so the
   same tests run through `wptrunner` after 9.8.
   *You'll see:* layout regressions caught automatically.
+
+  Implemented a deterministic **native headless screenshot API/CLI** and a
+  bounded local WPT-format reftest runner. Both pages use the production Frame
+  resource loader, CSS/container feedback, bundled/document URL font context,
+  rustybuzz shaping, layout, display list and software rasterizer, at explicit
+  CSS viewport/device scale/root and panel scroll offsets. No desktop window,
+  alternate renderer, system font discovery or network is needed. Resource and
+  readiness failures are explicit; canonical local roots prevent resource
+  escapes. PNG decoding/dimensions and graph/evidence work are bounded.
+
+  Parsed `rel=match/mismatch` links use the first HTML base; match alternatives
+  are OR, mismatches are AND, chained references are checked, cycles and invalid
+  references fail. Exact sRGB RGBA comparison is the default; WPT fuzzy metadata
+  uses inclusive per-channel maximum/pixel-count ranges, including exact scalar
+  values and reference-specific overrides, with no hidden tolerance. The CLI
+  returns nonzero on failures and writes a manifest with metrics/reference URLs
+  and actual/expected/diff evidence under a dedicated target/output directory.
+
+  **Eight independent-reference HTML fixtures** cover anonymous blocks/margins,
+  inline baselines/white-space/ligatures/static URL fonts, container feedback,
+  positioning/stacking/clips, flex/grid and floats/tables, plus a proved pixel
+  mismatch. They pass exactly at device scales **1 and 2**. **Twelve runner
+  contracts** verify fuzzy boundaries, metadata/base/escaped URL handling,
+  both-axis root/panel/fixed paint, bounded PNG/alpha/size handling, parser
+  recovery, missing/cyclic/nonlocal/readiness errors and display-free reproducible
+  CLI PNGs. A deliberately wrong reference proves nonzero exit and nonzero diff
+  artifacts. CI invokes the actual runner and captures failure evidence.
+
+  Validation: **762 strict all-features Rust tests**, formatting and strict
+  all-target/all-feature Clippy pass. No dependency, font asset, generator or
+  layout-feature changes were necessary. Commands, comparison contracts,
+  licenses and limits are documented in [Native reftests](reftests.md).
+
+  **Not wptrunner/full CSS conformance:** scripts, `on*` handlers, testdriver,
+  `reftest-wait`/`test-wait` are explicitly unsupported (nonzero failure), not
+  compared before ready. JavaScript/WebDriver readiness remains pending 9.8/10;
+  PNG links and native scroll options are local conveniences, not a WPT parity
+  claim. The ordinary HTML reference-link format is retained for later
+  wptrunner use. **8.14 remains unchecked; milestone 8 is not complete.**
 - [ ] **8.14 Support writing modes and bidirectional text.** Implement the
   Unicode Bidirectional Algorithm (UAX #9), CSS Writing Modes 4, logical
   properties, and vertical text.

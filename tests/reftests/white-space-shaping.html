@@ -1,0 +1,11 @@
+<!doctype html>
+<title>Collapsed whitespace and ligatures across baseline-aligned inline spans</title>
+<base href="support/">
+<link rel="help" href="https://www.w3.org/TR/css-text-3/#white-space-property">
+<link rel="match" href="../references/red-ref.html">
+<link rel="match" href="../references/white-space-shaping-ref.html">
+<link rel="mismatch" href="../references/red-ref.html">
+<link rel="stylesheet" href="text.css">
+<div id="shaped" class="line">AV<span>ffi</span>    0xHwater</div>
+<div class="line">AV<span>ffi</span>
+  0xHwater</div>
