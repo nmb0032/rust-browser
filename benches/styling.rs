@@ -48,7 +48,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         assert!(resolved.stylesheets.diagnostics.is_empty());
         let mut reference = layout::build_layout_tree_with_styles(&document, &resolved.styles);
         reference.layout(800.0, &font);
-        let wrapper = &reference.root().children()[0];
+        let wrapper_id = document
+            .preorder()
+            .find(|&node| {
+                document
+                    .node(node)
+                    .unwrap()
+                    .as_element()
+                    .is_some_and(|element| element.tag_name() == "div")
+            })
+            .expect("benchmark wrapper");
+        let wrapper = find_box(reference.root(), wrapper_id).expect("wrapper layout box");
         let paragraph = &wrapper.children()[0];
         assert_eq!(paragraph.style().color, Some(0x008000));
         assert!(
@@ -85,6 +95,90 @@ fn main() -> Result<(), Box<dyn Error>> {
             millis(median(layout_times))
         );
     }
+    #[cfg(feature = "style-bench-reference")]
+    matching_comparison()?;
+    #[cfg(not(feature = "style-bench-reference"))]
+    println!(
+        "\nFull matching comparison: cargo bench --bench styling --features style-bench-reference"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "style-bench-reference")]
+fn matching_comparison() -> Result<(), Box<dyn Error>> {
+    use style::{BenchmarkMatching, resolve_for_benchmark};
+
+    const BRANCHES: usize = 400;
+    const PER_BRANCH: usize = 20;
+    const RULES: usize = 500;
+    println!(
+        "\nMatching comparison: {} paragraphs + {BRANCHES} branches, {RULES} author rules.",
+        BRANCHES * PER_BRANCH
+    );
+    println!("Same DOM/CSS per mode; full resolution, including collection and compilation.");
+    println!("Rotating timed mode order; all computed styles compared outside timing.");
+    println!("Rightmost keys      Unindexed      Index only     Index + Bloom   Total speedup");
+    for selective in [true, false] {
+        let mut source = String::from("<!doctype html><style>");
+        for rule in 0..RULES {
+            if selective {
+                write!(source, ".branch p.c{rule}")?;
+            } else {
+                write!(source, ".branch.b{rule} p")?;
+            }
+            write!(
+                source,
+                " {{color:green; padding:0.1em; margin:1px; width:80%}}"
+            )?;
+        }
+        source.push_str("</style><main>");
+        for branch in 0..BRANCHES {
+            write!(source, "<section class='branch b{branch}'>")?;
+            for child in 0..PER_BRANCH {
+                write!(
+                    source,
+                    "<p class='c{}'>Styled words.</p>",
+                    (branch * PER_BRANCH + child) % RULES
+                )?;
+            }
+            source.push_str("</section>");
+        }
+        source.push_str("</main>");
+        let document = parser::parse(&source).expect("matching benchmark HTML must parse");
+        let reference = resolve_for_benchmark(&document, BenchmarkMatching::Unindexed);
+        assert!(reference.stylesheets.diagnostics.is_empty());
+        for mode in [
+            BenchmarkMatching::Indexed,
+            BenchmarkMatching::IndexedWithBloom,
+        ] {
+            let result = resolve_for_benchmark(&document, mode);
+            assert!(result.stylesheets.diagnostics.is_empty());
+            for node in document.preorder() {
+                assert_eq!(result.styles.get(node), reference.styles.get(node));
+            }
+        }
+        let mut times: [Vec<Duration>; 3] = std::array::from_fn(|_| Vec::with_capacity(SAMPLES));
+        for sample in 0..SAMPLES {
+            for offset in 0..3 {
+                let mode = (sample + offset) % 3;
+                times[mode].push(time(|| match mode {
+                    0 => resolve_for_benchmark(black_box(&document), BenchmarkMatching::Unindexed),
+                    1 => resolve_for_benchmark(black_box(&document), BenchmarkMatching::Indexed),
+                    _ => style::resolve(black_box(&document)),
+                }));
+            }
+        }
+        let [baseline, indexed, optimized] = times.map(median).map(millis);
+        let label = if selective {
+            "Class-selective"
+        } else {
+            "Shared tag / ancestors"
+        };
+        println!(
+            "{label:<22} {baseline:>9.3} ms {indexed:>11.3} ms {optimized:>13.3} ms {:>10.2}x",
+            baseline / optimized,
+        );
+    }
     Ok(())
 }
 
@@ -93,6 +187,17 @@ fn time<T>(operation: impl FnOnce() -> T) -> Duration {
     let result = operation();
     black_box(&result);
     start.elapsed()
+}
+
+fn find_box(root: &layout::LayoutBox, id: rust_browser::dom::NodeId) -> Option<&layout::LayoutBox> {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if node.dom_node_id() == id {
+            return Some(node);
+        }
+        pending.extend(node.children());
+    }
+    None
 }
 
 fn median(mut samples: Vec<Duration>) -> Duration {

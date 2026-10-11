@@ -295,6 +295,7 @@ impl<'a> Parser<'a> {
                             name,
                             prelude,
                             block: Some(block),
+                            imported: None,
                         })
                     });
                 }
@@ -316,6 +317,7 @@ impl<'a> Parser<'a> {
                 self.tokens[prelude_end].span.start.byte_offset,
             ),
             block: None,
+            imported: None,
         }))
     }
 
@@ -509,6 +511,10 @@ impl<'a> Parser<'a> {
                 self.tokens[colon].span.end.byte_offset,
                 self.tokens[value_end].span.start.byte_offset,
             ),
+            tokens: self.tokens[value_start..value_end]
+                .iter()
+                .map(|token| token.kind.clone())
+                .collect(),
             important: important_start.is_some(),
         })
     }

@@ -1,5 +1,6 @@
 //! A naive single-document browser engine; session history and Fetch come later.
 
+mod css_imports;
 mod frame;
 mod history;
 mod loader;

@@ -16,6 +16,7 @@ Stylesheet 1 (<style>)
     color: rebeccapurple;
     border-width: 3px;
     border-color: #639;
+    border-style: solid;
   }
   .hidden {
     display: none;

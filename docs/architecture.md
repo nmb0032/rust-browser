@@ -58,17 +58,17 @@ keeping the codebase small enough to learn from.
 
 | Area | Location | Status |
 | --- | --- | --- |
-| App entry | `src/app` | Starts interactive browsing or resource-aware DOM/stylesheet/CSS-token/layout/display-list dumps. |
-| Engine | `src/engine` | Owns document snapshots, final/base URLs, external resources, cancellable loading, and bounded back/forward history. |
+| App entry | `src/app` | Starts interactive browsing or resource-aware DOM/stylesheet/CSS-token/typed-style/value-stage/layout/display-list dumps. |
+| Engine | `src/engine` | Owns document snapshots, final/base URLs, retained stylesheets/import graphs/resources, viewport/interaction restyling, bounded real-layout container feedback, cancellable loading, and bounded back/forward history. |
 | Networking | `src/net` | Bounded HTTP/file bodies, GET redirects, response metadata, raw document-byte streaming, and explicit UTF-8 text utilities. |
 | HTML/XML | `src/html`, `src/xml` | Resumable UTF-8/lossless UTF-16 tokenization, insertion-mode tree construction, contextual fragments, encoding sniffing/restarts, and bounded XML parsing; all applicable current-WHATWG fixture outputs and diagnostics pass. |
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
-| CSS | `src/css` | Resumable CSS Syntax tokenizer and token-based rule parsing with bounded diagnostics/recovery; source-retaining AST, attribute/combinator/structural selector matching and specificity, and color/length value parsers. |
-| Style | `src/style` | Embedded/external sheets in document order, inline CSS, user-agent defaults, cascade, and inherited computed styles keyed by `NodeId`. |
-| Layout | `src/layout` | Block/inline boxes, image sizing, spacing, text, list markers, and naive fragment-aware hit testing. |
+| CSS | `src/css` | Resumable CSS Syntax tokenizer and token-based rule parsing with bounded diagnostics/recovery; source-retaining AST, three-valued MQ range/dimension/preference/input conditions, typed container establishment, attribute/combinator/structural selector matching and specificity, colors, dimension-checked bounded math, contextual lengths including container units, and angle/time/resolution parsers. |
+| Style | `src/style` | Embedded/external/inline and optional user sheets, origin/importance/layer cascade with rollback candidates, nested media/supports/container conditions, nesting and scoped/namespace-aware matching, bounded typed registrations, indexed/Bloom matching, typed values and atomic shorthands, token-based custom properties, font/root/viewport/container length computation against immutable real layout snapshots, inherited styles keyed by `NodeId`, and `--dump=style`. |
+| Layout | `src/layout` | Block/inline boxes, percentage/math used values, non-replaced block size containment and definite length heights, image sizing, spacing, text, list markers, naive fragment-aware hit testing, and explicit device-pixel rectangle quantization. |
 | Paint | `src/paint` | Rasterizes text, backgrounds, borders, and shared RGBA images with clipping, scaling, alpha blending, and scrolling. |
 | Media | `src/media` | Bounded PNG/JPEG/GIF/WebP decoding, with shared intrinsic-size image data. |
-| Window | `src/ui` | Click navigation, back/forward shortcuts, scroll restoration, and current URL/loading/error titles. |
+| Window | `src/ui` | CSS-pixel resize/scale/theme restyle-layout-paint with bounded container and pointer feedback, click navigation, back/forward shortcuts, scroll restoration, and current URL/loading/error titles. |
 
 The DOM arena with stable IDs is a good foundation. The CSS rule parser used
 in Milestone 4 has been rebuilt on the tokenizer in steps 7.1 and 7.2.
@@ -415,7 +415,7 @@ its current measurements are recorded below.
   *You'll see:* inline styles overriding stylesheet rules.
 
 **Try it:** `cargo run -- tests/pages/styles.html`, or add
-`--dump=stylesheets`, `--dump=layout`, or `--dump=display-list`.
+`--dump=stylesheets`, `--dump=style`, `--dump=layout`, or `--dump=display-list`.
 Stylesheet dumps have a committed snapshot. Unit and pipeline tests cover
 specificity, source order, inline priority, `!important`, inheritance,
 shorthand/longhand interactions, box geometry, paint order, scrolling, and
@@ -426,8 +426,12 @@ compound selectors, the universal selector, and descendants. Step 7.3 adds
 token-based attributes, child/sibling combinators, structural pseudo-classes,
 and `:not()`.
 `css/values/` handles named colors, three/six-digit hex, `transparent`,
-`currentcolor`, and `px`/`em`/`%` lengths. `style/` collects and compiles sheets
-and resolves the cascade independently of layout. The built-in
+`currentcolor`, opaque `rgb()` (added in 7.5), and `px`/`em`/`%` lengths.
+Step 7.10's local substeps extend the color pipeline to typed Color 4/5
+functions, interpolation, relative colors, and per-color alpha, while retaining
+the sRGB framebuffer and leaving the external conformance umbrella open.
+`style/` collects and compiles sheets and resolves the cascade independently
+of layout. The built-in
 `style/user_agent.css` preserves the earlier heading, emphasis, paragraph,
 and list defaults. `layout/` separates box generation, geometry, block flow,
 and inline flow. Element widths use the content-box model; percentages for
@@ -441,8 +445,9 @@ selectors and typed values are still ignored with diagnostics. At-rules,
 media-query semantics, advanced selectors, alpha colors, margin collapsing,
 auto margins, and font-face selection are still deferred. `font-family` is
 computed and inherited, but rasterization uses the bundled face. Nonzero
-border widths paint solid rectangular strips without a `border-style`
-model. Wrapped inline backgrounds/borders use a single bounding rectangle
+border widths originally painted solid rectangular strips without a
+`border-style` model; 7.5 adds visible-style widths and basic border patterns.
+Wrapped inline backgrounds/borders use a single bounding rectangle
 rather than per-line fragments. The browser's existing 24px viewport gutter
 remains separate from element CSS. Font sizes are capped at 512 CSS px with
 a diagnostic to bound glyph rasterization.
@@ -509,8 +514,9 @@ load, and records failures without replacing otherwise usable content.
 Stylesheet slots follow DOM preorder, not response order; repeated sheet
 references still occupy separate cascade slots. Parsed sheets and decoded
 images are shared with `Arc` rather than copied into each snapshot.
-Networking, HTML/CSS parsing, image decoding, and style resolution run on the
-page-loader thread. Layout and rasterization remain on the window thread.
+Networking, initial HTML/CSS parsing, image decoding, and initial style resolution
+run on the page-loader thread. Viewport changes restyle retained sheets on the
+window thread; layout and rasterization also remain on that thread.
 Replacing navigation drops its old receiver and signals cancellation, so an
 old worker cannot overwrite the new page.
 
@@ -975,57 +981,818 @@ not comparisons of encoding throughput on equivalent trees.
   pseudo-classes, and pseudo-elements remain deferred; this step does not
   claim full Selectors Level 4 or WPT conformance.
 
-- [ ] **7.4 Implement the full cascade.** Handle origins, `!important`,
+- [x] **7.4 Implement the full cascade.** Handle origins, `!important`,
   `inherit`, `initial`, and `unset`.
   *You'll see:* `!important` and explicit keywords behaving as in browsers.
-- [ ] **7.5 Parse typed values and shorthands.** Represent lengths, colors,
+
+  Normal declarations rank user-agent < user < author; important declarations
+  reverse the origins and outrank all normal declarations. Inline priority
+  applies within the author origin, followed by matching-selector specificity
+  and stylesheet/rule/declaration source order. Image width hints remain
+  normal author declarations before author rules, with zero specificity.
+  Existing resolution entry points are unchanged;
+  `style::resolve_with_user_stylesheets(document, author_sheets, &[user_css])`
+  adds ordered user-origin CSS sources. User sources recover syntax errors and
+  report prefixed diagnostics without a DOM node.
+
+  CSS-wide keywords are single decoded identifier tokens (including escapes
+  and surrounding comments), expanded to every longhand of the supported
+  `margin`, `padding`, `border-width`, and `border-color` shorthands.
+  `inherit` copies computed values, retaining percentages and symbolic
+  `currentcolor` for background/border inheritance; `initial` uses initial
+  values rather than user-agent rules, and `unset` chooses inheritance only
+  for inherited properties. Root inheritance uses initial values rather than
+  the synthetic document's block display. Invalid declarations remain ignored
+  with diagnostics and do not displace valid winners.
+
+  Regressions cover every supported property and shorthand, all six origin/
+  importance levels, inline priority, specificity/source order, root/relative
+  inheritance, initial versus heading/link/list defaults, syntax recovery,
+  and embedded/redirected-external/inline CSS reaching computed style and CLI
+  paint. Existing initial font/color choices (16px sans-serif and black),
+  and the 512px font-size cap remain. Property grammars and a `border-style`
+  model arrive in 7.5 rather than this cascade step. Cascade
+  layers, animations/transitions, `revert`/`revert-layer`, and at-rule semantics
+  remain deferred, not claimed as Milestone 7 conformance.
+
+- [x] **7.5 Parse typed values and shorthands.** Represent lengths, colors,
   keywords, and percentages as types, and expand shorthands such as `margin`,
   `border`, `font`, and `background`.
   *You'll see:* `--dump=style` shows typed computed values per element.
-- [ ] **7.6 Speed up matching.** Match selectors right to left, add a rule hash
+
+  Property grammars consume decoded CSS tokens and top-level component values,
+  keeping color functions intact across whitespace/comments. Lengths (`px`,
+  `em`, `%`), colors, font families/weights/styles, line heights, and border
+  styles have typed representations. Element-relative `em` values compute to
+  pixels; widths/margins/padding retain percentages until layout has their
+  containing width. Font-size and percentage line-height resolve against the
+  appropriate font size during computation; unitless line-height stays a
+  number through inheritance and is used with each descendant's font size.
+
+  Supported shorthands expand atomically before the cascade:
+  - `margin`, `padding`, `border-width`, `border-style`, and `border-color`
+    accept one to four component values and expand clockwise.
+  - `border` and all four side forms accept unordered width/style/color,
+    resetting omitted components to medium (3px), none, and currentcolor.
+    Widths accept thin/medium/thick and nonnegative `px`/`em` lengths.
+    None/hidden compute to zero width and do not paint. Solid, dashed, dotted,
+    and double styles reserve visible widths and paint basic strip patterns.
+  - `font` accepts optional normal/italic/oblique style and normal/bold/
+    numeric/bolder/lighter weight, mandatory size, optional `/ line-height`,
+    and quoted/identifier-sequence families or standalone generic families.
+    It resets all supported font longhands, including line-height, when omitted.
+    Numeric weights (1–1000, including fractions) remain typed; absolute size
+    keywords and smaller/larger use the engine's fixed size table/1.2 ratio.
+  - `background` supports a single color and/or `none`; it resets both
+    supported longhands, background-color and the no-image background-image.
+    Images, gradients, layers, positioning, repeat, attachment, size, and
+    box keywords are diagnosed and rejected, not silently dropped.
+
+  Every new longhand/shorthand participates in origin/importance/source-order
+  resolution and `inherit`/`initial`/`unset`, including shorthand resets.
+  Invalid values reject the entire declaration without displacing earlier
+  valid longhands. This milestone's color subset is named colors,
+  three/six-digit hex, transparent/currentcolor,
+  and opaque `rgb()` with comma or space-separated uniform number/percentage
+  channels; the local 7.10 substeps extend it with alpha and modern typed
+  color functions without claiming the full conformance gate.
+
+  **Try it:** `cargo run -- tests/pages/styles.html --dump=style`. Output lists
+  every element (including hidden elements, excluding text) in DOM preorder,
+  with stable typed longhands. It uses the same final, redirected/cached
+  external sheets as rendering without needing a raster font. CSS/resource
+  errors go to stderr with node/source context; external value diagnostics
+  carry the final stylesheet URL. A computed-style snapshot and targeted
+  style/layout/paint/HTTP/CLI tests cover grammar, escapes/comments, atomic
+  rejection, resets, inheritance, importance, and source order.
+
+  This is a bounded property subset, not CSS conformance: auto margins,
+  additional units/math/custom properties, system fonts, font-variant/stretch,
+  oblique angles, font-face selection, 3D border styles, and background images
+  remain deferred. Font rasterization still uses the bundled face and
+  synthetic weight/slant; line layout lacks baseline/vertical-align fidelity.
+  Border patterns are naive rectangles (including square dots), with no
+  rounded joins or per-line inline decorations and bounded pattern counts.
+  Milestones 7.9/7.10 and the later font/layout umbrellas remain unchecked.
+
+- [x] **7.6 Speed up matching.** Match selectors right to left, add a rule hash
   keyed by ID, class, and tag, and add an ancestor Bloom filter.
   *You'll see:* a benchmark showing style time drop on a large page.
-- [ ] **7.7 Add media queries.** Support `@media` width queries.
+
+  Reuses the iterative right-to-left matcher with memoized backtracking;
+  single-compound selectors bypass its worklist allocation. Each compiled
+  sheet indexes positive rightmost IDs, classes, or tags, with universal
+  fallback for unindexable list members and generation-marked rule
+  deduplication. All matching list members still contribute to maximum
+  specificity. ASCII-folded, kind-tagged hashes conservatively admit extra
+  candidates in case-sensitive HTML/foreign/XML trees; exact matching remains
+  authoritative. A 512-bit counting ancestor Bloom filter is pushed/popped
+  during traversal, using constant counter storage rather than per-depth
+  filter copies. Only positive compounds across child/descendant edges supply
+  requirements; siblings and negations never become ancestry requirements.
+  Every resolution rebuilds ancestry from the current DOM. Differential
+  tests compare all computed styles and diagnostics against unindexed and
+  index-only references, including randomized mixed chains, all origins,
+  specificity/source order, quirks/XML/foreign names, collisions/saturation,
+  repeated keys, sibling exits, mutations, and a 4096-level tree.
+
+  Measured after 7.15 with
+  `cargo bench --bench styling --features style-bench-reference`
+  on Apple M4 Pro (arm64, Rust 1.98.0, release): nine-sample medians with
+  rotating mode order, identical deterministic DOM/CSS per mode, 8000
+  paragraphs, 400 section branches, and 500 author rules. Full style time
+  includes sheet collection, CSS/selector/value parsing, indexing, matching,
+  and cascade; HTML parsing, font loading, networking, layout, and
+  rasterization are outside these comparison timings. All computed styles
+  are compared before timing; cached UA rules are warmed in every mode.
+  Class-selective rules: unindexed **369.717 ms**, index-only **64.847 ms**,
+  index + Bloom **66.339 ms** (**5.57×** overall). Shared-tag rules with
+  selective ancestors: **1526.761 / 1503.950 / 118.986 ms**, respectively
+  (**12.83×** overall). These are workload-specific, not timing assertions:
+  Bloom adds modest overhead when indexing already prunes well, and saturated
+  filters/universal rules can still require full matching. Author indexes are
+  reused throughout each resolution, not cached across separate resolutions;
+  reference modes are confined to tests and the explicit benchmark feature.
+
+- [x] **7.7 Add media queries.** Support `@media` width queries.
   *You'll see:* responsive sites changing layout as the window resizes.
-- [ ] **7.8 Add custom properties.** Support `--name` declarations and
+
+  **Implemented subset:** token-based `(width: length)`, `(min-width: length)`,
+  `(max-width: length)`, and boolean `(width)`, with inclusive boundaries.
+  Lengths accept `px`, zero without units, absolute CSS units
+  (`in`, `cm`, `mm`, `q`, `pt`, `pc`), and `em` / `rem` relative to the
+  **initial** font (16px by default), never a styled document root. Query lists
+  use comma OR; media types `all`, `screen`, and `print`, legacy `not` / `only`,
+  `and`, condition-only `or`, and parenthesized boolean groups are supported.
+  Other media types do not match; their negation follows media-type semantics.
+  Nested `@media` blocks combine with their ancestors and preserve flattened
+  rule source order, selector indexing, and Bloom-filter correctness.
+  `<style media>` and `<link rel=stylesheet media>` use the same evaluator.
+
+  Invalid query-list members never match and report diagnostics without
+  discarding other members or neighboring rules. Unknown features and
+  general-enclosed conditions remain unknown, including under negation,
+  rather than becoming unconditional rules. Empty HTML media attributes match
+  all; empty/comment-only `@media` preludes and blockless `@media` do not.
+  Inactive/unknown rule ASTs remain in stylesheet dumps and can be reevaluated.
+  Inactive external sheets are fetched within the existing resource budgets,
+  parsed, and retained at their DOM-order slots; resizing does **not** refetch.
+
+  **API:** `css::media::MediaEnvironment::new(width, height)` takes CSS pixels.
+  `MediaQueryList::parse(source)` retains a query list for repeated `matches`
+  calls and exposes diagnostics. `style::resolve_with_environment`,
+  `resolve_with_stylesheets_and_environment`, and
+  `resolve_with_user_stylesheets_and_environment` accept an explicit
+  environment; compatibility APIs and CLI dumps default to an 800 × 600
+  screen viewport. `Frame::new_with_environment` and
+  `Frame::set_media_environment` expose viewport-aware snapshots. The latter
+  performs a full restyle from retained collected sheets; callers rebuild
+  layout/paint after it returns `true`. Frames keep collection/resource
+  diagnostics separate from resolution diagnostics, so repeated resizes do
+  not accumulate errors. This is not incremental style invalidation.
+
+  The window resize, display-scale, and progressive-snapshot paths share a
+  restyle/layout/paint helper. Physical window dimensions are converted to
+  logical CSS pixels before evaluating queries. Existing scroll position is
+  preserved (clamped when content shrinks); navigation/history and retained
+  image/CSS resources are not replaced by resize.
+
+  **Try it:** `cargo run -- tests/pages/media.html`, then resize across 600
+  CSS pixels (and 400px for the nested query). At 600px, both inclusive
+  boundaries apply. `--dump=stylesheets` retains inactive nested rules;
+  `--dump=style`, `--dump=layout`, and `--dump=display-list` show the default
+  wide viewport. Boundary/list/negation/invalid-input tests, multi-viewport
+  optimized/reference comparisons, redirected/cached resource integration,
+  CLI dumps, and the extracted window helper cover this subset; native window
+  resize is tested through the actual helper, not claimed as GUI automation.
+
+  **Follow-up in 7.13:** Local substeps below add MQ range syntax,
+  height/orientation/resolution and explicit preference/input features,
+  container queries/units, viewport-relative query lengths, and typed math.
+  Neither this original width-query step nor those local substeps claim full MQ
+  conformance.
+
+- [x] **7.8 Add custom properties.** Support `--name` declarations and
   `var()`.
   *You'll see:* sites using CSS variables render their themes.
+
+  **Implemented subset:** Unregistered, case-sensitive custom properties retain
+  CSS component tokens and whitespace in the AST and computed style. They inherit
+  already-computed parent tokens; missing values and `initial` are
+  guaranteed-invalid, while `inherit`/`unset` inherit. Nested `var()` supports
+  empty values/fallbacks and comma-rich fallbacks, used only for missing/invalid
+  custom properties, not as retries for incompatible property grammars.
+  Iterative dependency analysis includes unused fallback references in cycles.
+  Invalid computed declarations become unset without resurrecting older values.
+  Variable-bearing shorthands retain pending substitutions for each cascaded
+  longhand, expand atomically, and preserve winning priorities and omitted resets.
+  Token substitution never concatenates or retokenizes identifier/dimension
+  boundaries. All existing typed properties/shorthands, origins, importance,
+  inline/external/cache paths, and media/environment restyling use this machinery.
+  `--dump=style` reports sorted custom properties as bounded `Tokens(...)`
+  previews, including empty streams and `GuaranteedInvalid`.
+
+  **Resource policy:** Flat tokens and iterative graph/substitution walks avoid
+  recursive stack growth. Limits are 4,096 custom-property names per element,
+  16,384 tokens / 1 MiB of token payload per value, and 65,536 tokens / 4 MiB
+  for both local custom-property input and per-element substitution work.
+  Exceeding limits fails closed at computed-value time; a name-limit overflow
+  invalidates the element's entire custom-property environment. Variable
+  diagnostics stop when total resolution diagnostics reach 256 entries, with an
+  omission notice, without changing syntax recovery for unrelated CSS.
+  Regressions cover escaped/case-sensitive names, inheritance/keywords,
+  empties/fallbacks, cycles, token boundaries, every supported longhand/shorthand,
+  cascade winners, all six origins/importance levels, redirected/cached resources,
+  media restyling, CLI dumps, optimized/reference matching, 3,000-dependency
+  chains/deep fallbacks, and input/expansion/diagnostic limits.
+
+  **Deferred:** `@property` registration, typed custom properties, `revert`, and
+  `revert-layer` remain in 7.11. Variables do not add the deferred value grammars
+  from 7.9/7.10 (math functions, additional units/colors, or image backgrounds).
+
 - [ ] **7.9 Complete values and units.** Implement CSS Values and Units 4:
   `calc()` and the other math functions, `rem`, `ch`, `ex`, `lh`, viewport
   units including `svh`, `lvh`, and `dvh`, and angle, time, and resolution
   types. Distinguish specified, computed, used, and actual values.
   *You'll see:* `calc(100% - 2rem)` and `clamp()` layouts match browsers.
+
+  - [x] **7.9.1 Add bounded, typed math expressions.** Parse CSS tokens, not
+    reserialized strings or evaluated source code. Dimensional exponents check
+    sums, products, quotients, and function arguments. Support `calc`, `min`,
+    `max`, `clamp`, `round` (all four strategies), `mod`, `rem`, `abs`, `sign`,
+    `hypot`, trigonometric/inverse functions, `atan2`, `pow`, `sqrt`, `log`, and
+    `exp`, including finite `pi`/`e` constants. Binary `+`/`-` require CSS
+    whitespace on both sides; signed numeric tokens and multiplication/
+    division precedence are preserved. Limits are 4096 tokens, 64 nested
+    parsing levels/expression-tree height, and 64 KiB for standalone string
+    parsing. Length-valued percentages remain symbolic until their reference
+    is available; numeric font-weight/line-height expressions also wait for
+    their font context. Known non-finite results become unset with a
+    computed-value diagnostic, not an older cascade candidate.
+  - [x] **7.9.2 Compute contextual and absolute units.** Support `px`, `in`,
+    `cm`, `mm`, `q`, `pt`, `pc`, `em`, `rem`, `ch`, `ex`, `lh`, `rlh`, and
+    `vw`/`vh`/`vmin`/`vmax` with their small/large/dynamic families.
+    Horizontal logical aliases (`vi`/`vb` and family variants) work in the
+    engine's horizontal writing mode. Root font-size `rem` and root
+    font-size/line-height `rlh` use initial metrics to break self-dependencies;
+    `lh` in font-size/line-height uses the parent's completed line-height.
+    Other lengths then use this element's completed font and line-height.
+    `ch` uses the bundled face's zero advance; `ex` uses its scaled,
+    unrounded x-outline height, not an invented 0.5em. If loading that face
+    fails, both explicitly fall back to 0.5em, with an actionable stderr
+    diagnostic emitted once by the cached loader (not per element).
+    This is not font-face or
+    cross-browser font parity: family selection is still deferred and
+    `normal` line-height remains the engine's 1.25 × font-size approximation.
+    `MediaEnvironment` has optional separate small/large/dynamic CSS-pixel
+    viewport dimensions. Unspecified sizes coincide with the desktop
+    viewport; there is no simulated dynamic browser chrome.
+    Absolute-unit conversion is shared with width media queries.
+  - [x] **7.9.3 Expose length stages and standalone scalar types.**
+    `SpecifiedLength`, `ComputedLength`, `UsedLength`, and `ActualLength`
+    distinguish contextual computation, percentage reference resolution,
+    and edge-based device-pixel quantization. Styles retain winning,
+    substituted length-valued declarations before computation; computed box
+    lengths retain percentage-dependent expressions. Layout exposes used
+    content widths and actual border rectangles; rasterized rectangles use
+    the same `Rect::actual` edge quantization. `--dump=values` shows these
+    stages, with actual rectangles at 1×, unclipped and unscrolled, not a
+    claim about every rasterized glyph or the device's live scale.
+    `Angle`, `Time`, and `Resolution` parse dimensions and typed math into
+    degrees, seconds, and dppx (including `grad`, `rad`, `turn`, `ms`, `dpi`,
+    `dpcm`, and `x`). Their context-aware parsing variants support contextual
+    dimension cancellation; convenience parsing uses the default context.
+    These types do not add new animation/transform/resolution CSS properties.
+  - [x] **7.9.4 Exercise the rendering pipeline.** Local parser/style/layout/
+    paint and CLI tests cover root/inheritance ordering, variable token
+    substitution, shorthands, dimension failures, finite-result policy and
+    limits, standalone types, absolute/relative/viewport units, narrow/wide
+    percentages, clamp bounds, repeated resize and HiDPI changes through the
+    actual window helper, actual raster pixels, redirected/cached external
+    CSS, and optimized/unindexed/index-only style equivalence.
+    Try `cargo run -- tests/pages/values.html --dump=values`.
+    The existing 24px viewport gutter still reduces the containing block:
+    at 800px with a 20px root, the fixture's calc content width is 712px and
+    its clamped content width is 300px. These are deterministic pipeline
+    assertions, not an externally measured browser-parity result.
+  - [ ] **7.9.5 Complete the Values and Units 4 conformance gate.** Run
+    verified applicable external fixtures/WPT comparisons and close the
+    remaining grammar, exceptional-value, font, and stage-model gaps before
+    checking the umbrella. No external Values/Units conformance suite or
+    reference-browser comparison has been executed for this implementation.
+
+  **Remaining boundaries:** This is a finite numeric subset, not CSS's full
+  `infinity`/`-infinity`/`NaN`, signed-zero, overflow, or trigonometric
+  singularity semantics. `clamp(none, …, none)`, generalized unhinted
+  percentage type inference, frequency/flex dimensions, `cap`/`ic` and
+  additional root-font metric units, vertical writing modes,
+  `attr()`/`env()`, and the
+  rest of Values 4's nonnumeric grammars remain unsupported. Container units
+  are implemented by the local 7.13 substeps below. Math that becomes
+  non-finite only once a percentage reference is known returns no typed used
+  value; compatibility resolution explicitly reports the value, font size,
+  reference, failure reason, and 0px fallback to stderr. Layout also retains
+  node/property diagnostics in `LayoutTree::diagnostics()` for the latest
+  pass, clearing them on relayout. Block/inline widths, image widths, margins,
+  padding, and non-finite used line-height products share this zero-geometry
+  policy rather than silently succeeding or implementing the specification's
+  exceptional-number rules. Typed line-height resolution remains fallible;
+  actual rectangles return no value if edge sums or scale products are
+  non-finite, before integer conversion. Range-limited
+  lengths clamp known negative math results during computation, or during
+  layout if percentages remain; margins retain negative values.
+  Stage provenance currently covers substituted length-valued winners,
+  not a complete specified-value/CSSOM model for every property or keyword.
+  Actual rectangles are pre-clipping integer edge bounds, not complete
+  actual values for text, images, or every paint primitive. Media-query math
+  and additional features are described in 7.13; advanced colors stay in 7.10.
+
 - [ ] **7.10 Complete colors.** Implement CSS Color 4 and 5: all color
   functions, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`,
   `color-mix()`, relative colors, `currentcolor`, system colors, and
   interpolation color spaces.
   *You'll see:* WPT `css/css-color/` reftests pass for wide-gamut colors.
+  - [x] **7.10.1 Retain typed modern color coordinates.** Store extended-range
+    `f64` coordinates, color space, alpha, and missing-component bits in
+    specified/computed colors. Support named colors, 3/4/6/8-digit hex,
+    legacy/modern `rgb()`/`rgba()` and `hsl()`/`hsla()`, `hwb()`,
+    `lab()`/`lch()`, `oklab()`/`oklch()`, and `color()` with `srgb`,
+    `srgb-linear`, `display-p3`, `a98-rgb`, `prophoto-rgb`, `rec2020`,
+    `xyz`/`xyz-d65`, and `xyz-d50`. Reusable conversions include sign-preserving
+    transfer curves, XYZ matrices, Bradford D50/D65 adaptation, and polar
+    coordinates. Local neutral/primary reference vectors and extended-range
+    round trips cover the conversions; no external color conformance is claimed.
+  - [x] **7.10.2 Compute bounded mixing and relative colors.** `color-mix()`
+    supports the listed rectangular and polar spaces, normalized percentages
+    (including bounded percentage math), under-100% alpha scaling, premultiplied
+    non-hue coordinates, and shorter/longer/increasing/decreasing hue arcs.
+    `none` components use analogous-component carry-forward and borrowing;
+    achromatic hue is powerless. Relative syntax supports each listed function,
+    channel keywords, inherited alpha, and the existing typed finite math
+    grammar. Relative channels retain out-of-range values; alpha clamps.
+    Token input is bounded to 4096 tokens, standalone source to 64 KiB, and
+    nested color/function structure to 32 levels. Malformed values/shorthands
+    reject atomically; invalid variable winners unset. Non-finite contextual
+    calculations report node/property diagnostics and use the property's
+    inherited/initial fallback, not a previous cascade winner.
+  - [x] **7.10.3 Resolve context and paint alpha consistently.** Resolve the
+    `color` property against inherited color before decorations. Preserve
+    `currentcolor` dependencies in inherited mixtures and relative colors;
+    compute independent expressions to typed coordinates. Modern and legacy
+    system names use a deterministic light UA palette. Backgrounds, borders,
+    text fragments, markers, and modern display-list commands retain native
+    coordinates until rasterization. Existing `Option<u32>` style/fragment
+    fields remain compatibility projections only; exact opaque sRGB commands
+    retain their old display-list/debug shape. The sRGB framebuffer boundary
+    clips gamut and quantizes alpha; rectangles, glyph coverage, and decoded
+    images share ordered source-over blending. Local overlap, image parity,
+    glyph-alpha, var/shorthand, origin/keyword, inheritance, reference-matching,
+    and deterministic CLI fixtures cover this pipeline.
+  - [ ] **7.10.4 Complete the Color 4/5 conformance gate.** No existing local
+    WPT color fixtures/reference runner were found, and no external WPT or
+    wide-gamut reference-browser comparison was run. Run verified applicable
+    `css/css-color/` reftests and close the remaining specification gaps before
+    checking the umbrella.
+
+  **Remaining boundaries:** The softbuffer surface is opaque 8-bit sRGB, not
+  a wide-gamut/HDR display; final channel clipping is not CSS's perceptual
+  gamut-mapping algorithm. Source-over blending remains encoded sRGB byte
+  arithmetic, matching the existing image path. Missing/powerless component
+  handling uses local conversion/interpolation tests and numerical tolerances,
+  not exhaustive WPT edge-case coverage. Exceptional numbers (`NaN`,
+  infinities), full CSSOM color serialization, custom color profiles and
+  `@color-profile`, `device-cmyk()`, `light-dark()`, `contrast-color()` and other
+  unlisted Color 5 constructs remain unsupported and produce declaration
+  diagnostics. System colors are not connected to OS themes, `color-scheme`,
+  forced-colors, or visited-link privacy/state. The specified-color map records
+  substituted color-valued winners, not a complete CSSOM provenance model.
+  Alpha is per color, not element/group `opacity` or a new compositing layer.
 - [ ] **7.11 Complete at-rules and cascade control.** Support `@import` with
   layer, supports, and media conditions; `@supports`; `@namespace`;
   `@layer`; `@scope`; CSS Nesting; `@property`; and `revert` and
   `revert-layer`. Compute the cascade exactly as CSS Cascade 5 and 6 define.
   *You'll see:* layered frameworks and nested stylesheets cascade correctly.
+
+  - [x] **7.11.1 Order layers and roll back real cascade candidates.**
+    Each origin has a document-wide ordered layer tree spanning all sheets
+    and imported occurrences. Named dotted paths, nested names, anonymous
+    identities, empty blocks, and initial order statements reserve layers.
+    Parent direct declarations follow their nested layers; unlayered normal
+    rules outrank layered ones, and important layer ordering is reversed.
+    Element-attached declarations retain their separate inline precedence.
+    `revert` removes the appropriate origin interval; `revert-layer` removes
+    the interval between a layer's normal/important positions, with the
+    important-inline exception. Rollback uses retained declaration candidates
+    for custom properties and longhands, including substituted pending
+    shorthands. Invalid computed values still become unset, not older values.
+    `all` resets only supported longhands, never custom properties. The existing
+    HTML image-width hint occupies a separate presentational-hint origin:
+    layered author rules override it, `revert-layer` can restore it, and
+    author `revert` removes it.
+  - [x] **7.11.2 Compile supports and nesting in source order.**
+    Token-based `@supports` handles parenthesized declaration tests, `selector()`,
+    nested conditions, homogeneous `and`/`or`, and `not`. It reuses actual
+    supported declaration and selector grammars; unsupported grid/flex/layout
+    values and unknown tests evaluate false with diagnostics. Qualified
+    nested rules support explicit/repeated `&`, implicit descendant nesting,
+    relative combinators, and nested media/supports/layers. Parent references
+    share parsed selector lists and use their maximum specificity rather than
+    expanding combinations. Consecutive declaration runs retain their source
+    positions and parent matching/specificity. `:is()` and `:where()` have a
+    strict-list subset for these rules, not a claim of Selectors 4 conformance.
+  - [x] **7.11.3 Match bounded scopes and namespaces.**
+    `@scope` resolves explicit or stylesheet-owner implicit roots, nested
+    scopes, lower limits excluding their descendant subtrees, direct
+    declarations, relative selectors, `:scope`, and zero-specificity scoped
+    `&`. Scoped rules implicitly anchor at the root; explicit `:scope`/`&`
+    can refer to external ancestors. Innermost root proximity breaks ties
+    after specificity, before source order. Default/prefixed/any/empty
+    namespaces match DOM namespace URIs, not DOM prefix spelling, for element
+    and attribute selectors; XML local-name sensitivity is preserved.
+    Unknown prefixes invalidate selectors and late/nested `@namespace` and
+    `@import` are rejected. Initial layer statements precede the import/
+    namespace preamble; interleaving layer statements after imports closes it.
+  - [x] **7.11.4 Register a finite custom-property grammar.**
+    `@property` supports `*`, `<length>`, `<number>`, `<integer>`,
+    `<percentage>`, and `<color>`, with `inherits` and independent
+    `initial-value` descriptors. Typed absolute lengths/numbers/colors compute
+    to canonical tokens before dependent `var()` substitution. Inheritance,
+    CSS-wide values, invalid typed values, and dependency cycles use registered
+    inherited/initial defaults; universal registrations preserve raw tokens.
+    Active name collisions use origin, normal layer priority, and source order.
+    Unsupported descriptor syntax/lists/alternatives and dependent initial
+    values are explicitly rejected.
+  - [x] **7.11.5 Load and retain bounded import graphs.**
+    Resource loading hydrates external and embedded imports on the navigation
+    worker using document bases and final redirect URLs. `layer`/`layer()`,
+    `supports()`, and media conditions preserve import-position ordering and
+    inherited origin/layer context. False supports never fetches or exposes
+    an imported sheet; media-conditioned sheets are eagerly retained for
+    later restyling. Raw success/failure caches include redirect aliases;
+    graph caches are ancestor-path/depth-sensitive so a cyclic imported
+    occurrence does not truncate a later independent link to the same URL.
+    Repeated equivalent links share ASTs while anonymous layer identities
+    remain per occurrence. Source text and final URLs live on imported AST
+    edges and appear in stylesheet dumps. Limits are 128 attempted import
+    edges, 16 import levels, 16 MiB fetched CSS, and 64 MiB source-equivalent
+    hydrated graphs, alongside existing resource/body limits. Failure/cycle/
+    depth/MIME diagnostics preserve subsequent rules. Resize restyles retained
+    ASTs without reparsing or networking.
+  - [ ] **7.11.6 Complete Cascade 5/6 external conformance.**
+    Local tests cover normal/important/global/nested layers, origin/layer/
+    inline/custom/pending-shorthand rollback, supports boolean grammar,
+    nesting specificity/order/combinators, scope proximity/limits/anchors,
+    foreign/XML namespaces, registration defaults/cycles/collisions, cache/
+    redirect/failure/cycle/depth/import conditions, and style/layout/raster/
+    CLI output. All three matching modes are compared. Cascade 5/6 and Nesting
+    specification text and relevant WPT rollback fixture semantics were
+    inspected, but no external WPT runner or reference-browser conformance
+    comparison was executed. Keep this umbrella unchecked.
+
+  **Remaining boundaries:** Registered relative lengths/currentcolor and their
+  font/color dependency cycles, percentage math, compound registration syntax,
+  transform/image/string/URL typed descriptors, animation-tainted properties,
+  and Properties & Values API/CSSOM remain unsupported. `@supports` covers the
+  implemented property/selector grammars only, not full `font-tech()`/
+  `font-format()` or dynamic feature discovery. Functional-selector recovery
+  and isolated pseudo/user-state foundations are extended in 7.12 below;
+  complete pseudo rendering and shadow/encapsulation contexts remain open. Scope handling
+  is an element-tree subset: document/fragment/shadow-root scoping, every
+  nesting/scoping combination, CSSOM mutation, and external scope fixtures
+  still need conformance work. Cascade transitions/animations, logical-property
+  groups, complete presentational hints, and properties beyond the current
+  finite set are not implemented. Import loading retains existing UTF-8 CSS
+  decoding, per-navigation caching, and current URL/content-type policy, not
+  full encoding inheritance, persistent HTTP caching, CSSOM import APIs, or
+  dynamic DOM stylesheet mutation. Placement checks are structural over the
+  retained syntax AST, not a complete CSSOM validity/encoding-preamble model.
+
 - [ ] **7.12 Complete Selectors Level 4.** Add `:is()`, `:where()`,
   `:has()`, `:nth-child(An+B of S)`, link, input, and user-action
   pseudo-classes, and pseudo-elements including `::before`, `::after`,
   `::marker`, `::first-line`, `::first-letter`, `::placeholder`,
   `::selection`, and `::backdrop`. Connect interaction states to Milestone 9.
   *You'll see:* WPT `css/selectors/` reaches the conformance gate.
+  - [x] **7.12.1 Token-based functional selectors.** `:is()`/`:where()` use
+    forgiving complex-selector lists; `:not()`, `:has()`, and nth `of` lists
+    remain strict. `:where()` contributes zero specificity; `:is()`/`:not()`/
+    `:has()` contribute their maximum valid argument specificity, independent
+    of which branch matched. Relative `:has()` matches from the subject using
+    descendant, child, adjacent-sibling, and subsequent-sibling axes, including
+    mixed chains. Nested `:has()` and pseudo-element arguments are invalid
+    (invalid branches inside forgiving functions are discarded).
+    `:nth-child()`/`:nth-last-child()` support signed integer `An+B`, odd/even,
+    token escapes, and complex `of` lists; `:nth-of-type()`/
+    `:nth-last-of-type()` count namespace-qualified types and disallow `of`.
+    Nth specificity includes its pseudo-class and the maximum `of` specificity.
+    Matching re-reads sibling order after DOM moves/detachment/attribute merges.
+    Namespace, nesting-parent, and scope contexts are retained; the relative
+    anchor is not substituted for an enclosing `:scope`. Rule-index and Bloom
+    prefilters remain conservative, including sibling `:has()`. Match-budget
+    exhaustion is distinct from a legitimate non-match and reaches resolution
+    diagnostics, capped at 32 reports plus one omission notice per resolution.
+    Exhausted scope roots or limits reject the scoped rule rather than opening
+    a scope boundary.
+  - [x] **7.12.2 Isolated computed pseudo targets.** Recognize terminal
+    `::before`, `::after`, `::marker`, `::first-line`, `::first-letter`,
+    `::placeholder`, `::selection`, and `::backdrop`, plus the legacy single
+    colon spellings for before/after/first-line/first-letter. Pseudo rules
+    resolve into `(originating NodeId, PseudoElement)` side tables, never the
+    element's ordinary declaration cascade. They inherit from the originating
+    element and reuse origin, layer, rollback, scope/nesting, media, imported
+    sheet, registration, and `var()` machinery; inline declarations only
+    target the element, while inherited inline custom properties can supply
+    pseudo values. Nesting parents that are themselves pseudo-element
+    selectors cannot accidentally match DOM descendants.
+    `--dump=style` prints the separate targets.
+  - [x] **7.12.3 Generated text and marker rendering.** `content` accepts
+    normal/none, string lists, and untyped `attr(name)` text. Before/after
+    create explicit generated layout boxes and text fragments around normal
+    children, including block/inline boxes, decorations, inherited text,
+    wrapping, and origin-element hit targets, without mutating the DOM.
+    Existing list-marker layout/paint uses separately computed marker text,
+    color, and supported font properties. `content:none` suppresses marker
+    text. Unsupported marker box effects are diagnosed. Local tests verify
+    computed styles, geometry, display-list commands, raster pixels,
+    imported CSS, and an unchanged DOM; `tests/pages/selectors.html` is the
+    visible selector/generated-text/input demonstration fixture.
+    Resolved text above 65,536 bytes is omitted with a node/pseudo diagnostic
+    in `LayoutTree::diagnostics()` and stderr, including literal/attribute/
+    concatenation and marker overflow. Construction diagnostics survive
+    relayout without accumulating; missing attributes remain valid empty text.
+  - [x] **7.12.4 Snapshot states and the window restyle boundary.** HTML
+    `:link`/`:any-link`, enabled/disabled (including the disabled-fieldset
+    first-legend exception), checked/default, required/optional,
+    read-only/read-write, placeholder-shown, radio/progress indeterminate,
+    and target states have bounded static DOM semantics. No history is
+    supplied to selectors: `:visited` always fails, including inside
+    functional selectors, and `:link` does not change with browsing history.
+    An explicit interaction context carries hover, active, focus,
+    focus-visible, focus-within, and target state, including selectors in
+    `@scope` roots and lower limits. Window pointer movement,
+    primary press/release, pointer exit, blur, scrolling/resizing, and
+    Tab/Shift-Tab invoke hit testing and retained-AST full restyling,
+    followed by layout and paint rebuilding. Hover/active/focus-within
+    propagate to ancestors; focus itself is exact. Pointer focus and keyboard
+    focus-visible are distinguished. Frame fragment updates restyle `:target`.
+    Tests call the same window input helper and render boundary used by
+    native events, without requiring a GUI automation session.
+    Local verification: `cargo test --all-features --lib --tests --quiet`
+    passed 327 unit and 60 integration tests; `cargo check --all-targets
+    --all-features --quiet`, `cargo fmt --all -- --check`, and
+    `git diff --check` passed. `cargo test --doc --all-features --quiet`
+    passed with no doctests. The selector fixture's CLI display list was
+    checked for generated text and styled marker commands. This is local
+    pipeline verification, not external WPT or native-GUI conformance.
+  - [ ] **7.12.5 Complete pseudo rendering, interaction semantics, and
+    external conformance.** First-line/first-letter/placeholder/selection/
+    backdrop styles are retained as explicit foundations and diagnosed:
+    their layout/paint effects are **not implemented**. Complete text-run/
+    line/letter fragmentation, highlight inheritance and selection paint,
+    form-control placeholder rendering, top-layer/backdrop, pseudo chains,
+    and all pseudo property applicability still require later layout and
+    interaction work. No scripts, editable/form widgets, form validation,
+    live checked/value/selection state, checkbox indeterminate state, or
+    keyboard activation were added. Static form selectors reflect attributes,
+    not a complete HTML form-state machine. Focus-visible uses explicit
+    pointer/Tab state, not the complete platform/browser heuristic.
+    Link states currently cover HTML links, not all SVG/XML linking semantics.
+    Generated content does not cover counters, quotes, images, alternate text,
+    typed/fallback attributes, replaced-element content, or every generated
+    list/formatting context. Unsupported content values are diagnosed.
+    Generated text is bounded to 65,536 bytes per target; larger resolved text
+    does not generate a box and is diagnosed (marker text is suppressed).
+    Integer nth coefficients are bounded to signed
+    64-bit values, selector-function nesting to 64, and each match to 100,000
+    shared traversal steps; exhausted matches fail closed (even under
+    negation), with bounded resolution diagnostics rather than silent failure
+    or unbounded adversarial traversal. Public boolean matching logs at most
+    32 diagnostics per process; style resolution uses its own per-resolution
+    diagnostic collector rather than logging per element.
+    Remaining Selectors 4 grammar/state features, shadow/scoping edge cases,
+    namespace subtleties, pseudo property restrictions, incremental
+    invalidation, and external WPT `css/selectors/` must still be implemented
+    and measured. **No external WPT gate or browser-conformance comparison
+    was run; this umbrella remains unchecked.**
 - [ ] **7.13 Add conditional rules.** Implement Media Queries 4 and 5,
   including range syntax and `prefers-*` features, container queries, and
   container query units.
   *You'll see:* components responding to their container size.
-- [ ] **7.14 Generate property support from spec data.** Generate property
+
+  - [x] **7.13.1 Evaluate finite MQ range and preference conditions.**
+    Shared token-based conditions support `<`, `<=`, `=`, `>=`, `>`, both
+    feature/value orders, and consistently directed two-comparison chains.
+    Width, height, aspect ratio, orientation, and resolution share typed
+    length/scalar/math parsing with declarations; lengths accept initial-font,
+    absolute, and viewport units, but not percentages, `var()`, or container
+    units in media conditions. Discrete preferences cover color scheme,
+    reduced motion/transparency/data, contrast, forced/inverted colors, pointer/
+    any-pointer, and hover/any-hover; color/monochrome/color-index accept integer
+    capability conditions. `MediaEnvironment` carries optional typed capabilities
+    and preferences: unavailable is unknown, not an invented false/default.
+    Winit maps its actual theme and device scale to color scheme and resolution;
+    inaccessible accessibility/input/display capabilities remain `None`.
+    Known invalid grammar invalidates its query-list member even under `not`;
+    unknown features retain three-valued boolean semantics. Non-finite query
+    calculations diagnose and never match, including through boolean negation.
+    Media attributes, nested conditions, and retained import conditions reuse
+    this evaluator and keep list recovery/source ordering.
+
+  - [x] **7.13.2 Query actual eligible ancestor content boxes.**
+    Typed noninherited `container-name`, `container-type` (`normal`, `inline-size`,
+    `size`), and the resetting `container` shorthand participate in the normal
+    cascade, CSS-wide keywords, atomic `var()` substitution, and `@supports`.
+    `@container` selects the nearest eligible ancestor, optionally filtered by a
+    case-sensitive name, with the dimensional axes required by **all** referenced
+    features. Nested queries may select different ancestors. Width/height,
+    inline-size/block-size, ratio, orientation, range and boolean grammar use
+    completed **content-box** layout sizes, never substituted viewport dimensions.
+    Elements cannot query themselves; supported pseudo targets may query their
+    originating element. Global name-defining `@layer`/`@property` rules inside
+    syntactically valid container rules remain unconditional with respect to
+    that container condition, while surrounding media/supports still apply.
+    Invalid container rules cannot register names. Unsupported `style()` and
+    `scroll-state()` predicates diagnose and conservatively disable the whole
+    container condition, including boolean combinations.
+
+  - [x] **7.13.3 Resolve container units and bounded layout feedback.**
+    `cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, and `cqmax` use the nearest eligible
+    content size independently per axis, falling back to the **small** viewport
+    for missing axes. The typed unit context is shared by lengths, math,
+    substituted variables, font computation, inheritance, and pseudo styles.
+    Container-condition font units use the selected container's computed font;
+    its container-unit thresholds use that container's ancestor context.
+    `ContainerSnapshot::from_layout` captures immutable real geometry;
+    `resolve_with_container_environment` is the explicit second style phase.
+    `Frame::layout_with_container_queries(font)` restarts from an empty bootstrap
+    snapshot and performs at most 16 full style/layout passes until size/name/type/
+    font snapshots agree. It reuses collected sheet ASTs, imports, and images:
+    no fetching occurs during feedback. Exhaustion is logged and retained as a
+    diagnostic, returning the last consistent style/layout pair, not a silently
+    fabricated zero/viewport container. Resize, theme/scale changes, interaction,
+    progress/new navigation, and geometry/typed-style CLI dumps use this path.
+    Native pointer reconciliation is additionally bounded to four passes to
+    avoid recursive hover/geometry loops.
+
+    **Two-phase API boundary:** ordinary `style::resolve*`, Frame construction/
+    setters, and `Frame::layout_tree()` are bootstrap/low-level APIs, not a claim
+    of converged container styles. Call `layout_with_container_queries` before
+    consuming a Frame's final geometry-dependent `styles`, or explicitly iterate
+    the snapshot/style/layout API. Resource loading remains separate.
+
+    **Layout subset:** size-query containers are horizontal-tb non-replaced
+    block/list-item boxes. Block auto width already excludes descendant intrinsic
+    widths; `inline-size` retains natural descendant block height, whereas
+    `size` removes that intrinsic height contribution (auto becomes zero).
+    Typed definite length/math heights override natural height; descendants
+    still lay out and may overflow. Percentage heights without a supported
+    definite containing-block-height context diagnose and use auto. Inline and
+    replaced boxes, flex/grid/table/shrink-to-fit intrinsic containment, vertical
+    writing modes, containment formatting-context details, and intrinsic-size
+    overrides are not claimed.
+
+  - [x] **7.13.4 Exercise geometry, imports, matching modes, and CLI output.**
+    Local regressions compare a 200px inner container and a 500px outer container
+    against an 800px viewport, named/anonymous and per-axis eligibility, nested
+    conditions, origin-element pseudo queries, resize/hover recomputation,
+    descendant and threshold units, small-viewport fallback, math/variables,
+    typed/shorthand/wide values, invalid negation, unsupported predicates,
+    containment height/overflow, and persistent bounded-convergence diagnostics.
+    Optimized, indexed, and unindexed matching agree on styles, pseudo styles,
+    and diagnostics. HTTP import integration verifies retained AST identity,
+    namespace/media/layer/rollback/source ordering and exactly one external
+    fetch across repeated feedback/restyles. `tests/pages/containers.html`
+    contrasts a fluid 40vw container with a fixed 180px one: at the default
+    viewport their 10cqi indicators compute to 32px and 18px, and only the former
+    matches the 300px container range. Run
+    `cargo run -- tests/pages/containers.html --dump=style` or `--dump=values`;
+    use the native window and resize across 750 CSS pixels to change the fluid
+    component's label/background. These are deterministic local pipeline
+    assertions, not GUI automation or an external browser-parity measurement.
+
+  - [ ] **7.13.5 Complete the conditional-rules conformance gate.**
+    No external MQ/conditional/container WPT runner or reference-browser
+    comparison has been executed. Close the remaining feature/grammar/layout
+    gaps and run verified applicable conformance fixtures before checking this
+    umbrella. Initial media-query `ch`/`ex` currently use 0.5 initial em metric
+    approximations; exceptional numeric/ratio semantics, other MQ capabilities
+    (HDR/gamut/update/overflow/scripting/device features), actual OS accessibility/
+    input discovery, vertical/advanced layout containment, style/custom-property
+    and scroll-state queries, and incremental/animation invalidation remain.
+
+- [x] **7.14 Generate property support from spec data.** Generate property
   grammars, initial values, inheritance, computed-value rules, and animation
   types from machine-readable data such as
   [webref](https://github.com/w3c/webref). Report snapshot properties that
   remain unimplemented.
   *You'll see:* a generated CSS coverage report that shrinks over time.
+
+  The unaltered public `@webref/css` **8.7.6** snapshot is frozen under
+  `tools/css-spec/`, with package/Git ref/download/hash provenance and its MIT
+  license. Offline generation produces full property syntax, initial,
+  inheritance, computed-value and animation metadata, scoped type/function
+  productions, and registration descriptors. Generated finite keyword/color
+  routes and semantic dispatch replace the handwritten property registry;
+  shorthand expansions/reset gaps and `all` derive from the snapshot.
+  Generated inherited flags and initial tokens drive the existing cascade and
+  shorthand defaults; the spec's absolute-length computed rule selects the
+  existing font-size stage. Contextual computations remain handwritten.
+
+  Run `python3 tools/generate_css_properties.py --check` or
+  `cargo run -- --dump=css-coverage` (no page fetch). The
+  [generated report](css-coverage.md) covers **821** entries: **757** canonical
+  properties (**0 implemented**, **50 partial**, **707 unimplemented**, updated
+  by 7.15) and **64 legacy aliases** (**1 accepted for a partial target**,
+  **63 unsupported**), not independent conformance successes.
+  Partial means an actual finite engine handler exists, not generic AST
+  acceptance. Every partial entry lists parser/cascade/computed/layout/paint/
+  animation gaps, including missing shorthand resets. Custom properties and
+  finite registrations are reported separately from that denominator.
+  Exhaustive local tests verify all **36 longhands** and **14 shorthands**,
+  generated metadata against the snapshot, initial/inherited cascade behavior,
+  unknown/unsupported/unauthorized-alias rejection, deterministic regeneration, and CLI
+  output. See [provenance, update and validation instructions](../tools/css-spec/README.md).
+
+  **Boundary:** Full value-definition strings, arbitrary computed prose and
+  animation types are metadata, not executable implementations. Generated
+  grammars are explicitly finite executable subsets; no unsupported property
+  receives an accept-everything parser. This closes the generation/reporting
+  milestone only. Full CSS grammar/computation/layout/animation, external WPT,
+  Baseline feature coverage and Chrome/Firefox parity gates remain open.
+
 - [ ] **7.15 Implement CSS compatibility behavior.** Apply the Quirks Mode
   Standard for documents in quirks mode from 6.7, and support the prefixed
   aliases and behaviors required by the WHATWG Compat Standard.
   *You'll see:* quirks-mode pages and `-webkit-` properties render like
   Chrome and Firefox.
+
+  - [x] **7.15a Local declaration quirks.** Use HTML document mode and the
+    HTML/XML name flags to enable the current
+    [quirky-length](https://drafts.csswg.org/css-values-4/#deprecated-quirky-length)
+    and [quirky-color](https://drafts.csswg.org/css-color-4/#quirky-color)
+    grammars only in eligible supported properties. Unitless lengths cover
+    width/height/font-size, physical margins/padding and border-width
+    longhands/four-side shorthands. Hashless colors cover color,
+    background-color and physical border-color longhands/four-side shorthand.
+    Numbers use integer-token serialization and six-digit zero padding;
+    identifiers use three/six decoded hexadecimal characters; dimensions
+    serialize the integer and append the decoded unit. Shorthands that merely
+    reference these properties (`font`, `background`, `border` and side
+    borders) and function arguments do not gain these quirks.
+    No-quirks, limited-quirks and XML/XHTML retain normal value grammar.
+    Existing selector quirks are unchanged.
+  - [x] **7.15b Retained context and cascade.** Carry declaration context
+    through author/user sheets, nested conditional rules, imports and pending
+    `var()` shorthands; recompilation of a cached AST uses the current document
+    context. `@supports` and import supports conditions accept eligible
+    document quirks; typed `@property` registration/independence validation and
+    standalone value parsers remain standards-only. The engine has no
+    `CSS.supports()` DOM method yet. The new alias shares canonical property
+    identity, source/important/origin/layer priority, wide values, `all` and
+    rollback; unsupported prefixes still diagnose rather than stripping
+    `-webkit-` or pretending flex/grid/transforms exist.
+  - [x] **7.15c Renderable Compat subset.** Implement the exact
+    [legacy alias](https://compat.spec.whatwg.org/#css-simple-aliases)
+    `-webkit-box-sizing` for `box-sizing`, with content-box/border-box sizing
+    and a zero content-size floor in horizontal block/replaced boxes.
+    Image width/height attributes enter the presentational cascade, allowing
+    CSS overrides and consistent box sizing. Implement
+    [`-webkit-text-fill-color`](https://compat.spec.whatwg.org/#the-webkit-text-fill-color)
+    as its own inherited color property (not an alias of `color`):
+    inherited currentcolor resolves against the child's color, while an
+    explicit fill affects glyphs, generated text, list markers and alt text,
+    not backgrounds/borders. Implement
+    [prefixed pixel-ratio media features](https://compat.spec.whatwg.org/#css-media-queries-webkit-device-pixel-ratio)
+    with number-as-dppx semantics and the exact legacy min/max spellings.
+    `-webkit-transform-3d` reports the renderer's actual unsupported capability
+    (0), including boolean/equality tests. These are not container features.
+    Generated alias dispatch/coverage uses the unchanged Webref alias
+    relationships; missing alias metadata stays missing.
+  - [x] **7.15d Local verification.** Regression matrices cover document
+    modes/XML, integer versus escaped identifier spelling, token boundaries,
+    forbidden shorthand/function contexts, `var()` atomicity, registration,
+    `@supports`, escaped names, alias origin/important/layer rollback, retained
+    redirected imports/network caches, geometry, CLI dumps and rasterized fill.
+    A bounded Playwright Chromium **152.0.7977.83** comparison of freshly
+    navigated HTML documents confirmed the exercised quirks/standards/limited
+    acceptance, `color:123` as #000123 in declarations, 80×30 border-box geometry
+    and blue fill inheritance. This is a spot comparison, not a WPT or
+    Firefox/full-browser-parity gate.
+
+  **Remaining 7.15 conformance gaps:** The umbrella stays unchecked. Quirks
+  line-height/strut behavior (including limited quirks), percentage-height
+  ancestor traversal, html/body viewport filling, table intrinsic/nowrap/
+  collapsing/height-box-sizing quirks, text-decoration table propagation,
+  the table `quirk-inherit` color-from-body initial value, and HTML's
+  quirks table/font UA rules need the real inline/table/inheritance model
+  in milestone 8. The engine does not support table display or text-decoration;
+  no table/font compatibility is claimed. Remaining eligible length properties
+  (position offsets, clip/rect, spacing, min/max sizes, etc.) are unsupported.
+  Compat animations/keyframes, gradients (including their legacy direction
+  semantics), remaining aliases and box/flex mappings, text stroke,
+  text-size-adjust and appearance/native controls remain unsupported.
+  No blanket prefix removal or display keyword fallback is installed.
+  Complete applicable WHATWG/CSSWG external conformance remains required.
 
 **Exit criteria:** Every Baseline CSS feature parses, cascades, and computes
 correctly. css-parsing-tests pass, and WPT directories for syntax,

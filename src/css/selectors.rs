@@ -1,13 +1,106 @@
 //! Token-based selectors, specificity, and DOM matching.
 //! https://www.w3.org/TR/selectors-4/
 
-use std::{collections::HashSet, error::Error, fmt};
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use crate::dom::{Document, DocumentMode, ElementData, NodeId, NodeKind};
 
 use super::tokenizer::{HashKind, TokenKind, Tokenizer};
 
+mod functional;
+pub(crate) mod matching;
+mod states;
+pub use states::focusable;
+
 pub const MAX_SELECTOR_NESTING: usize = 64;
+pub const MAX_MATCH_STEPS: usize = 100_000;
+const MAX_MATCH_LOGS: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MatchLimitExceeded;
+
+impl fmt::Display for MatchLimitExceeded {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "selector matching exceeded the {MAX_MATCH_STEPS}-step limit; match rejected"
+        )
+    }
+}
+
+impl Error for MatchLimitExceeded {}
+
+/// Explicit, snapshot-local state. No history/visited information is accepted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InteractionState {
+    pub hovered: Option<NodeId>,
+    pub active: Option<NodeId>,
+    pub focused: Option<NodeId>,
+    pub focus_visible: bool,
+    pub target: Option<NodeId>,
+}
+
+#[derive(Clone, Copy)]
+struct MatchContext<'a> {
+    scope: Option<NodeId>,
+    state: &'a InteractionState,
+    remaining: &'a Cell<usize>,
+}
+
+impl MatchContext<'_> {
+    fn step(self) -> bool {
+        let remaining = self.remaining.get();
+        self.remaining.set(remaining.saturating_sub(1));
+        remaining != 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PseudoElement {
+    Before,
+    After,
+    Marker,
+    FirstLine,
+    FirstLetter,
+    Placeholder,
+    Selection,
+    Backdrop,
+}
+
+impl PseudoElement {
+    pub const ALL: [Self; 8] = [
+        Self::Before,
+        Self::After,
+        Self::Marker,
+        Self::FirstLine,
+        Self::FirstLetter,
+        Self::Placeholder,
+        Self::Selection,
+        Self::Backdrop,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+            Self::Marker => "marker",
+            Self::FirstLine => "first-line",
+            Self::FirstLetter => "first-letter",
+            Self::Placeholder => "placeholder",
+            Self::Selection => "selection",
+            Self::Backdrop => "backdrop",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Specificity {
@@ -27,21 +120,44 @@ impl Specificity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Compound {
     tag: Option<String>,
+    namespace: NamespaceConstraint,
     simple: Vec<SimpleSelector>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NamespaceConstraint {
+    Any,
+    Uri(String),
+}
+
+impl NamespaceConstraint {
+    fn matches(&self, uri: &str) -> bool {
+        matches!(self, Self::Any) || matches!(self, Self::Uri(expected) if expected == uri)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Namespaces {
+    pub default: Option<String>,
+    pub prefixes: HashMap<String, String>,
+}
+
 impl Compound {
-    fn matches(&self, document: &Document, node_id: NodeId) -> bool {
+    fn matches(&self, document: &Document, node_id: NodeId, context: MatchContext<'_>) -> bool {
+        if !context.step() {
+            return false;
+        }
         let Some(element) = document.node(node_id).and_then(|node| node.as_element()) else {
             return false;
         };
-        self.tag
-            .as_ref()
-            .is_none_or(|tag| equal(element.tag_name(), tag, !element.has_case_sensitive_names()))
+        self.namespace.matches(element.namespace().uri())
+            && self.tag.as_ref().is_none_or(|tag| {
+                equal(element.tag_name(), tag, !element.has_case_sensitive_names())
+            })
             && self
                 .simple
                 .iter()
-                .all(|simple| simple.matches(document, node_id, element))
+                .all(|simple| simple.matches(document, node_id, element, context))
     }
 }
 
@@ -60,11 +176,36 @@ impl SimpleSelector {
                 ids: 1,
                 ..Specificity::default()
             },
-            Self::Pseudo(PseudoClass::Not(selectors)) => selectors
+            Self::Pseudo(
+                PseudoClass::Not(selectors)
+                | PseudoClass::Is(selectors)
+                | PseudoClass::Has(selectors),
+            ) => selectors
                 .iter()
                 .map(Selector::specificity)
                 .max()
                 .unwrap_or_default(),
+            Self::Pseudo(PseudoClass::Parent(selectors)) => selectors
+                .iter()
+                .map(Selector::specificity)
+                .max()
+                .unwrap_or_default(),
+            Self::Pseudo(PseudoClass::Where(_)) => Specificity::default(),
+            Self::Pseudo(PseudoClass::ScopeAnchor) => Specificity::default(),
+            Self::Pseudo(PseudoClass::Nth(nth)) => {
+                let mut specificity = Specificity {
+                    classes: 1,
+                    ..Specificity::default()
+                };
+                specificity.add(
+                    nth.of
+                        .iter()
+                        .map(Selector::specificity)
+                        .max()
+                        .unwrap_or_default(),
+                );
+                specificity
+            }
             _ => Specificity {
                 classes: 1,
                 ..Specificity::default()
@@ -72,7 +213,13 @@ impl SimpleSelector {
         }
     }
 
-    fn matches(&self, document: &Document, node_id: NodeId, element: &ElementData) -> bool {
+    fn matches(
+        &self,
+        document: &Document,
+        node_id: NodeId,
+        element: &ElementData,
+        context: MatchContext<'_>,
+    ) -> bool {
         let quirks = document.mode() == DocumentMode::Quirks;
         match self {
             Self::Id(id) => element
@@ -84,7 +231,7 @@ impl SimpleSelector {
                     .any(|token| equal(token, class, quirks))
             }),
             Self::Attribute(selector) => selector.matches(element),
-            Self::Pseudo(pseudo) => pseudo.matches(document, node_id, element),
+            Self::Pseudo(pseudo) => pseudo.matches(document, node_id, element, context),
         }
     }
 }
@@ -103,6 +250,7 @@ enum AttributeOperator {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AttributeSelector {
     name: String,
+    namespace: NamespaceConstraint,
     operator: AttributeOperator,
     value: String,
     case_insensitive: Option<bool>,
@@ -110,11 +258,21 @@ struct AttributeSelector {
 
 impl AttributeSelector {
     fn matches(&self, element: &ElementData) -> bool {
-        let Some(actual) = element.attribute(&self.name) else {
-            return false;
-        };
+        element.attributes().iter().any(|attribute| {
+            self.namespace.matches(attribute.namespace().unwrap_or(""))
+                && equal(
+                    attribute.name(),
+                    &self.name,
+                    attribute.namespace().is_none() && !element.has_case_sensitive_names(),
+                )
+                && self.matches_value(element, attribute.value(), attribute.namespace().is_none())
+        })
+    }
+
+    fn matches_value(&self, element: &ElementData, actual: &str, unnamespaced: bool) -> bool {
         let insensitive = self.case_insensitive.unwrap_or_else(|| {
-            !element.has_case_sensitive_names()
+            unnamespaced
+                && !element.has_case_sensitive_names()
                 && html_case_insensitive_attribute(&self.name.to_ascii_lowercase())
         });
         let expected = self.value.as_str();
@@ -216,6 +374,8 @@ fn html_case_insensitive_attribute(name: &str) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PseudoClass {
     Root,
+    Scope,
+    ScopeAnchor,
     Empty,
     FirstChild,
     LastChild,
@@ -224,12 +384,28 @@ enum PseudoClass {
     LastOfType,
     OnlyOfType,
     Not(Vec<Selector>),
+    Is(Vec<Selector>),
+    Where(Vec<Selector>),
+    Has(Vec<Selector>),
+    Nth(functional::Nth),
+    State(states::State),
+    Parent(Arc<[Selector]>),
 }
 
 impl PseudoClass {
-    fn matches(&self, document: &Document, node_id: NodeId, element: &ElementData) -> bool {
+    fn matches(
+        &self,
+        document: &Document,
+        node_id: NodeId,
+        element: &ElementData,
+        context: MatchContext<'_>,
+    ) -> bool {
         let node = document.node(node_id).expect("compound matched an element");
         match self {
+            Self::Scope | Self::ScopeAnchor => context.scope.map_or_else(
+                || Self::Root.matches(document, node_id, element, context),
+                |root| root == node_id,
+            ),
             Self::Root => node
                 .parent()
                 .and_then(|id| document.node(id))
@@ -244,7 +420,19 @@ impl PseudoClass {
             }),
             Self::Not(selectors) => !selectors
                 .iter()
-                .any(|selector| selector.matches(document, node_id)),
+                .any(|selector| selector.matches_context(document, node_id, context)),
+            Self::Is(selectors) | Self::Where(selectors) => selectors
+                .iter()
+                .any(|selector| selector.matches_context(document, node_id, context)),
+            Self::Parent(selectors) => selectors.iter().any(|selector| {
+                selector.pseudo_element.is_none()
+                    && selector.matches_context(document, node_id, context)
+            }),
+            Self::Has(selectors) => selectors
+                .iter()
+                .any(|selector| selector.matches_relative(document, node_id, context)),
+            Self::Nth(nth) => nth.matches(document, node_id, element, context),
+            Self::State(state) => state.matches(document, node_id, element, context),
             _ => {
                 let of_type = matches!(
                     self,
@@ -291,6 +479,8 @@ pub struct Selector {
     compounds: Vec<Compound>,
     combinators: Vec<Combinator>,
     specificity: Specificity,
+    pseudo_element: Option<PseudoElement>,
+    relative: Option<Combinator>,
 }
 
 impl Selector {
@@ -299,10 +489,106 @@ impl Selector {
     }
 
     pub fn matches(&self, document: &Document, node_id: NodeId) -> bool {
+        self.matches_with_scope(document, node_id, None)
+    }
+
+    pub fn pseudo_element(&self) -> Option<PseudoElement> {
+        self.pseudo_element
+    }
+
+    pub fn matches_with_state(
+        &self,
+        document: &Document,
+        node_id: NodeId,
+        state: &InteractionState,
+    ) -> bool {
+        self.matches_target(document, node_id, None, state, None)
+    }
+
+    pub(crate) fn matches_with_scope(
+        &self,
+        document: &Document,
+        node_id: NodeId,
+        scope: Option<NodeId>,
+    ) -> bool {
+        self.matches_target(document, node_id, scope, &InteractionState::default(), None)
+    }
+
+    pub(crate) fn matches_target(
+        &self,
+        document: &Document,
+        node_id: NodeId,
+        scope: Option<NodeId>,
+        state: &InteractionState,
+        pseudo: Option<PseudoElement>,
+    ) -> bool {
+        match self.try_matches_target(document, node_id, scope, state, pseudo) {
+            Ok(matched) => matched,
+            Err(error) => {
+                static REPORTS: AtomicUsize = AtomicUsize::new(0);
+                if let Ok(count) =
+                    REPORTS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                        (count < MAX_MATCH_LOGS).then_some(count + 1)
+                    })
+                {
+                    if count + 1 == MAX_MATCH_LOGS {
+                        eprintln!("CSS: {error}; additional selector matching diagnostics omitted");
+                    } else {
+                        eprintln!("CSS at {node_id:?}: {error}");
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    pub(crate) fn try_matches_target(
+        &self,
+        document: &Document,
+        node_id: NodeId,
+        scope: Option<NodeId>,
+        state: &InteractionState,
+        pseudo: Option<PseudoElement>,
+    ) -> Result<bool, MatchLimitExceeded> {
+        if self.pseudo_element != pseudo {
+            return Ok(false);
+        }
+        let remaining = Cell::new(MAX_MATCH_STEPS);
+        let result = self.matches_context(
+            document,
+            node_id,
+            MatchContext {
+                scope,
+                state,
+                remaining: &remaining,
+            },
+        );
+        // Negation can turn a nested failure into true, but cannot erase the
+        // shared budget's exhaustion.
+        if remaining.get() == 0 {
+            Err(MatchLimitExceeded)
+        } else {
+            Ok(result)
+        }
+    }
+
+    fn matches_context(
+        &self,
+        document: &Document,
+        node_id: NodeId,
+        context: MatchContext<'_>,
+    ) -> bool {
+        if self.compounds.len() == 1 {
+            return self.compounds[0].matches(document, node_id, context);
+        }
         let mut pending = vec![(self.compounds.len() - 1, node_id)];
         let mut visited = HashSet::new();
         while let Some((index, id)) = pending.pop() {
-            if !visited.insert((index, id)) || !self.compounds[index].matches(document, id) {
+            if !context.step() {
+                return false;
+            }
+            if !visited.insert((index, id)) || !self.compounds[index].matches(document, id, context)
+            {
                 continue;
             }
             if index == 0 {
@@ -315,6 +601,9 @@ impl Selector {
                     // farther left. Memoized states avoid exponential backtracking.
                     let mut ancestor = node.parent();
                     while let Some(id) = ancestor {
+                        if !context.step() {
+                            return false;
+                        }
                         pending.push((index - 1, id));
                         ancestor = document.node(id).and_then(|node| node.parent());
                     }
@@ -327,6 +616,9 @@ impl Selector {
                 Combinator::NextSibling | Combinator::SubsequentSibling => {
                     let (before, _) = sibling_slices(document, id);
                     for &sibling in before.iter().rev() {
+                        if !context.step() {
+                            return false;
+                        }
                         if document
                             .node(sibling)
                             .is_some_and(|node| node.as_element().is_some())
@@ -381,6 +673,23 @@ impl fmt::Display for SelectorError {
 impl Error for SelectorError {}
 
 pub fn parse(source: &str) -> Result<Vec<Selector>, SelectorError> {
+    parse_context(source, &Namespaces::default(), None)
+}
+
+pub(crate) fn parse_context(
+    source: &str,
+    namespaces: &Namespaces,
+    parent: Option<Arc<[Selector]>>,
+) -> Result<Vec<Selector>, SelectorError> {
+    parse_scoped(source, namespaces, parent, false)
+}
+
+pub(crate) fn parse_scoped(
+    source: &str,
+    namespaces: &Namespaces,
+    parent: Option<Arc<[Selector]>>,
+    scoped: bool,
+) -> Result<Vec<Selector>, SelectorError> {
     let mut tokenizer = Tokenizer::default();
     tokenizer.feed(source);
     tokenizer.finish();
@@ -393,6 +702,11 @@ pub fn parse(source: &str) -> Result<Vec<Selector>, SelectorError> {
     Parser {
         tokens,
         position: 0,
+        namespaces: namespaces.clone(),
+        parent,
+        scoped,
+        in_has: false,
+        allow_pseudo: true,
     }
     .list(false, 0)
 }
@@ -400,6 +714,11 @@ pub fn parse(source: &str) -> Result<Vec<Selector>, SelectorError> {
 struct Parser {
     tokens: Vec<TokenKind>,
     position: usize,
+    namespaces: Namespaces,
+    parent: Option<Arc<[Selector]>>,
+    scoped: bool,
+    in_has: bool,
+    allow_pseudo: bool,
 }
 
 impl Parser {
@@ -457,7 +776,61 @@ impl Parser {
             compounds: Vec::new(),
             combinators: Vec::new(),
             specificity: Specificity::default(),
+            pseudo_element: None,
+            relative: None,
         };
+        // Each nesting selector is an :is() of the complete parent list, not
+        // an expanded Cartesian product with branch-specific specificity.
+        let mut end = self.position;
+        let mut nesting = 0usize;
+        while end < self.tokens.len() {
+            match self.tokens[end] {
+                TokenKind::Function(_) | TokenKind::OpenParen | TokenKind::OpenSquare => {
+                    nesting += 1
+                }
+                TokenKind::CloseParen | TokenKind::CloseSquare if nesting > 0 => nesting -= 1,
+                TokenKind::Comma | TokenKind::CloseParen | TokenKind::Eof if nesting == 0 => break,
+                _ => {}
+            }
+            end += 1;
+        }
+        let has_scope = self.tokens[self.position..end].windows(2).any(|pair| matches!(pair, [TokenKind::Colon, TokenKind::Ident(name)] if name.eq_ignore_ascii_case("scope")));
+        let implicit = (self.parent.is_some() || self.scoped && !has_scope)
+            && !self.tokens[self.position..end]
+                .iter()
+                .any(|token| matches!(token, TokenKind::Delim('&')));
+        if implicit && depth == 0 {
+            let pseudo = if let Some(parent) = &self.parent {
+                selector.specificity.add(
+                    parent
+                        .iter()
+                        .map(Selector::specificity)
+                        .max()
+                        .unwrap_or_default(),
+                );
+                PseudoClass::Parent(parent.clone())
+            } else {
+                PseudoClass::ScopeAnchor
+            };
+            selector.compounds.push(Compound {
+                tag: None,
+                namespace: NamespaceConstraint::Any,
+                simple: vec![SimpleSelector::Pseudo(pseudo)],
+            });
+            let combinator = match self.peek() {
+                TokenKind::Delim('>') => Some(Combinator::Child),
+                TokenKind::Delim('+') => Some(Combinator::NextSibling),
+                TokenKind::Delim('~') => Some(Combinator::SubsequentSibling),
+                _ => None,
+            };
+            if combinator.is_some() {
+                self.position += 1;
+                self.whitespace();
+            }
+            selector
+                .combinators
+                .push(combinator.unwrap_or(Combinator::Descendant));
+        }
         loop {
             let compound = self.compound(depth)?;
             if compound.tag.is_some() {
@@ -470,6 +843,41 @@ impl Parser {
                 selector.specificity.add(simple.specificity());
             }
             selector.compounds.push(compound);
+            if matches!(self.peek(), TokenKind::Colon) {
+                if !self.allow_pseudo {
+                    return Err(SelectorError);
+                }
+                self.position += 1;
+                let double = matches!(self.peek(), TokenKind::Colon);
+                if double {
+                    self.position += 1;
+                }
+                let name = self.ident()?.to_ascii_lowercase();
+                let pseudo = match name.as_str() {
+                    "before" => PseudoElement::Before,
+                    "after" => PseudoElement::After,
+                    "first-line" => PseudoElement::FirstLine,
+                    "first-letter" => PseudoElement::FirstLetter,
+                    "marker" if double => PseudoElement::Marker,
+                    "placeholder" if double => PseudoElement::Placeholder,
+                    "selection" if double => PseudoElement::Selection,
+                    "backdrop" if double => PseudoElement::Backdrop,
+                    _ => return Err(SelectorError),
+                };
+                selector.pseudo_element = Some(pseudo);
+                selector.specificity.add(Specificity {
+                    types: 1,
+                    ..Specificity::default()
+                });
+                self.whitespace();
+                if !matches!(
+                    self.peek(),
+                    TokenKind::Comma | TokenKind::CloseParen | TokenKind::Eof
+                ) {
+                    return Err(SelectorError);
+                }
+                break;
+            }
             let whitespace = self.whitespace();
             let combinator = match self.peek() {
                 TokenKind::Delim('>') => Combinator::Child,
@@ -490,6 +898,7 @@ impl Parser {
 
     fn compound(&mut self, depth: usize) -> Result<Compound, SelectorError> {
         let start = self.position;
+        let namespace = self.namespace(false)?;
         let tag = match self.peek() {
             TokenKind::Ident(_) => Some(self.ident()?),
             TokenKind::Delim('*') => {
@@ -514,8 +923,31 @@ impl Parser {
                 }
                 TokenKind::OpenSquare => SimpleSelector::Attribute(self.attribute()?),
                 TokenKind::Colon => {
+                    if self.tokens.get(self.position + 1) == Some(&TokenKind::Colon)
+                        || matches!(self.tokens.get(self.position + 1), Some(TokenKind::Ident(name)) if matches!(name.to_ascii_lowercase().as_str(), "before" | "after" | "first-line" | "first-letter"))
+                    {
+                        // A bare pseudo-element has an implicit universal subject.
+                        if self.position == start {
+                            return Ok(Compound {
+                                tag: None,
+                                namespace,
+                                simple,
+                            });
+                        }
+                        break;
+                    }
                     self.position += 1;
                     SimpleSelector::Pseudo(self.pseudo(depth)?)
+                }
+                TokenKind::Delim('&') => {
+                    self.position += 1;
+                    SimpleSelector::Pseudo(if let Some(parent) = &self.parent {
+                        PseudoClass::Parent(parent.clone())
+                    } else if self.scoped {
+                        PseudoClass::ScopeAnchor
+                    } else {
+                        return Err(SelectorError);
+                    })
                 }
                 _ => break,
             };
@@ -524,18 +956,69 @@ impl Parser {
         if self.position == start {
             return Err(SelectorError);
         }
-        Ok(Compound { tag, simple })
+        Ok(Compound {
+            tag,
+            namespace,
+            simple,
+        })
+    }
+
+    fn namespace(&mut self, attribute: bool) -> Result<NamespaceConstraint, SelectorError> {
+        let prefix = match self.peek() {
+            TokenKind::Delim('|') => Some((String::new(), 1)),
+            TokenKind::Ident(name)
+                if self.tokens.get(self.position + 1) == Some(&TokenKind::Delim('|'))
+                    && (!attribute
+                        || self.tokens.get(self.position + 2) != Some(&TokenKind::Delim('='))) =>
+            {
+                Some((name.clone(), 2))
+            }
+            TokenKind::Delim('*')
+                if self.tokens.get(self.position + 1) == Some(&TokenKind::Delim('|')) =>
+            {
+                Some(("*".into(), 2))
+            }
+            _ => None,
+        };
+        if let Some((prefix, advance)) = prefix {
+            self.position += advance;
+            if !matches!(self.peek(), TokenKind::Ident(_) | TokenKind::Delim('*')) {
+                return Err(SelectorError);
+            }
+            return match prefix.as_str() {
+                "*" => Ok(NamespaceConstraint::Any),
+                "" => Ok(NamespaceConstraint::Uri(String::new())),
+                _ => self
+                    .namespaces
+                    .prefixes
+                    .get(&prefix)
+                    .cloned()
+                    .map(NamespaceConstraint::Uri)
+                    .ok_or(SelectorError),
+            };
+        }
+        Ok(if attribute {
+            NamespaceConstraint::Uri(String::new())
+        } else {
+            self.namespaces
+                .default
+                .clone()
+                .map(NamespaceConstraint::Uri)
+                .unwrap_or(NamespaceConstraint::Any)
+        })
     }
 
     fn attribute(&mut self) -> Result<AttributeSelector, SelectorError> {
         self.position += 1;
         self.whitespace();
+        let namespace = self.namespace(true)?;
         let name = self.ident()?;
         self.whitespace();
         if self.peek() == &TokenKind::CloseSquare {
             self.position += 1;
             return Ok(AttributeSelector {
                 name,
+                namespace,
                 operator: AttributeOperator::Exists,
                 value: String::new(),
                 case_insensitive: None,
@@ -573,6 +1056,7 @@ impl Parser {
         self.consume(TokenKind::CloseSquare)?;
         Ok(AttributeSelector {
             name,
+            namespace,
             operator,
             value,
             case_insensitive,
@@ -585,6 +1069,7 @@ impl Parser {
                 self.position += 1;
                 match name.to_ascii_lowercase().as_str() {
                     "root" => Ok(PseudoClass::Root),
+                    "scope" => Ok(PseudoClass::Scope),
                     "empty" => Ok(PseudoClass::Empty),
                     "first-child" => Ok(PseudoClass::FirstChild),
                     "last-child" => Ok(PseudoClass::LastChild),
@@ -592,17 +1077,57 @@ impl Parser {
                     "first-of-type" => Ok(PseudoClass::FirstOfType),
                     "last-of-type" => Ok(PseudoClass::LastOfType),
                     "only-of-type" => Ok(PseudoClass::OnlyOfType),
-                    _ => Err(SelectorError),
+                    _ => states::State::parse(&name)
+                        .map(PseudoClass::State)
+                        .ok_or(SelectorError),
                 }
             }
             TokenKind::Function(name) if name.eq_ignore_ascii_case("not") => {
                 self.position += 1;
-                Ok(PseudoClass::Not(self.list(true, depth + 1)?))
+                Ok(PseudoClass::Not(self.functional_list(
+                    depth + 1,
+                    false,
+                    false,
+                )?))
+            }
+            TokenKind::Function(name)
+                if name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where") =>
+            {
+                self.position += 1;
+                let selectors = self.functional_list(depth + 1, true, false)?;
+                Ok(if name.eq_ignore_ascii_case("is") {
+                    PseudoClass::Is(selectors)
+                } else {
+                    PseudoClass::Where(selectors)
+                })
+            }
+            TokenKind::Function(name) if name.eq_ignore_ascii_case("has") => {
+                if self.in_has {
+                    return Err(SelectorError);
+                }
+                self.position += 1;
+                Ok(PseudoClass::Has(self.functional_list(
+                    depth + 1,
+                    false,
+                    true,
+                )?))
+            }
+            TokenKind::Function(name)
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "nth-child" | "nth-last-child" | "nth-of-type" | "nth-last-of-type"
+                ) =>
+            {
+                self.position += 1;
+                self.nth(&name.to_ascii_lowercase(), depth + 1)
+                    .map(PseudoClass::Nth)
             }
             _ => Err(SelectorError),
         }
     }
 }
 
+#[cfg(test)]
+mod level4_tests;
 #[cfg(test)]
 mod tests;

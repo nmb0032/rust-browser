@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use crate::{
-    css::values::Edges,
+    css::values::{Edges, Length, LineHeight, ResolvedColor, UsedLength},
     dom::{Document, NodeId, NodeKind},
     media::{DecodedImage, ImageMap},
-    style::{self, ComputedStyle, ComputedStyles, Display},
+    style::{self, ComputedStyle, ComputedStyles, Content, Diagnostic, Display, PseudoElement},
 };
 
 use super::{Rect, block::layout_children, replaced::ImageContent};
@@ -28,6 +28,7 @@ pub struct TextFragment {
     pub text: String,
     pub font_size: f32,
     pub color: Option<u32>,
+    pub text_color: ResolvedColor,
     pub bold: bool,
     pub italic: bool,
 }
@@ -37,6 +38,7 @@ pub struct ListMarker {
     pub x: f32,
     pub y: f32,
     pub text: String,
+    pub style: ComputedStyle,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,11 +55,26 @@ pub struct LayoutBox {
     pub(super) text_fragments: Vec<TextFragment>,
     pub(super) list_marker: Option<ListMarker>,
     pub(super) image: Option<ImageContent>,
+    pub(super) pseudo: Option<PseudoElement>,
+    pub(super) marker_style: Option<ComputedStyle>,
+    pub(super) marker_text: Option<String>,
 }
 
 impl LayoutBox {
+    /// Used content width after layout (including `auto` and range clamping).
+    pub fn used_width(&self) -> UsedLength {
+        UsedLength(self.content_rect.width)
+    }
+
+    pub fn actual_rect(&self, scale: f32) -> Option<super::ActualRect> {
+        self.rect.actual(scale)
+    }
+
     pub fn dom_node_id(&self) -> NodeId {
         self.node_id
+    }
+    pub fn pseudo_element(&self) -> Option<PseudoElement> {
+        self.pseudo
     }
     pub fn tag_name(&self) -> &str {
         &self.tag_name
@@ -106,11 +123,19 @@ impl LayoutBox {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutTree {
     root: LayoutBox,
+    construction_diagnostics: Vec<Diagnostic>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl LayoutTree {
     pub fn root(&self) -> &LayoutBox {
         &self.root
+    }
+
+    /// Generated-content failures and used-value failures from the latest
+    /// layout, also reported to stderr. Construction failures survive relayout.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 
     /// CSS/document coordinates. Text is tested per fragment, not its multi-line bounds.
@@ -173,11 +198,18 @@ impl LayoutTree {
 
     pub fn layout(&mut self, viewport_width: f32, font: &fontdue::Font) {
         self.root.reset();
+        self.diagnostics.clone_from(&self.construction_diagnostics);
         let viewport_width = viewport_width.max(0.0);
         let content_x = PAGE_PADDING.min(viewport_width);
         let content_width = (viewport_width - 2.0 * PAGE_PADDING).max(0.0);
-        let content_height =
-            layout_children(&mut self.root, content_x, PAGE_PADDING, content_width, font);
+        let content_height = layout_children(
+            &mut self.root,
+            content_x,
+            PAGE_PADDING,
+            content_width,
+            font,
+            &mut self.diagnostics,
+        );
         self.root.content_rect = Rect {
             x: content_x,
             y: PAGE_PADDING,
@@ -211,9 +243,78 @@ pub fn build_layout_tree_with_resources(
     styles: &ComputedStyles,
     images: &ImageMap,
 ) -> LayoutTree {
-    let root = build_box(document, document.root_id(), styles, images)
-        .expect("the document root must have a computed style and layout box");
-    LayoutTree { root }
+    let mut diagnostics = Vec::new();
+    let root = build_box(
+        document,
+        document.root_id(),
+        styles,
+        images,
+        &mut diagnostics,
+    )
+    .expect("the document root must have a computed style and layout box");
+    LayoutTree {
+        root,
+        construction_diagnostics: diagnostics.clone(),
+        diagnostics,
+    }
+}
+
+pub(super) fn resolve_length(
+    length: &Length,
+    font_size: f32,
+    reference: f32,
+    node_id: NodeId,
+    property: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> f32 {
+    length.resolve_with_diagnostic(font_size, reference, |message| {
+        report_used_failure(diagnostics, node_id, property, message);
+    })
+}
+
+pub(super) fn resolve_edges(
+    edges: &Edges<Length>,
+    font_size: f32,
+    reference: f32,
+    node_id: NodeId,
+    property: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Edges<f32> {
+    edges.map(|length| {
+        resolve_length(
+            &length,
+            font_size,
+            reference,
+            node_id,
+            property,
+            diagnostics,
+        )
+    })
+}
+
+pub(super) fn resolve_line_height(
+    line_height: &LineHeight,
+    font_size: f32,
+    node_id: NodeId,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> f32 {
+    line_height.used_with_diagnostic(font_size, |message| {
+        report_used_failure(diagnostics, node_id, "line-height", message);
+    })
+}
+
+fn report_used_failure(
+    diagnostics: &mut Vec<Diagnostic>,
+    node_id: NodeId,
+    property: &str,
+    message: String,
+) {
+    let diagnostic = Diagnostic {
+        node_id: Some(node_id),
+        message: format!("{property}: {message}"),
+    };
+    eprintln!("CSS at {:?}: {}", diagnostic.node_id, diagnostic.message);
+    diagnostics.push(diagnostic);
 }
 
 fn build_box(
@@ -221,6 +322,7 @@ fn build_box(
     node_id: NodeId,
     styles: &ComputedStyles,
     images: &ImageMap,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LayoutBox> {
     let node = document.node(node_id)?;
     let style = styles
@@ -247,6 +349,54 @@ fn build_box(
             return None;
         }
     };
+    let mut children: Vec<_> = node
+        .children()
+        .iter()
+        .filter_map(|id| build_box(document, *id, styles, images, diagnostics))
+        .collect();
+    let mut marker_text = None;
+    let mut marker_style = None;
+    if let Some(element) = node.as_element() {
+        if !matches!(
+            element.tag_name().to_ascii_lowercase().as_str(),
+            "img"
+                | "input"
+                | "textarea"
+                | "select"
+                | "video"
+                | "audio"
+                | "iframe"
+                | "canvas"
+                | "object"
+                | "embed"
+        ) {
+            if let Some(before) =
+                generated_box(node_id, element, styles, PseudoElement::Before, diagnostics)
+            {
+                children.insert(0, before);
+            }
+            if let Some(after) =
+                generated_box(node_id, element, styles, PseudoElement::After, diagnostics)
+            {
+                children.push(after);
+            }
+        }
+        if let Some(marker) = styles.pseudo(node_id, PseudoElement::Marker) {
+            marker_style = Some(marker.clone());
+            marker_text = match &marker.content {
+                Content::Normal => None,
+                Content::None => Some(String::new()),
+                _ => generated_text(
+                    &marker.content,
+                    element,
+                    node_id,
+                    PseudoElement::Marker,
+                    diagnostics,
+                )
+                .or_else(|| Some(String::new())),
+            };
+        }
+    }
     Some(LayoutBox {
         node_id,
         tag_name,
@@ -260,12 +410,80 @@ fn build_box(
             .as_element()
             .filter(|element| element.tag_name().eq_ignore_ascii_case("img"))
             .map(|element| ImageContent::new(element, images.get(&node_id).cloned())),
-        children: node
-            .children()
-            .iter()
-            .filter_map(|id| build_box(document, *id, styles, images))
-            .collect(),
+        children,
         text_fragments: Vec::new(),
         list_marker: None,
+        pseudo: None,
+        marker_style,
+        marker_text,
+    })
+}
+
+fn generated_box(
+    node_id: NodeId,
+    element: &crate::dom::ElementData,
+    styles: &ComputedStyles,
+    pseudo: PseudoElement,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LayoutBox> {
+    let style = styles.pseudo(node_id, pseudo)?.clone();
+    if style.display == Display::None {
+        return None;
+    }
+    let text = generated_text(&style.content, element, node_id, pseudo, diagnostics)?;
+    let text_box = LayoutBox {
+        node_id,
+        tag_name: "#generated-text".into(),
+        kind: BoxKind::Text,
+        text: Some(text),
+        style: ComputedStyle::inherit(&style),
+        rect: Rect::default(),
+        content_rect: Rect::default(),
+        padding: Edges::default(),
+        children: Vec::new(),
+        text_fragments: Vec::new(),
+        list_marker: None,
+        image: None,
+        pseudo: Some(pseudo),
+        marker_style: None,
+        marker_text: None,
+    };
+    Some(LayoutBox {
+        node_id,
+        tag_name: format!("::{}", pseudo.name()),
+        kind: if matches!(style.display, Display::Block | Display::ListItem) {
+            BoxKind::Block
+        } else {
+            BoxKind::Inline
+        },
+        text: None,
+        style,
+        rect: Rect::default(),
+        content_rect: Rect::default(),
+        padding: Edges::default(),
+        children: vec![text_box],
+        text_fragments: Vec::new(),
+        list_marker: None,
+        image: None,
+        pseudo: Some(pseudo),
+        marker_style: None,
+        marker_text: None,
+    })
+}
+
+fn generated_text(
+    content: &Content,
+    element: &crate::dom::ElementData,
+    node_id: NodeId,
+    pseudo: PseudoElement,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    content.text_with_diagnostic(element, |message| {
+        report_used_failure(
+            diagnostics,
+            node_id,
+            &format!("content::{}", pseudo.name()),
+            message,
+        );
     })
 }

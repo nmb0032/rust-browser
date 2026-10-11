@@ -1,12 +1,37 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+mod modern;
+pub use modern::{ColorSpace, HueMethod, ResolvedColor};
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Color {
     Rgb(u32),
     Transparent,
     CurrentColor,
+    Absolute(ResolvedColor),
+    System(String),
+    Mix(std::sync::Arc<modern::Mix>),
+    Relative(std::sync::Arc<modern::Relative>),
 }
 
 pub fn parse_color(source: &str) -> Option<Color> {
-    let source = source.trim().to_ascii_lowercase();
+    modern::parse_tokens(&super::math::tokenize(source)?)
+}
+
+impl Color {
+    pub(crate) fn from_tokens(tokens: &[crate::css::tokenizer::TokenKind]) -> Option<Self> {
+        modern::parse_tokens(tokens)
+    }
+
+    pub fn resolve(&self, current: ResolvedColor) -> Option<ResolvedColor> {
+        modern::resolve(self, current, 0)
+    }
+
+    pub(crate) fn computed(&self, current: ResolvedColor) -> Option<Self> {
+        modern::compute(self, current)
+    }
+}
+
+fn keyword(source: &str) -> Option<Color> {
+    let source = source.to_ascii_lowercase();
     if let Some(hex) = source.strip_prefix('#') {
         if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return None;
@@ -167,6 +192,7 @@ pub fn parse_color(source: &str) -> Option<Color> {
         "whitesmoke" => 0xF5F5F5,
         "yellow" => 0xFFFF00,
         "yellowgreen" => 0x9ACD32,
+        _ if modern::system_rgb(&source).is_some() => return Some(Color::System(source)),
         _ => return None,
     };
     Some(Color::Rgb(rgb))
@@ -184,14 +210,7 @@ mod tests {
         assert_eq!(parse_color("rebeccapurple"), Some(Color::Rgb(0x663399)));
         assert_eq!(parse_color("transparent"), Some(Color::Transparent));
         assert_eq!(parse_color("currentColor"), Some(Color::CurrentColor));
-        for source in [
-            "#ff",
-            "#ffff",
-            "#ggg",
-            "rgb(1,2,3)",
-            "not-a-color",
-            "#１２３",
-        ] {
+        for source in ["#ff", "#ggg", "not-a-color", "#１２３"] {
             assert_eq!(parse_color(source), None, "{source}");
         }
     }

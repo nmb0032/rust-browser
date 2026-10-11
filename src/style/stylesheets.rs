@@ -5,7 +5,7 @@ use crate::{
     dom::{Document, NodeId, NodeKind},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub node_id: Option<NodeId>,
     pub message: String,
@@ -36,6 +36,7 @@ pub fn collect_stylesheets_with_external(
     for node_id in document.preorder() {
         if let Some(sheet) = external.get(&node_id) {
             result.stylesheets.push(sheet.clone());
+            continue;
         }
         let Some(source) = embedded_stylesheet_source(document, node_id) else {
             continue;
@@ -53,17 +54,18 @@ pub fn collect_stylesheets_with_external(
 
 pub(crate) fn report_css_errors<T>(
     parsed: &css::ParseOutput<T>,
-    node_id: NodeId,
+    node_id: impl Into<Option<NodeId>>,
     context: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let node_id = node_id.into();
     diagnostics.extend(parsed.errors.iter().map(|error| Diagnostic {
-        node_id: Some(node_id),
+        node_id,
         message: format!("{context}{error}"),
     }));
     if parsed.dropped_errors > 0 {
         diagnostics.push(Diagnostic {
-            node_id: Some(node_id),
+            node_id,
             message: format!(
                 "{context}{} additional CSS parse errors omitted",
                 parsed.dropped_errors

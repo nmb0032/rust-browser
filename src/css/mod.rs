@@ -1,6 +1,7 @@
 //! Parses CSS rules into a syntax tree.
 //!
-//! The syntax tree retains selector and declaration-value source text.
+//! The syntax tree retains selector and declaration-value source text, plus
+//! declaration component tokens for boundary-preserving variable substitution.
 //! Dedicated `selectors` and `values` modules parse their grammars
 //! for the style stage. At-rules and
 //! nested blocks are represented in the tree even when their semantics are
@@ -12,47 +13,18 @@
 //! Property/selector grammars and at-rule semantics remain the style stage's job.
 
 mod ast;
+pub mod container;
+pub(crate) mod control;
+pub mod media;
 mod parser;
 pub mod selectors;
 pub mod tokenizer;
 pub mod values;
 
-pub use ast::{AtRule, BlockItem, Declaration, QualifiedRule, Rule, Stylesheet};
+pub use ast::{
+    AtRule, BlockItem, Declaration, ImportedStylesheet, QualifiedRule, Rule, Stylesheet,
+};
 pub use parser::{
     CssError, CssErrorKind, MAX_RULE_NESTING, ParseOutput, parse, parse_declarations,
     parse_declarations_recovering, parse_recovering,
 };
-
-pub(crate) fn without_comments(source: &str) -> Option<String> {
-    let mut result = String::with_capacity(source.len());
-    let mut chars = source.chars().peekable();
-    let mut quote = None;
-    while let Some(ch) = chars.next() {
-        if quote.is_none() && ch == '/' && chars.peek() == Some(&'*') {
-            chars.next();
-            let mut terminated = false;
-            while let Some(ch) = chars.next() {
-                if ch == '*' && chars.peek() == Some(&'/') {
-                    chars.next();
-                    terminated = true;
-                    break;
-                }
-            }
-            if !terminated {
-                return None;
-            }
-        } else {
-            result.push(ch);
-            if ch == '\\' {
-                if let Some(escaped) = chars.next() {
-                    result.push(escaped);
-                }
-            } else if quote == Some(ch) {
-                quote = None;
-            } else if quote.is_none() && matches!(ch, '\'' | '"') {
-                quote = Some(ch);
-            }
-        }
-    }
-    Some(result)
-}

@@ -1,0 +1,14 @@
+<!doctype html>
+<style>
+  :root { --wide: color(display-p3 .8 .2 .1 / .6); }
+  body { margin: 0; color: var(--wide); }
+  #mix { background: color-mix(in oklab, var(--wide) 30%, blue);
+    border: 3px solid lab(50 20 30 / .5); }
+  #relative { color: oklch(from currentcolor l calc(c / 2) calc(h + 180));
+    background: rgb(from currentcolor r g b / .2); }
+  #system { color: CanvasText; background: Canvas; }
+</style>
+<div id="mix">Wide gamut and mixed alpha
+  <span id="relative">Relative inherited color</span>
+</div>
+<p id="system">Deterministic UA palette</p>

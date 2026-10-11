@@ -1,0 +1,19 @@
+<style>
+body { margin: 0 }
+p {
+  margin: 0;
+  width: 80;
+  height: 30;
+  padding: 10;
+  border: 2px solid blue;
+  color: 123;
+  background-color: abc;
+  -webkit-box-sizing: border-box;
+  -webkit-text-fill-color: blue;
+}
+p::before { content: "Before-" }
+@supports (width: 12) and (color: abc) {
+  p { margin-left: 5 }
+}
+</style>
+<p id="target">Origin</p>

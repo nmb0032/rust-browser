@@ -3,6 +3,10 @@ name = "rust-browser"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Opt-in full-style reference paths for the existing styling benchmark.
+style-bench-reference = []
+
 [dependencies]
 ureq = "3"
 url = "2"

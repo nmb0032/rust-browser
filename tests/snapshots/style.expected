@@ -1,0 +1,31 @@
+Element NodeId(1) <p> id=Some("target")
+  display: Block
+  color: Rgb(0)
+  background-color: Rgb(660510)
+  background-image: None
+  font-size: Px(20.0)
+  font-family: FontFamily([Named("Example Font"), Generic("serif")])
+  font-weight: FontWeight(650.0)
+  font-style: Italic
+  line-height: Number(1.5)
+  width: Percent(25.0)
+  margin-top: Px(20.0)
+  padding-top: Px(0.0)
+  border-top-width: Px(2.0)
+  border-top-style: Solid
+  border-top-color: Rgb(66051)
+  margin-right: Percent(2.0)
+  padding-right: Px(0.0)
+  border-right-width: Px(2.0)
+  border-right-style: Solid
+  border-right-color: Rgb(66051)
+  margin-bottom: Px(20.0)
+  padding-bottom: Px(0.0)
+  border-bottom-width: Px(2.0)
+  border-bottom-style: Solid
+  border-bottom-color: Rgb(66051)
+  margin-left: Percent(2.0)
+  padding-left: Px(0.0)
+  border-left-width: Px(2.0)
+  border-left-style: Solid
+  border-left-color: Rgb(66051)

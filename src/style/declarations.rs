@@ -1,34 +1,46 @@
+use std::sync::Arc;
+
 use crate::css::{
     Declaration,
-    values::{Color, Length, Side, expand_four, parse_color},
-    without_comments,
+    tokenizer::TokenKind,
+    values::{
+        BackgroundImage, BorderStyle, Color, FamilyName, FontFamily, FontSizeKeyword, FontStyle,
+        FontWeight, Length, LineHeight, MathExpression, Side,
+        components::{self, Component},
+        expand_four,
+    },
 };
 
-use super::Display;
+use super::{
+    BoxSizing, Content, ContentItem, Display,
+    compat::DeclarationContext,
+    generated_properties::{self, Parser},
+    variables::TokenValue,
+};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum Property {
+    Content,
     Color,
+    TextFillColor,
     BackgroundColor,
+    BackgroundImage,
     Display,
+    BoxSizing,
     FontSize,
     FontFamily,
     FontWeight,
     FontStyle,
+    LineHeight,
     Width,
+    Height,
+    ContainerType,
+    ContainerName,
     Margin(Side),
     Padding(Side),
     BorderWidth(Side),
     BorderColor(Side),
-}
-
-impl Property {
-    pub(super) fn inherited(self) -> bool {
-        matches!(
-            self,
-            Self::Color | Self::FontSize | Self::FontFamily | Self::FontWeight | Self::FontStyle
-        )
-    }
+    BorderStyle(Side),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -36,66 +48,209 @@ pub(super) enum WideKeyword {
     Inherit,
     Initial,
     Unset,
+    Revert,
+    RevertLayer,
 }
 
 #[derive(Clone, Debug)]
 pub(super) enum Value {
+    Content(Content),
+    ContainerType(crate::css::container::ContainerType),
+    ContainerNames(Vec<String>),
     Wide(WideKeyword),
     Color(Color),
+    BackgroundImage(BackgroundImage),
+    BorderStyle(BorderStyle),
     Display(Display),
+    BoxSizing(BoxSizing),
     Length(Length),
+    NumberMath(Arc<MathExpression>),
     Auto,
-    Family(String),
-    Bold(bool),
-    Italic(bool),
+    Family(FontFamily),
+    Weight(FontWeight),
+    RelativeWeight(bool),
+    FontStyle(FontStyle),
+    FontSizeKeyword(FontSizeKeyword),
+    LineHeight(LineHeight),
+    Custom(Arc<TokenValue>),
+    Pending(Arc<PendingDeclaration>),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct PendingDeclaration {
+    pub name: String,
+    pub value: Arc<TokenValue>,
+    pub context: DeclarationContext,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum DeclarationProperty {
+    Longhand(Property),
+    Custom(String),
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct StyledDeclaration {
-    pub property: Property,
+    pub property: DeclarationProperty,
     pub value: Value,
     pub important: bool,
     pub order: usize,
 }
 
+#[cfg(test)]
 pub(super) fn parse(
     declaration: &Declaration,
     order: usize,
 ) -> Result<Vec<StyledDeclaration>, String> {
-    let properties = properties(&declaration.property().to_ascii_lowercase())
+    parse_with_context(declaration, order, DeclarationContext::default())
+}
+
+pub(super) fn parse_with_context(
+    declaration: &Declaration,
+    order: usize,
+    context: DeclarationContext,
+) -> Result<Vec<StyledDeclaration>, String> {
+    if declaration.property().starts_with("--") && declaration.property() != "--" {
+        let tokens =
+            TokenValue::new(declaration.value_tokens()).map_err(|_| invalid(declaration))?;
+        let value = custom_wide(declaration.value_tokens())
+            .map(Value::Wide)
+            .unwrap_or_else(|| Value::Custom(Arc::new(tokens)));
+        return Ok(vec![StyledDeclaration {
+            property: DeclarationProperty::Custom(declaration.property().to_string()),
+            value,
+            important: declaration.is_important(),
+            order,
+        }]);
+    }
+    let name = declaration.property().to_ascii_lowercase();
+    let properties = properties(&name)
         .ok_or_else(|| format!("unsupported CSS property: {}", declaration.property()))?;
-    let source = without_comments(declaration.value()).ok_or_else(|| invalid(declaration))?;
-    let source = source.trim();
-    let wide = match source.to_ascii_lowercase().as_str() {
-        "inherit" => Some(WideKeyword::Inherit),
-        "initial" => Some(WideKeyword::Initial),
-        "unset" => Some(WideKeyword::Unset),
-        _ => None,
-    };
-    let values = if let Some(wide) = wide {
-        vec![Value::Wide(wide); properties.len()]
-    } else if properties.len() == 4 {
-        let values = source
-            .split_ascii_whitespace()
-            .map(|source| value(properties[0], source))
-            .collect::<Option<Vec<_>>>();
-        values
-            .and_then(|values| expand_four(&values))
-            .map(Vec::from)
-            .ok_or_else(|| invalid(declaration))?
+    let values = if super::variables::contains_var(declaration.value_tokens()) {
+        let value =
+            TokenValue::new(declaration.value_tokens()).map_err(|_| invalid(declaration))?;
+        vec![
+            Value::Pending(Arc::new(PendingDeclaration {
+                name: name.clone(),
+                value: Arc::new(value),
+                context,
+            }));
+            properties.len()
+        ]
     } else {
-        vec![value(properties[0], source).ok_or_else(|| invalid(declaration))?]
+        parse_tokens_with_context(&name, declaration.value_tokens(), context).ok_or_else(|| {
+            let mut message = invalid(declaration);
+            if name == "background" || name == "background-image" {
+                message.push_str(" (supported background subset: one color and/or none; images, layers, and positioning are deferred)");
+            }
+            message
+        })?
     };
     Ok(properties
         .into_iter()
         .zip(values)
         .map(|(property, value)| StyledDeclaration {
-            property,
+            property: DeclarationProperty::Longhand(property),
             value,
             important: declaration.is_important(),
             order,
         })
         .collect())
+}
+
+pub(super) fn parse_tokens(name: &str, tokens: &[TokenKind]) -> Option<Vec<Value>> {
+    parse_tokens_with_context(name, tokens, DeclarationContext::default())
+}
+
+pub(super) fn parse_tokens_with_context(
+    name: &str,
+    tokens: &[TokenKind],
+    context: DeclarationContext,
+) -> Option<Vec<Value>> {
+    let properties = properties(name)?;
+    let parser = generated_properties::parser(name)?;
+    let tokens = context.tokens(name, tokens);
+    let tokens = components::from_tokens(&tokens)?;
+    let wide = match tokens.as_slice() {
+        [token] => token.ident().and_then(wide_keyword),
+        _ => None,
+    };
+    if let Some(wide) = wide {
+        return Some(vec![Value::Wide(wide); properties.len()]);
+    }
+    match parser {
+        Parser::Longhand => value(properties[0], &tokens).map(|value| vec![value]),
+        Parser::Container => {
+            let parts = tokens
+                .split(|t| matches!(t, Component::Token(TokenKind::Delim('/'))))
+                .collect::<Vec<_>>();
+            if parts.len() > 2 {
+                return None;
+            }
+            let names = container_names(parts[0])?;
+            let kind = if parts.len() == 2 {
+                let [token] = parts[1] else { return None };
+                Value::ContainerType(crate::css::container::ContainerType::parse(token.ident()?)?)
+            } else {
+                initial_value(Property::ContainerType)
+            };
+            Some(vec![Value::ContainerNames(names), kind])
+        }
+        Parser::Wide => None,
+        Parser::Border => border(&tokens).map(|values| {
+            properties
+                .iter()
+                .enumerate()
+                .map(|(index, _)| values[index % 3].clone())
+                .collect()
+        }),
+        Parser::Font => font(&tokens),
+        Parser::Background => background(&tokens),
+        Parser::Four => tokens
+            .iter()
+            .map(|token| value(properties[0], std::slice::from_ref(token)))
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| expand_four(&values))
+            .map(Vec::from),
+    }
+}
+
+/// Spec initial tokens use the same finite executable parser as declarations.
+/// The generated UA-dependent family choice is an engine policy, not spec prose.
+pub(super) fn initial_value(property: Property) -> Value {
+    let source = generated_properties::initial_css(property);
+    let tokens = crate::css::values::math::tokenize(source).expect("generated initial tokens");
+    parse_tokens(property.name(), &tokens)
+        .and_then(|mut values| (values.len() == 1).then(|| values.remove(0)))
+        .expect("generated initial must match its executable property grammar")
+}
+
+pub(super) fn custom_wide(tokens: &[TokenKind]) -> Option<WideKeyword> {
+    let mut tokens = tokens
+        .iter()
+        .filter(|token| !matches!(token, TokenKind::Whitespace));
+    match (tokens.next(), tokens.next()) {
+        (Some(TokenKind::Ident(name)), None) => wide_keyword(name),
+        _ => None,
+    }
+}
+
+fn wide_keyword(name: &str) -> Option<WideKeyword> {
+    match name.to_ascii_lowercase().as_str() {
+        "inherit" => Some(WideKeyword::Inherit),
+        "initial" => Some(WideKeyword::Initial),
+        "unset" => Some(WideKeyword::Unset),
+        "revert" => Some(WideKeyword::Revert),
+        "revert-layer" => Some(WideKeyword::RevertLayer),
+        _ => None,
+    }
+}
+
+fn reserved(name: &str) -> bool {
+    wide_keyword(name).is_some()
+        || name.eq_ignore_ascii_case("revert")
+        || name.eq_ignore_ascii_case("revert-layer")
+        || name.eq_ignore_ascii_case("default")
 }
 
 fn invalid(declaration: &Declaration) -> String {
@@ -106,95 +261,327 @@ fn invalid(declaration: &Declaration) -> String {
     )
 }
 
-fn properties(name: &str) -> Option<Vec<Property>> {
-    use Property as P;
-    let sides = [Side::Top, Side::Right, Side::Bottom, Side::Left];
-    let single = match name {
-        "color" => P::Color,
-        "background-color" => P::BackgroundColor,
-        "display" => P::Display,
-        "font-size" => P::FontSize,
-        "font-family" => P::FontFamily,
-        "font-weight" => P::FontWeight,
-        "font-style" => P::FontStyle,
-        "width" => P::Width,
-        "margin" => return Some(sides.map(P::Margin).into()),
-        "padding" => return Some(sides.map(P::Padding).into()),
-        "border-width" => return Some(sides.map(P::BorderWidth).into()),
-        "border-color" => return Some(sides.map(P::BorderColor).into()),
-        _ => {
-            for (suffix, side) in [
-                ("top", Side::Top),
-                ("right", Side::Right),
-                ("bottom", Side::Bottom),
-                ("left", Side::Left),
-            ] {
-                if name.strip_prefix("margin-") == Some(suffix) {
-                    return Some(vec![P::Margin(side)]);
-                }
-                if name.strip_prefix("padding-") == Some(suffix) {
-                    return Some(vec![P::Padding(side)]);
-                }
-                if name
-                    .strip_prefix("border-")
-                    .and_then(|name| name.strip_suffix("-width"))
-                    == Some(suffix)
-                {
-                    return Some(vec![P::BorderWidth(side)]);
-                }
-                if name
-                    .strip_prefix("border-")
-                    .and_then(|name| name.strip_suffix("-color"))
-                    == Some(suffix)
-                {
-                    return Some(vec![P::BorderColor(side)]);
-                }
-            }
-            return None;
-        }
-    };
-    Some(vec![single])
+pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
+    generated_properties::properties(name)
 }
 
-fn value(property: Property, source: &str) -> Option<Value> {
+fn border_properties(side: Side) -> [Property; 3] {
+    [
+        Property::BorderWidth(side),
+        Property::BorderStyle(side),
+        Property::BorderColor(side),
+    ]
+}
+
+fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     use Property as P;
-    let lower = source.to_ascii_lowercase();
+    if generated_properties::simple(property) {
+        return generated_properties::simple_value(property, tokens);
+    }
+    if property == P::Content {
+        return content(tokens).map(Value::Content);
+    }
+    if property == P::FontFamily {
+        return family(tokens).map(Value::Family);
+    }
+    if property == P::ContainerName {
+        return container_names(tokens).map(Value::ContainerNames);
+    }
+    let [token] = tokens else {
+        return None;
+    };
+    let lower = token.ident().unwrap_or("").to_ascii_lowercase();
     match property {
-        P::Color | P::BackgroundColor | P::BorderColor(_) => parse_color(source).map(Value::Color),
-        P::Display => Some(Value::Display(match lower.as_str() {
-            "block" => Display::Block,
-            "inline" => Display::Inline,
-            "list-item" => Display::ListItem,
-            "none" => Display::None,
-            _ => return None,
-        })),
-        P::Width if lower == "auto" => Some(Value::Auto),
-        P::FontSize | P::Width | P::Margin(_) | P::Padding(_) | P::BorderWidth(_) => {
-            let length = Length::parse(source)?;
+        P::Content
+        | P::Color
+        | P::TextFillColor
+        | P::BackgroundColor
+        | P::BorderColor(_)
+        | P::BackgroundImage
+        | P::BorderStyle(_)
+        | P::Display
+        | P::BoxSizing
+        | P::ContainerType => unreachable!("generated simple dispatch or content"),
+        P::ContainerName => unreachable!(),
+        P::Width | P::Height if lower == "auto" => Some(Value::Auto),
+        P::FontSize => font_size(token),
+        P::Width | P::Height | P::Margin(_) | P::Padding(_) | P::BorderWidth(_) => {
+            let length = if matches!(property, P::BorderWidth(_)) {
+                match lower.as_str() {
+                    "thin" => Length::Px(1.0),
+                    "medium" => Length::Px(3.0),
+                    "thick" => Length::Px(5.0),
+                    _ => token.length()?,
+                }
+            } else {
+                token.length()?
+            };
             if !matches!(property, P::Margin(_)) && !length.is_nonnegative() {
                 return None;
             }
-            if matches!(property, P::BorderWidth(_)) && matches!(length, Length::Percent(_)) {
+            if matches!(property, P::BorderWidth(_)) && length.has_percentage() {
                 return None;
             }
             Some(Value::Length(length))
         }
-        P::FontFamily if !source.is_empty() => Some(Value::Family(source.to_string())),
-        P::FontFamily => None,
+        P::FontFamily => unreachable!(),
         P::FontWeight => match lower.as_str() {
-            "bold" => Some(Value::Bold(true)),
-            "normal" => Some(Value::Bold(false)),
+            "bold" => Some(Value::Weight(FontWeight(700.0))),
+            "normal" => Some(Value::Weight(FontWeight::default())),
+            "bolder" => Some(Value::RelativeWeight(true)),
+            "lighter" => Some(Value::RelativeWeight(false)),
             _ => {
-                let weight: u16 = source.parse().ok()?;
-                (100..=900)
-                    .contains(&weight)
-                    .then_some(Value::Bold(weight >= 600))
+                if let Some(weight) = token.number() {
+                    (1.0..=1000.0)
+                        .contains(&weight)
+                        .then_some(Value::Weight(FontWeight(weight)))
+                } else {
+                    token.number_math().map(Value::NumberMath)
+                }
             }
         },
-        P::FontStyle => match lower.as_str() {
-            "normal" => Some(Value::Italic(false)),
-            "italic" | "oblique" => Some(Value::Italic(true)),
-            _ => None,
-        },
+        P::FontStyle => unreachable!("generated simple dispatch"),
+        P::LineHeight => {
+            let height = if lower == "normal" {
+                LineHeight::Normal
+            } else if let Some(number) = token.number() {
+                if number < 0.0 {
+                    return None;
+                }
+                LineHeight::Number(number)
+            } else if let Some(expression) = token.number_math() {
+                return Some(Value::NumberMath(expression));
+            } else {
+                let length = token.length()?;
+                if !length.is_nonnegative() {
+                    return None;
+                }
+                LineHeight::Length(length)
+            };
+            Some(Value::LineHeight(height))
+        }
     }
+}
+
+fn container_names(tokens: &[Component]) -> Option<Vec<String>> {
+    let tokens = tokens
+        .iter()
+        .map(|t| match t {
+            Component::Token(token) => Some(token.clone()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    crate::css::container::names(&tokens)
+}
+
+fn content(tokens: &[Component]) -> Option<Content> {
+    if let [token] = tokens {
+        if token.is_ident("normal") {
+            return Some(Content::Normal);
+        }
+        if token.is_ident("none") {
+            return Some(Content::None);
+        }
+    }
+    if tokens.is_empty() || tokens.len() > 256 {
+        return None;
+    }
+    let items = tokens
+        .iter()
+        .map(|token| match token {
+            Component::Token(TokenKind::String(text)) if text.len() <= 65_536 => {
+                Some(ContentItem::Text(text.clone()))
+            }
+            Component::Function(name, args) if name.eq_ignore_ascii_case("attr") => {
+                let significant: Vec<_> = args
+                    .iter()
+                    .filter(|t| **t != TokenKind::Whitespace)
+                    .collect();
+                match significant.as_slice() {
+                    [TokenKind::Ident(name)] => Some(ContentItem::Attribute(name.clone())),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Content::Items(items))
+}
+
+fn font_size(token: &Component) -> Option<Value> {
+    use FontSizeKeyword as K;
+    let keyword = match token.ident().unwrap_or("").to_ascii_lowercase().as_str() {
+        "xx-small" => Some(K::XxSmall),
+        "x-small" => Some(K::XSmall),
+        "small" => Some(K::Small),
+        "medium" => Some(K::Medium),
+        "large" => Some(K::Large),
+        "x-large" => Some(K::XLarge),
+        "xx-large" => Some(K::XxLarge),
+        "xxx-large" => Some(K::XxxLarge),
+        _ => None,
+    };
+    if let Some(keyword) = keyword {
+        return Some(Value::FontSizeKeyword(keyword));
+    }
+    let length = match token.ident().unwrap_or("").to_ascii_lowercase().as_str() {
+        "smaller" => Length::Em(1.0 / 1.2),
+        "larger" => Length::Em(1.2),
+        _ => token.length()?,
+    };
+    length.is_nonnegative().then_some(Value::Length(length))
+}
+
+fn border(tokens: &[Component]) -> Option<[Value; 3]> {
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut values: [Option<Value>; 3] = [None, None, None];
+    for token in tokens {
+        let mut matched = false;
+        for (index, property) in border_properties(Side::Top).into_iter().enumerate() {
+            if let Some(value) = value(property, std::slice::from_ref(token)) {
+                if values[index].is_some() {
+                    return None;
+                }
+                values[index] = Some(value);
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return None;
+        }
+    }
+    let [width, style, color] = values;
+    Some([
+        width.unwrap_or_else(|| initial_value(Property::BorderWidth(Side::Top))),
+        style.unwrap_or_else(|| initial_value(Property::BorderStyle(Side::Top))),
+        color.unwrap_or_else(|| initial_value(Property::BorderColor(Side::Top))),
+    ])
+}
+
+fn family(tokens: &[Component]) -> Option<FontFamily> {
+    let mut names = Vec::new();
+    for tokens in tokens.split(|token| matches!(token, Component::Token(TokenKind::Comma))) {
+        let name = match tokens {
+            [Component::Token(TokenKind::String(name))] => FamilyName::Named(name.clone()),
+            _ => {
+                if tokens.is_empty() {
+                    return None;
+                }
+                let words = tokens
+                    .iter()
+                    .map(|token| token.ident())
+                    .collect::<Option<Vec<_>>>()?;
+                if words.iter().any(|word| reserved(word)) {
+                    return None;
+                }
+                let generic = |word: &str| {
+                    matches!(
+                        word.to_ascii_lowercase().as_str(),
+                        "serif"
+                            | "sans-serif"
+                            | "monospace"
+                            | "cursive"
+                            | "fantasy"
+                            | "system-ui"
+                            | "ui-serif"
+                            | "ui-sans-serif"
+                            | "ui-monospace"
+                            | "ui-rounded"
+                            | "emoji"
+                            | "math"
+                            | "fangsong"
+                    )
+                };
+                if words.iter().any(|word| generic(word)) {
+                    if words.len() != 1 {
+                        return None;
+                    }
+                    FamilyName::Generic(words[0].to_ascii_lowercase())
+                } else {
+                    FamilyName::Named(words.join(" "))
+                }
+            }
+        };
+        names.push(name);
+    }
+    Some(FontFamily(names))
+}
+
+fn font(tokens: &[Component]) -> Option<Vec<Value>> {
+    let mut style = None;
+    let mut weight = None;
+    let mut normals = 0;
+    let mut index = 0;
+    let size = loop {
+        let token = tokens.get(index)?;
+        if let Some(size) = font_size(token) {
+            break size;
+        }
+        if token.is_ident("normal") {
+            normals += 1;
+        } else if let Some(value) = value(Property::FontStyle, std::slice::from_ref(token)) {
+            if style.replace(value).is_some() {
+                return None;
+            }
+        } else {
+            let value = value(Property::FontWeight, std::slice::from_ref(token))?;
+            if weight.replace(value).is_some() {
+                return None;
+            }
+        }
+        index += 1;
+    };
+    if normals + usize::from(style.is_some()) + usize::from(weight.is_some()) > 2 {
+        return None;
+    }
+    index += 1;
+    let mut line_height = initial_value(Property::LineHeight);
+    if matches!(
+        tokens.get(index),
+        Some(Component::Token(TokenKind::Delim('/')))
+    ) {
+        index += 1;
+        line_height = value(
+            Property::LineHeight,
+            std::slice::from_ref(tokens.get(index)?),
+        )?;
+        index += 1;
+    }
+    Some(vec![
+        style.unwrap_or_else(|| initial_value(Property::FontStyle)),
+        weight.unwrap_or_else(|| initial_value(Property::FontWeight)),
+        size,
+        line_height,
+        Value::Family(family(&tokens[index..])?),
+    ])
+}
+
+fn background(tokens: &[Component]) -> Option<Vec<Value>> {
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut color = None;
+    let mut image = false;
+    for token in tokens {
+        if token.is_ident("none") {
+            if image {
+                return None;
+            }
+            image = true;
+        } else {
+            if color.is_some() {
+                return None;
+            }
+            color = Some(token.color()?);
+        }
+    }
+    Some(vec![
+        color
+            .map(Value::Color)
+            .unwrap_or_else(|| initial_value(Property::BackgroundColor)),
+        initial_value(Property::BackgroundImage),
+    ])
 }

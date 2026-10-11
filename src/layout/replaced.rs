@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    dom::ElementData, html::attributes::image_dimension, media::DecodedImage, style::ComputedStyle,
-};
+use crate::{dom::ElementData, media::DecodedImage, style::ComputedStyle};
 
 use super::{Rect, TextFragment, inline::measure_text};
 
@@ -11,7 +9,6 @@ const MAX_LAYOUT_DIMENSION: f32 = 1_000_000.0;
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ImageContent {
     pub(super) data: Option<Arc<DecodedImage>>,
-    height: Option<f32>,
     alt: String,
 }
 
@@ -19,7 +16,6 @@ impl ImageContent {
     pub(super) fn new(element: &ElementData, data: Option<Arc<DecodedImage>>) -> Self {
         Self {
             data,
-            height: element.attribute("height").and_then(image_dimension),
             alt: element.attribute("alt").unwrap_or_default().to_owned(),
         }
     }
@@ -27,7 +23,9 @@ impl ImageContent {
     pub(super) fn size(
         &self,
         style: &ComputedStyle,
-        containing_width: f32,
+        width: Option<f32>,
+        height: Option<f32>,
+        line_height: f32,
         font: &fontdue::Font,
     ) -> (f32, f32) {
         let natural_width = self.data.as_ref().map_or_else(
@@ -37,12 +35,9 @@ impl ImageContent {
         let natural_height = self
             .data
             .as_ref()
-            .map_or(style.font_size * 1.25, |image| image.height() as f32);
-        let width = style
-            .width
-            .map(|length| length.resolve(style.font_size, containing_width));
+            .map_or(line_height, |image| image.height() as f32);
         let ratio = natural_width / natural_height.max(1.0);
-        let (width, height) = match (width, self.height) {
+        let (width, height) = match (width, height) {
             (Some(width), Some(height)) => (width, height),
             (Some(width), None) => (width, width / ratio),
             (None, Some(height)) => (height * ratio, height),
@@ -65,7 +60,8 @@ impl ImageContent {
             height: rect.height,
             text: self.alt.clone(),
             font_size: style.font_size,
-            color: style.color,
+            color: style.text_fill_color.legacy(),
+            text_color: style.text_fill_color,
             bold: style.bold,
             italic: style.italic,
         })

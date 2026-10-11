@@ -1,0 +1,14 @@
+{
+  "package": "@webref/css",
+  "version": "8.7.6",
+  "repository": "https://github.com/w3c/webref",
+  "ref": "7fc4c84bdc356eab59dccb571643c8a1e1f703dd",
+  "url": "https://registry.npmjs.org/@webref/css/-/css-8.7.6.tgz",
+  "tarball_sha256": "96a367b99b2c8dcddd05e7e102f3a106ca13b7c9fdd988ffbeceb679250b5373",
+  "tarball_sha512": "e1638298cc28e5fd01d0ceda5e3234039452fe081ffa88d104d673a6dc04f5181172c1fb6029c0895a8162a99868e4e9892b8eb0a41b4153544c89fb3e995d01",
+  "member": "package/css.json",
+  "snapshot_sha256": "4860d2a9ad90814a61888e8b2d879651fd523c0d3926eecfe4548b4dd60a20eb",
+  "license": "MIT",
+  "license_url": "https://raw.githubusercontent.com/w3c/webref/7fc4c84bdc356eab59dccb571643c8a1e1f703dd/LICENSE",
+  "license_sha256": "0c858684c0cd758f3bc5198c1f5d5684aecbece0713a0e9b17d740ba5bf8db1a"
+}

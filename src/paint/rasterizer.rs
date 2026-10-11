@@ -14,6 +14,7 @@ struct TextRun<'a> {
     baseline_y: i32,
     px: f32,
     color: u32,
+    alpha: u32,
     bold: bool,
     italic: bool,
 }
@@ -44,20 +45,36 @@ pub(crate) fn rasterize_display_list(
                         bottom: (*h * scale).ceil() as i32,
                     },
                     *color,
+                    255,
                 );
             }
-            DisplayItem::Rect { x, y, w, h, color } => {
+            DisplayItem::Rect { x, y, w, h, .. } | DisplayItem::ColorRect { x, y, w, h, .. } => {
+                let (color, alpha) = match item {
+                    DisplayItem::Rect { color, .. } => (*color, 255),
+                    DisplayItem::ColorRect { color, .. } => color.to_srgb8(),
+                    _ => unreachable!(),
+                };
+                let Some(actual) = (crate::layout::Rect {
+                    x: *x,
+                    y: *y - scroll_offset,
+                    width: *w,
+                    height: *h,
+                })
+                .actual(scale) else {
+                    continue;
+                };
                 draw_rect(
                     pixels,
                     width,
                     height,
                     PixelRect {
-                        left: (*x * scale).floor() as i32,
-                        top: ((*y - scroll_offset) * scale).floor() as i32,
-                        right: ((*x + *w) * scale).ceil() as i32,
-                        bottom: ((*y - scroll_offset + *h) * scale).ceil() as i32,
+                        left: actual.left,
+                        top: actual.top,
+                        right: actual.right,
+                        bottom: actual.bottom,
                     },
-                    *color,
+                    color,
+                    alpha,
                 );
             }
             DisplayItem::OutlineRect { x, y, w, h, color } => {
@@ -105,9 +122,18 @@ pub(crate) fn rasterize_display_list(
                 y,
                 text,
                 size,
-                color,
                 bold,
                 italic,
+                ..
+            }
+            | DisplayItem::ColorText {
+                x,
+                y,
+                text,
+                size,
+                bold,
+                italic,
+                ..
             } => {
                 let line_top = *y - scroll_offset;
                 if line_top + size * 1.25 <= 0.0 || line_top >= viewport_height {
@@ -115,6 +141,11 @@ pub(crate) fn rasterize_display_list(
                 }
 
                 let baseline = ((line_top + size * 1.25) * scale).round() as i32;
+                let (color, alpha) = match item {
+                    DisplayItem::Text { color, .. } => (*color, 255),
+                    DisplayItem::ColorText { color, .. } => color.to_srgb8(),
+                    _ => unreachable!(),
+                };
                 draw_text(
                     font,
                     pixels,
@@ -125,7 +156,8 @@ pub(crate) fn rasterize_display_list(
                         start_x: (*x * scale).round() as i32,
                         baseline_y: baseline,
                         px: *size * scale,
-                        color: *color,
+                        color,
+                        alpha,
                         bold: *bold,
                         italic: *italic,
                     },
@@ -160,6 +192,7 @@ fn draw_outline_rect(
             bottom: inner_top,
         },
         color,
+        255,
     );
     draw_rect(
         pixels,
@@ -172,6 +205,7 @@ fn draw_outline_rect(
             bottom: rect.bottom,
         },
         color,
+        255,
     );
     draw_rect(
         pixels,
@@ -184,6 +218,7 @@ fn draw_outline_rect(
             bottom: inner_bottom,
         },
         color,
+        255,
     );
     draw_rect(
         pixels,
@@ -196,10 +231,18 @@ fn draw_outline_rect(
             bottom: inner_bottom,
         },
         color,
+        255,
     );
 }
 
-fn draw_rect(pixels: &mut [u32], width: usize, height: usize, rect: PixelRect, color: u32) {
+fn draw_rect(
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+    rect: PixelRect,
+    color: u32,
+    alpha: u32,
+) {
     let start_x = rect.left.max(0).min(width as i32) as usize;
     let end_x = rect.right.max(0).min(width as i32) as usize;
     let start_y = rect.top.max(0).min(height as i32) as usize;
@@ -210,7 +253,14 @@ fn draw_rect(pixels: &mut [u32], width: usize, height: usize, rect: PixelRect, c
     }
 
     for y in start_y..end_y {
-        pixels[y * width + start_x..y * width + end_x].fill(color);
+        let row = &mut pixels[y * width + start_x..y * width + end_x];
+        if alpha == 255 {
+            row.fill(color);
+        } else {
+            for pixel in row {
+                *pixel = blend(*pixel, color, alpha);
+            }
+        }
     }
 }
 
@@ -246,7 +296,7 @@ fn draw_text(
                     continue;
                 }
 
-                let coverage = bitmap[glyph_y * metrics.width + glyph_x] as u32;
+                let coverage = bitmap[glyph_y * metrics.width + glyph_x] as u32 * run.alpha / 255;
                 let index = y as usize * width + x as usize;
                 pixels[index] = blend(pixels[index], run.color, coverage);
                 if run.bold && x + 1 >= 0 && ((x + 1) as usize) < width {
@@ -280,6 +330,191 @@ mod tests {
 
     const BACKGROUND_COLOR: u32 = 0x00FF_FFFF;
     const TEXT_COLOR: u32 = 0x0000_0000;
+
+    #[test]
+    fn typed_colors_and_images_share_alpha_compositing_and_order() {
+        use crate::css::values::parse_color;
+        use std::{io::Cursor, sync::Arc};
+        let color = |source| {
+            parse_color(source)
+                .unwrap()
+                .resolve(crate::css::values::ResolvedColor::BLACK)
+                .unwrap()
+        };
+        let rect = |color| DisplayItem::ColorRect {
+            x: 0.0,
+            y: 0.0,
+            w: 2.0,
+            h: 1.0,
+            color,
+        };
+        let red = rect(color("color(display-p3 1 0 0 / .5)"));
+        let blue = rect(color("rgb(0 0 255 / .5)"));
+        let transparent = rect(color("rgb(0 255 0 / 0)"));
+        let font = load_bundled_font().unwrap();
+        let mut pixels = vec![BACKGROUND_COLOR; 2];
+        rasterize_display_list(
+            &[red.clone(), blue.clone(), transparent],
+            &font,
+            &mut pixels,
+            2,
+            1,
+            1.0,
+            0.0,
+        );
+        assert_eq!(pixels, [0x7f3fbf; 2]);
+        let mut reverse = vec![BACKGROUND_COLOR; 2];
+        rasterize_display_list(
+            &[blue.clone(), red.clone()],
+            &font,
+            &mut reverse,
+            2,
+            1,
+            1.0,
+            0.0,
+        );
+        assert_eq!(reverse, [0xbf3f7f; 2]);
+
+        let source = image::ImageBuffer::from_pixel(2, 1, image::Rgba([255u8, 0, 0, 128]));
+        let mut encoded = Cursor::new(Vec::new());
+        source
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let image = Arc::new(crate::media::DecodedImage::decode(&encoded.into_inner()).unwrap());
+        let mut image_pixels = vec![BACKGROUND_COLOR; 2];
+        rasterize_display_list(
+            &[
+                DisplayItem::Image {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 2.0,
+                    h: 1.0,
+                    image,
+                },
+                blue,
+            ],
+            &font,
+            &mut image_pixels,
+            2,
+            1,
+            1.0,
+            0.0,
+        );
+        assert_eq!(image_pixels, pixels);
+    }
+
+    #[test]
+    fn text_color_alpha_multiplies_glyph_coverage() {
+        let font = load_bundled_font().unwrap();
+        let color = crate::css::values::ResolvedColor::srgb(0.0, 0.0, 0.0, 0.5);
+        let legacy = DisplayItem::Text {
+            x: 0.0,
+            y: 0.0,
+            text: "M".into(),
+            size: 16.0,
+            color: 0,
+            bold: false,
+            italic: false,
+        };
+        let typed = DisplayItem::ColorText {
+            x: 0.0,
+            y: 0.0,
+            text: "M".into(),
+            size: 16.0,
+            color,
+            bold: false,
+            italic: false,
+        };
+        let mut opaque = vec![BACKGROUND_COLOR; 32 * 32];
+        let mut semi = opaque.clone();
+        rasterize_display_list(&[legacy], &font, &mut opaque, 32, 32, 1.0, 0.0);
+        rasterize_display_list(&[typed], &font, &mut semi, 32, 32, 1.0, 0.0);
+        assert!(semi.iter().any(|pixel| *pixel != BACKGROUND_COLOR));
+        for (opaque, semi) in opaque.into_iter().zip(semi) {
+            let coverage = 255 - (opaque & 255);
+            let expected = 255 - coverage * 128 / 255;
+            assert_eq!(semi, expected * 0x010101);
+        }
+    }
+
+    #[test]
+    fn computed_background_border_and_text_alpha_are_painted_over_each_other() {
+        let document = crate::html::parser::parse(
+            "<div style='width:60px;
+            background:rgb(255 0 0 / .5);border:3px solid rgb(0 0 255 / .5);
+            color:rgb(0 255 0 / .5)'>M</div>",
+        )
+        .unwrap();
+        let styles = crate::style::resolve(&document).styles;
+        let mut layout = crate::layout::build_layout_tree_with_styles(&document, &styles);
+        let font = load_bundled_font().unwrap();
+        layout.layout(100.0, &font);
+        let list = crate::paint::build_display_list(&layout, 100.0, 100.0, false);
+        let mut pixels = vec![0; 100 * 100];
+        rasterize_display_list(&list, &font, &mut pixels, 100, 100, 1.0, 0.0);
+        assert!(
+            pixels.contains(&0xff7f7f),
+            "background was not alpha blended"
+        );
+        assert!(
+            pixels.contains(&0x7f3fbf),
+            "border did not blend over background"
+        );
+        assert!(
+            pixels
+                .iter()
+                .any(|p| (p >> 16) & 255 < 255 && (p >> 8) & 255 > 127 && p & 255 < 127),
+            "text did not blend over background"
+        );
+    }
+
+    #[test]
+    fn actual_rectangle_stage_matches_fractional_scaled_scrolled_raster_pixels() {
+        let rect = crate::layout::Rect {
+            x: 1.25,
+            y: 2.0,
+            width: 3.5,
+            height: 2.5,
+        };
+        let actual = rect.actual(1.5).unwrap();
+        assert_eq!(
+            actual,
+            crate::layout::ActualRect {
+                left: 1,
+                top: 3,
+                right: 8,
+                bottom: 7
+            }
+        );
+        let font = load_bundled_font().unwrap();
+        let mut pixels = vec![BACKGROUND_COLOR; 64];
+        rasterize_display_list(
+            &[DisplayItem::Rect {
+                x: rect.x,
+                y: rect.y + 0.25,
+                w: rect.width,
+                h: rect.height,
+                color: 0xff0000,
+            }],
+            &font,
+            &mut pixels,
+            8,
+            8,
+            1.5,
+            0.25,
+        );
+        for y in 0..8 {
+            for x in 0..8 {
+                let painted =
+                    x >= actual.left && x < actual.right && y >= actual.top && y < actual.bottom;
+                assert_eq!(
+                    pixels[(y * 8 + x) as usize],
+                    if painted { 0xff0000 } else { BACKGROUND_COLOR }
+                );
+            }
+        }
+        assert!(rect.actual(0.0).is_none());
+    }
 
     #[test]
     fn images_scale_clip_scroll_and_alpha_blend_with_the_destination() {
@@ -447,7 +682,7 @@ mod tests {
     #[test]
     fn rasterizes_computed_box_model_and_inherited_text_colors() {
         let document = crate::html::parser::parse(
-            "<div style='width:20px; padding:2px; border-width:2px;\
+            "<div style='width:20px; padding:2px; border-width:2px; border-style:solid;\
              border-color:blue; background-color:yellow; color:red'>A</div>",
         )
         .unwrap();

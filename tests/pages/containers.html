@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Conditional components — resize the window</title>
+<style>
+  body { margin: 0; font-family: sans-serif }
+  h1 { font-size: 24px }
+  .component { container: component / inline-size; padding: 12px; border: 2px solid; margin-bottom: 16px }
+  #wide { width: 40vw }
+  #narrow { width: 180px }
+  .card { --indicator: 10cqi; width: calc(100% - 16px); padding: 8px; background: #ffe6cc }
+  .card::before { content: 'Compact container'; display: block; width: var(--indicator); color: #8b3300 }
+  @container component (300px <= inline-size) {
+    .card { background: #ddf2e4 }
+    .card::before { content: 'Roomy container'; color: #006633 }
+  }
+  @media (prefers-color-scheme: dark) { body { color: white; background: #202020 } }
+</style>
+<h1>Two components, one viewport</h1>
+<p>Resize the window: the first container is 40vw; the second stays 180px.
+Each card uses its own content width, not the viewport. The indicator is 10cqi.</p>
+<section id="wide" class="component"><div class="card">Fluid component</div></section>
+<section id="narrow" class="component"><div class="card">Fixed narrow component</div></section>

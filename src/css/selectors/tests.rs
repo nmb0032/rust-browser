@@ -1,7 +1,7 @@
 use super::*;
 use crate::dom::{Attribute, Namespace};
 
-fn append(
+pub(super) fn append(
     document: &mut Document,
     parent: NodeId,
     tag: &str,
@@ -21,7 +21,7 @@ fn append(
         .unwrap()
 }
 
-fn matches(document: &Document, node: NodeId, source: &str) -> bool {
+pub(super) fn matches(document: &Document, node: NodeId, source: &str) -> bool {
     let selectors = parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
     selectors
         .iter()
@@ -560,8 +560,6 @@ fn rejects_invalid_or_unsupported_forms_without_partial_matching() {
         "p + ~ a",
         "p +",
         "p ~",
-        "p:hover",
-        "::before",
         "p:unknown",
         "p: first-child",
         "p:first-child()",
@@ -588,9 +586,8 @@ fn rejects_invalid_or_unsupported_forms_without_partial_matching() {
         "[x=a]]",
         "svg|a",
         "[xlink|href]",
-        "[*|href]",
-        ":nth-child(2)",
-        ":has(p)",
+        ":nth-child(2.0)",
+        ":has(:has(p))",
     ] {
         assert!(parse(source).is_err(), "{source}");
     }

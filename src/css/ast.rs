@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use super::tokenizer::TokenKind;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stylesheet {
     pub(super) rules: Vec<Rule>,
@@ -47,9 +51,20 @@ pub struct AtRule {
     pub(super) name: String,
     pub(super) prelude: String,
     pub(super) block: Option<Vec<BlockItem>>,
+    pub(crate) imported: Option<ImportedStylesheet>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportedStylesheet {
+    pub stylesheet: Arc<Stylesheet>,
+    pub url: url::Url,
+    pub source: Arc<str>,
 }
 
 impl AtRule {
+    pub fn imported(&self) -> Option<&ImportedStylesheet> {
+        self.imported.as_ref()
+    }
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -63,6 +78,12 @@ impl AtRule {
     }
 }
 
+impl Stylesheet {
+    pub(crate) fn rules_mut(&mut self) -> &mut [Rule] {
+        &mut self.rules
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlockItem {
     Declaration(Declaration),
@@ -73,6 +94,7 @@ pub enum BlockItem {
 pub struct Declaration {
     pub(super) property: String,
     pub(super) value: String,
+    pub(super) tokens: Arc<[TokenKind]>,
     pub(super) important: bool,
 }
 
@@ -83,6 +105,12 @@ impl Declaration {
 
     pub fn value(&self) -> &str {
         &self.value
+    }
+
+    /// Original component tokens, without the declaration's `!important`.
+    /// Whitespace and boundaries discarded by textual concatenation are retained.
+    pub fn value_tokens(&self) -> &[TokenKind] {
+        &self.tokens
     }
 
     pub fn is_important(&self) -> bool {

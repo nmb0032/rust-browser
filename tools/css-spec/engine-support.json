@@ -1,0 +1,83 @@
+{
+  "longhands": {
+    "content": {"rust": "Content", "policy": "content", "sample": "\"hello\""},
+    "color": {"rust": "Color", "policy": "color", "sample": "red"},
+    "-webkit-text-fill-color": {"rust": "TextFillColor", "policy": "text-fill", "sample": "blue"},
+    "background-color": {"rust": "BackgroundColor", "policy": "color", "sample": "blue"},
+    "background-image": {"rust": "BackgroundImage", "policy": "image", "sample": "none"},
+    "display": {"rust": "Display", "policy": "display", "sample": "block"},
+    "box-sizing": {"rust": "BoxSizing", "policy": "box-sizing", "sample": "border-box"},
+    "font-size": {"rust": "FontSize", "policy": "font-size", "sample": "24px"},
+    "font-family": {"rust": "FontFamily", "policy": "font-family", "sample": "serif", "ua_initial": "sans-serif"},
+    "font-weight": {"rust": "FontWeight", "policy": "font-weight", "sample": "700"},
+    "font-style": {"rust": "FontStyle", "policy": "font-style", "sample": "italic"},
+    "line-height": {"rust": "LineHeight", "policy": "line-height", "sample": "2"},
+    "width": {"rust": "Width", "policy": "size", "sample": "42px"},
+    "height": {"rust": "Height", "policy": "size", "sample": "36px"},
+    "container-type": {"rust": "ContainerType", "policy": "container-type", "sample": "size"},
+    "container-name": {"rust": "ContainerName", "policy": "container-name", "sample": "card"}
+  },
+  "aliases": {
+    "-webkit-box-sizing": "box-sizing"
+  },
+  "side_families": {
+    "margin": {"rust": "Margin", "policy": "margin", "sample": "12px"},
+    "padding": {"rust": "Padding", "policy": "padding", "sample": "8px"},
+    "border-*-width": {"rust": "BorderWidth", "policy": "border-width", "sample": "7px"},
+    "border-*-style": {"rust": "BorderStyle", "policy": "border-style", "sample": "dashed"},
+    "border-*-color": {"rust": "BorderColor", "policy": "border-color", "sample": "purple"}
+  },
+  "shorthands": {
+    "all": {"parser": "Wide", "policy": "all", "sample": "initial"},
+    "background": {"parser": "Background", "policy": "background", "sample": "red", "order": ["background-color", "background-image"]},
+    "font": {"parser": "Font", "policy": "font", "sample": "italic bold 20px/2 serif"},
+    "container": {"parser": "Container", "policy": "container", "sample": "card / size"},
+    "margin": {"parser": "Four", "policy": "margin", "sample": "1px 2px 3px 4px"},
+    "padding": {"parser": "Four", "policy": "padding", "sample": "1px 2px 3px 4px"},
+    "border-width": {"parser": "Four", "policy": "border-width", "sample": "1px 2px 3px 4px"},
+    "border-style": {"parser": "Four", "policy": "border-style", "sample": "solid dashed dotted double"},
+    "border-color": {"parser": "Four", "policy": "border-color", "sample": "red blue green purple"},
+    "border": {"parser": "Border", "policy": "border", "sample": "4px solid red", "side_major": true},
+    "border-top": {"parser": "Border", "policy": "border", "sample": "4px solid red"},
+    "border-right": {"parser": "Border", "policy": "border", "sample": "4px solid red"},
+    "border-bottom": {"parser": "Border", "policy": "border", "sample": "4px solid red"},
+    "border-left": {"parser": "Border", "policy": "border", "sample": "4px solid red"}
+  },
+  "simple_values": {
+    "color": {"color": true},
+    "text-fill": {"color": true},
+    "box-sizing": {"keywords": {"content-box": "Value::BoxSizing(BoxSizing::ContentBox)", "border-box": "Value::BoxSizing(BoxSizing::BorderBox)"}},
+    "border-color": {"color": true},
+    "image": {"keywords": {"none": "Value::BackgroundImage(BackgroundImage::None)"}},
+    "display": {"keywords": {"block": "Value::Display(Display::Block)", "inline": "Value::Display(Display::Inline)", "list-item": "Value::Display(Display::ListItem)", "none": "Value::Display(Display::None)"}},
+    "font-style": {"keywords": {"normal": "Value::FontStyle(FontStyle::Normal)", "italic": "Value::FontStyle(FontStyle::Italic)", "oblique": "Value::FontStyle(FontStyle::Oblique)"}},
+    "border-style": {"keywords": {"none": "Value::BorderStyle(BorderStyle::None)", "hidden": "Value::BorderStyle(BorderStyle::Hidden)", "solid": "Value::BorderStyle(BorderStyle::Solid)", "dashed": "Value::BorderStyle(BorderStyle::Dashed)", "dotted": "Value::BorderStyle(BorderStyle::Dotted)", "double": "Value::BorderStyle(BorderStyle::Double)"}},
+    "container-type": {"keywords": {"normal": "Value::ContainerType(ContainerType::Normal)", "inline-size": "Value::ContainerType(ContainerType::InlineSize)", "size": "Value::ContainerType(ContainerType::Size)"}}
+  },
+  "policies": {
+    "text-fill": {"parser": "Existing finite Color 4/5 subset; no quirky hex colors, stroking or advanced color gaps resolved.", "cascade": "Inherited currentcolor and wide/var/origin/layer tests; no external conformance gate.", "computed": "Currentcolor is retained for inheritance; authoritative resolved fill is independent of color/borders/background.", "used": "Text, generated text, list markers and image alt text fill; bundled font, sRGB framebuffer, no strokes."},
+    "box-sizing": {"parser": "content-box and border-box, including the exact WHATWG -webkit-box-sizing legacy alias.", "cascade": "Alias shares canonical identity, priority, var and rollback; local tests only.", "computed": "Specified keyword; no animation or full CSSOM.", "used": "Horizontal block and replaced width/definite height; minimum content box is zero. No min/max sizing, definite percentage-height or advanced layout."},
+    "content": {"parser": "Only normal, none, strings and untyped attr(name); no images, counters, quotes, alt text or element().", "cascade": "Only before/after text pseudo boxes; no page-margin/replacement model.", "computed": "Bounded text list; typed attr(), counters and full content computation absent.", "used": "Horizontal text only; generated images/markers/page margins absent."},
+    "color": {"parser": "Finite Color 4/5 subset; no device-cmyk(), light-dark(), contrast-color(), custom profiles or exceptional numbers.", "cascade": "Local origin/layer/var/currentcolor tests; no external conformance gate.", "computed": "System colors use a fixed light palette; dependency/serialization and exceptional-value gates remain.", "used": "sRGB byte framebuffer; no HDR or CSS perceptual gamut mapping."},
+    "border-color": {"parser": "Finite Color 4/5 subset; border image-1D alternative, advanced Color 5 and exceptional numbers absent.", "cascade": "Local edge/origin/layer/var/currentcolor tests; no external conformance gate.", "computed": "Color only, no one-dimensional image function; fixed light system palette and incomplete CSSOM.", "used": "sRGB byte framebuffer and basic box edges; no HDR, perceptual gamut mapping or border gradients."},
+    "image": {"parser": "Only none; image functions, URLs and multiple layers absent.", "cascade": "Single stored value; no layered image model.", "computed": "Only BackgroundImage::None.", "used": "No CSS background images painted."},
+    "display": {"parser": "Only block, inline, list-item and none; no multi-keyword/flex/grid/table/ruby/math.", "cascade": "Local cascade only; no full display fixup model.", "computed": "Single enum; no inner/outer pair, blockification/inlinification model.", "used": "Basic block/inline/list-item layout only."},
+    "font-size": {"parser": "Finite lengths/math/size keywords; math keyword and additional Values 4/5 forms absent.", "cascade": "Local inheritance/var/origin tests; no external conformance gate.", "computed": "UA medium=16px; rasterization clamps at 512px; keyword/metric approximations.", "used": "Bundled face, no font selection/shaping parity."},
+    "font-family": {"parser": "Family lists/generic names; no complete CSSOM serialization gate.", "cascade": "Local inherited list tests; no external conformance gate.", "computed": "UA initial is sans-serif; typed list retained.", "used": "Family selection absent; bundled face is used."},
+    "font-weight": {"parser": "Numbers 1..1000, normal/bold/bolder/lighter and finite number math.", "cascade": "Local relative/inherited tests; no external conformance gate.", "computed": "Local relative-weight rules; no exhaustive external tests.", "used": "Synthetic bold, not variable-font face selection."},
+    "font-style": {"parser": "Only normal, italic, oblique; no oblique angle or left/right.", "cascade": "Local inherited tests; no external conformance gate.", "computed": "Keyword enum only; no angle.", "used": "Synthetic italic, not font face selection."},
+    "line-height": {"parser": "Finite nonnegative number/length/percentage/math and normal subset.", "cascade": "Local inherited tests; no external conformance gate.", "computed": "normal approximated as 1.25em; metric/exceptional-value gaps.", "used": "Basic horizontal line boxes; no full inline formatting/shaping."},
+    "size": {"parser": "Only auto and finite nonnegative lengths/percentages/math; intrinsic sizing/anchor-size absent.", "cascade": "Local wide/var tests; no external conformance gate.", "computed": "Typed lengths; no full intrinsic sizing or percentage stage model.", "used": "Basic horizontal block/replaced boxes; height percentage/containment and advanced layouts incomplete."},
+    "container-type": {"parser": "Only normal, size, inline-size; scroll-state and combinations absent.", "cascade": "Local named/anonymous query and var tests; no external conformance gate.", "computed": "Keyword enum; style/scroll-state query semantics absent.", "used": "Bounded horizontal block-size feedback; no advanced formatting-context containment."},
+    "container-name": {"parser": "none or bounded custom-ident list (256 tokens); no external grammar gate.", "cascade": "Local name/inheritance/query tests; no external conformance gate.", "computed": "Ordered identifier list; style/scroll-state queries absent.", "used": "Named horizontal size containers only."},
+    "margin": {"parser": "Finite lengths/percentages/math; auto and anchor-size() absent.", "cascade": "Local side/four-value/wide tests; no external conformance gate.", "computed": "Typed lengths; no auto/intrinsic stage model.", "used": "Basic horizontal boxes; auto margins, full collapsing and advanced layout absent."},
+    "padding": {"parser": "Finite nonnegative lengths/percentages/math subset; remaining Values forms absent.", "cascade": "Local side/four-value/wide tests; no external conformance gate.", "computed": "Typed lengths; exceptional/percentage conformance gaps.", "used": "Basic horizontal boxes; logical/vertical/advanced layout absent."},
+    "border-width": {"parser": "Finite nonnegative lengths and thin/medium/thick; hairline and additional Values forms absent.", "cascade": "Local side/four-value/wide tests; no external conformance gate.", "computed": "UA widths 1/3/5px; none/hidden zeroing, no spec snapping gate.", "used": "Basic box edges; no advanced border geometry."},
+    "border-style": {"parser": "none/hidden/solid/dashed/dotted/double; groove/ridge/inset/outset absent.", "cascade": "Local side/four-value/wide tests; no external conformance gate.", "computed": "Supported keyword enum only.", "used": "Basic edge paint; no full border-style conformance gate."},
+    "all": {"parser": "Five existing CSS-wide keywords only; snapshot revert-rule absent.", "cascade": "Expands only implemented longhands; does not implement snapshot's unsupported properties.", "computed": "Delegates supported initial/inherited values.", "used": "Only supported property's finite layout/paint subset."},
+    "background": {"parser": "One color and/or none; layers, sizing, positioning, repeat, attachment and boxes absent.", "cascade": "Resets only supported background-color/image; other longhand and reset targets absent.", "computed": "Only color and None image stored.", "used": "Flat color background only."},
+    "font": {"parser": "Finite style/weight/size/line-height/family subset; variants, stretch and system-font shorthand absent.", "cascade": "Expands/resets only five supported fields; other spec longhand/reset targets absent.", "computed": "Delegates finite font handlers.", "used": "Bundled font and synthetic flags only."},
+    "container": {"parser": "Names with optional size/inline-size/normal type; scroll-state absent.", "cascade": "Resets both supported fields; local tests only.", "computed": "Delegates name/type handlers.", "used": "Bounded horizontal block-size feedback only."},
+    "border": {"parser": "Finite width/style/color subset; hairline, groove/ridge/inset/outset and additional colors absent.", "cascade": "Supported physical edges only; border-image reset targets absent.", "computed": "Delegates finite edge handlers.", "used": "Basic box edges only; no full border paint conformance."}
+  }
+}

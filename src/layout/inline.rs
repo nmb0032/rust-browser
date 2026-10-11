@@ -1,15 +1,20 @@
-use crate::style::ComputedStyle;
+use crate::style::{ComputedStyle, Diagnostic};
 
-use super::{BoxKind, LayoutBox, Rect, TextFragment, block::layout_block};
+use super::{
+    BoxKind, LayoutBox, Rect, TextFragment,
+    block::layout_block,
+    tree::{resolve_edges, resolve_length, resolve_line_height},
+};
 
 pub(super) fn layout_inline(
     layout_box: &mut LayoutBox,
     flow: &mut InlineFlow,
     font: &fontdue::Font,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     if layout_box.kind == BoxKind::Block {
         let y = flow.start_y + flow.content_height();
-        let height = layout_block(layout_box, flow.start_x, y, flow.width, font);
+        let height = layout_block(layout_box, flow.start_x, y, flow.width, font, diagnostics);
         flow.y = y + height;
         flow.current_x = flow.start_x;
         flow.line_height = flow.base_line_height;
@@ -24,14 +29,21 @@ pub(super) fn layout_inline(
         return;
     }
     if layout_box.image.is_some() {
-        layout_image(layout_box, flow, font);
+        layout_image(layout_box, flow, font, diagnostics);
         return;
     }
     if layout_box.kind == BoxKind::Text {
+        let line_height = resolve_line_height(
+            &layout_box.style.line_height,
+            layout_box.style.font_size,
+            layout_box.node_id,
+            diagnostics,
+        );
         let fragments = flow.add_text(
             layout_box.text.as_deref().unwrap_or_default(),
             &layout_box.style,
             font,
+            line_height,
         );
         layout_box.rect = fragments.iter().fold(Rect::default(), |bounds, fragment| {
             bounds.union(Rect {
@@ -46,25 +58,42 @@ pub(super) fn layout_inline(
         return;
     }
     let style = &layout_box.style;
-    let padding = style
-        .padding
-        .map(|length| length.resolve(style.font_size, flow.width));
-    let margin = style
-        .margin
-        .map(|length| length.resolve(style.font_size, flow.width));
+    let padding = resolve_edges(
+        &style.padding,
+        style.font_size,
+        flow.width,
+        layout_box.node_id,
+        "padding",
+        diagnostics,
+    )
+    .map(|value| value.max(0.0));
+    let margin = resolve_edges(
+        &style.margin,
+        style.font_size,
+        flow.width,
+        layout_box.node_id,
+        "margin",
+        diagnostics,
+    );
+    let line_height = resolve_line_height(
+        &style.line_height,
+        style.font_size,
+        layout_box.node_id,
+        diagnostics,
+    );
     let border = style.border_width;
     let left = padding.left + border.left;
     let right = padding.right + border.right;
     let extra_height = padding.top + padding.bottom + border.top + border.bottom;
-    flow.advance(margin.left + left, style.font_size * 1.25 + extra_height);
+    flow.advance(margin.left + left, line_height + extra_height);
     let start = Rect {
         x: flow.current_x,
         y: flow.y,
         width: 0.0,
-        height: style.font_size * 1.25,
+        height: line_height,
     };
     for child in &mut layout_box.children {
-        layout_inline(child, flow, font);
+        layout_inline(child, flow, font, diagnostics);
     }
     let bounds = layout_box
         .children
@@ -83,23 +112,77 @@ pub(super) fn layout_inline(
         width: content.width + left + right,
         height: content.height + extra_height,
     };
-    flow.advance(right + margin.right, style.font_size * 1.25 + extra_height);
+    flow.advance(right + margin.right, line_height + extra_height);
 }
 
-fn layout_image(layout_box: &mut LayoutBox, flow: &mut InlineFlow, font: &fontdue::Font) {
+fn layout_image(
+    layout_box: &mut LayoutBox,
+    flow: &mut InlineFlow,
+    font: &fontdue::Font,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let image = layout_box
         .image
         .as_ref()
         .expect("image layout has image content");
     let style = &layout_box.style;
-    let (width, height) = image.size(style, flow.width, font);
-    let padding = style
-        .padding
-        .map(|length| length.resolve(style.font_size, flow.width));
-    let margin = style
-        .margin
-        .map(|length| length.resolve(style.font_size, flow.width));
+    let line_height = resolve_line_height(
+        &style.line_height,
+        style.font_size,
+        layout_box.node_id,
+        diagnostics,
+    );
+    let padding = resolve_edges(
+        &style.padding,
+        style.font_size,
+        flow.width,
+        layout_box.node_id,
+        "padding",
+        diagnostics,
+    )
+    .map(|value| value.max(0.0));
+    let margin = resolve_edges(
+        &style.margin,
+        style.font_size,
+        flow.width,
+        layout_box.node_id,
+        "margin",
+        diagnostics,
+    );
     let border = style.border_width;
+    let horizontal = padding.left + padding.right + border.left + border.right;
+    let vertical = padding.top + padding.bottom + border.top + border.bottom;
+    let explicit_width = style.width.as_ref().map(|length| {
+        style.box_sizing.content_size(
+            resolve_length(
+                length,
+                style.font_size,
+                flow.width,
+                layout_box.node_id,
+                "width",
+                diagnostics,
+            ),
+            horizontal,
+        )
+    });
+    let explicit_height = style
+        .height
+        .as_ref()
+        .filter(|length| !length.has_percentage())
+        .map(|length| {
+            style.box_sizing.content_size(
+                resolve_length(
+                    length,
+                    style.font_size,
+                    0.0,
+                    layout_box.node_id,
+                    "height",
+                    diagnostics,
+                ),
+                vertical,
+            )
+        });
+    let (width, height) = image.size(style, explicit_width, explicit_height, line_height, font);
     let box_width = width + padding.left + padding.right + border.left + border.right;
     let box_height = height + padding.top + padding.bottom + border.top + border.bottom;
     let separator = if flow.pending_space && flow.line_has_content {
@@ -160,8 +243,7 @@ pub(super) struct InlineFlow {
 }
 
 impl InlineFlow {
-    pub(super) fn new(x: f32, y: f32, width: f32, font_size: f32) -> Self {
-        let line_height = font_size * 1.25;
+    pub(super) fn new(x: f32, y: f32, width: f32, line_height: f32) -> Self {
         Self {
             start_x: x,
             start_y: y,
@@ -190,6 +272,7 @@ impl InlineFlow {
         text: &str,
         style: &ComputedStyle,
         font: &fontdue::Font,
+        line_height: f32,
     ) -> Vec<TextFragment> {
         let words: Vec<&str> = text.split_whitespace().collect();
         if words.is_empty() {
@@ -203,7 +286,7 @@ impl InlineFlow {
             if index > 0 || (index == 0 && starts_with_space) {
                 self.pending_space = true;
             }
-            fragments.push(self.add_word(word, style, font));
+            fragments.push(self.add_word(word, style, font, line_height));
             self.pending_space = index + 1 < words.len() || ends_with_space;
         }
         fragments
@@ -214,6 +297,7 @@ impl InlineFlow {
         word: &str,
         style: &ComputedStyle,
         font: &fontdue::Font,
+        line_height: f32,
     ) -> TextFragment {
         let word_width = measure_text(font, word, style.font_size);
         let separator_width = if self.pending_space && self.line_has_content {
@@ -228,15 +312,16 @@ impl InlineFlow {
         } else {
             self.current_x += separator_width;
         }
-        self.line_height = self.line_height.max(style.font_size * 1.25);
+        self.line_height = self.line_height.max(line_height);
         let fragment = TextFragment {
             x: self.current_x,
             y: self.y,
             width: word_width,
-            height: style.font_size * 1.25,
+            height: line_height,
             text: word.to_string(),
             font_size: style.font_size,
-            color: style.color,
+            color: style.text_fill_color.legacy(),
+            text_color: style.text_fill_color,
             bold: style.bold,
             italic: style.italic,
         };

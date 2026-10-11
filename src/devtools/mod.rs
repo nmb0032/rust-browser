@@ -2,6 +2,255 @@ use crate::dom::{Document, NodeKind};
 use crate::layout::{BoxKind, LayoutBox, LayoutTree};
 use crate::paint::DisplayItem;
 
+/// Explicit length stages, with used/actual geometry from the laid-out tree.
+/// "Actual" here is unclipped rectangle quantization, not glyph rasterization.
+pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
+    use std::fmt::Write;
+    fn walk(layout_box: &LayoutBox, scale: f32, output: &mut String) {
+        writeln!(
+            output,
+            "Node {:?} {}",
+            layout_box.dom_node_id(),
+            layout_box.tag_name()
+        )
+        .unwrap();
+        for (property, value) in &layout_box.style().specified_lengths {
+            writeln!(output, "  specified {property}: {value:?}").unwrap();
+        }
+        for (property, value) in &layout_box.style().specified_colors {
+            writeln!(output, "  specified {property}: {value:?}").unwrap();
+        }
+        writeln!(
+            output,
+            "  computed color: {:?}",
+            layout_box.style().text_color
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed -webkit-text-fill-color: {:?}",
+            layout_box.style().text_fill_color
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed box-sizing: {:?}",
+            layout_box.style().box_sizing
+        )
+        .unwrap();
+        writeln!(output, "  computed height: {:?}", layout_box.style().height).unwrap();
+        writeln!(
+            output,
+            "  computed background-color: {:?}",
+            layout_box.style().background
+        )
+        .unwrap();
+        writeln!(output, "  computed width: {:?}", layout_box.style().width).unwrap();
+        writeln!(
+            output,
+            "  computed font-size: Px({:?})",
+            layout_box.style().font_size
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed line-height: {:?}",
+            layout_box.style().line_height
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  used content-width: {:?}",
+            layout_box.used_width()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  used content-height: {:?}",
+            crate::css::values::UsedLength(layout_box.content_rect().height)
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  used content-rect: {:?}",
+            layout_box.content_rect()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  actual border-rect @ {scale}x: {:?}",
+            layout_box.actual_rect(scale)
+        )
+        .unwrap();
+        for child in layout_box.children() {
+            walk(child, scale, output);
+        }
+    }
+    let mut output = String::new();
+    walk(tree.root(), device_scale, &mut output);
+    output
+}
+
+/// Typed computed values only: percentages in box properties remain unresolved.
+pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) -> String {
+    use crate::css::values::Color;
+    use std::fmt::Write;
+
+    let mut output = String::new();
+    for id in document.preorder() {
+        let Some(element) = document.node(id).and_then(|node| node.as_element()) else {
+            continue;
+        };
+        let Some(style) = styles.get(id) else {
+            continue;
+        };
+        writeln!(
+            output,
+            "Element {id:?} <{}> id={:?}",
+            element.tag_name(),
+            element.attribute("id")
+        )
+        .expect("writing a string cannot fail");
+        let color = |color: crate::css::values::ResolvedColor| {
+            if color == crate::css::values::ResolvedColor::TRANSPARENT {
+                Color::Transparent
+            } else if let Some(rgb) = color.opaque_rgb() {
+                Color::Rgb(rgb)
+            } else {
+                Color::Absolute(color)
+            }
+        };
+        writeln!(output, "  display: {:?}", style.display).unwrap();
+        if style.box_sizing != crate::style::BoxSizing::ContentBox {
+            writeln!(output, "  box-sizing: {:?}", style.box_sizing).unwrap();
+        }
+        if style.container_type != crate::css::container::ContainerType::Normal
+            || !style.container_names.is_empty()
+        {
+            writeln!(output, "  container-type: {:?}", style.container_type).unwrap();
+            writeln!(output, "  container-name: {:?}", style.container_names).unwrap();
+        }
+        writeln!(output, "  color: {:?}", color(style.text_color)).unwrap();
+        if style.text_fill_color != style.text_color {
+            writeln!(
+                output,
+                "  -webkit-text-fill-color: {:?}",
+                color(style.text_fill_color)
+            )
+            .unwrap();
+        }
+        writeln!(output, "  background-color: {:?}", color(style.background)).unwrap();
+        writeln!(output, "  background-image: {:?}", style.background_image).unwrap();
+        for (name, value) in &style.custom_properties {
+            let preview_name: String = name.chars().take(80).collect();
+            let name = if name.chars().count() > 80 {
+                format!("{preview_name}…")
+            } else {
+                preview_name
+            };
+            match value {
+                Some(tokens) => {
+                    // Structured tokens make preserved boundaries and empty
+                    // values visible, without ambiguous CSS serialization.
+                    let preview = format!("{:?}", &tokens[..tokens.len().min(64)]);
+                    let suffix = if preview.chars().count() > 1024 {
+                        "… (preview truncated)"
+                    } else {
+                        ""
+                    };
+                    let preview: String = preview.chars().take(1024).collect();
+                    writeln!(output, "  {name}: Tokens({preview}{suffix})").unwrap();
+                    if tokens.len() > 64 {
+                        writeln!(
+                            output,
+                            "    ({} additional tokens omitted)",
+                            tokens.len() - 64
+                        )
+                        .unwrap();
+                        if let Some(height) = &style.height {
+                            writeln!(output, "  height: {height:?}").unwrap();
+                        }
+                    }
+                }
+                None => writeln!(output, "  {name}: GuaranteedInvalid").unwrap(),
+            }
+        }
+        writeln!(output, "  font-size: Px({:?})", style.font_size).unwrap();
+        writeln!(output, "  font-family: {:?}", style.font_family).unwrap();
+        writeln!(output, "  font-weight: {:?}", style.font_weight).unwrap();
+        writeln!(output, "  font-style: {:?}", style.font_style).unwrap();
+        writeln!(output, "  line-height: {:?}", style.line_height).unwrap();
+        match &style.width {
+            Some(width) => writeln!(output, "  width: {width:?}"),
+            None => writeln!(output, "  width: Auto"),
+        }
+        .unwrap();
+        for (name, margin, padding, width, border_style, border_color) in [
+            (
+                "top",
+                &style.margin.top,
+                &style.padding.top,
+                style.border_width.top,
+                style.border_style.top,
+                style.borders.top,
+            ),
+            (
+                "right",
+                &style.margin.right,
+                &style.padding.right,
+                style.border_width.right,
+                style.border_style.right,
+                style.borders.right,
+            ),
+            (
+                "bottom",
+                &style.margin.bottom,
+                &style.padding.bottom,
+                style.border_width.bottom,
+                style.border_style.bottom,
+                style.borders.bottom,
+            ),
+            (
+                "left",
+                &style.margin.left,
+                &style.padding.left,
+                style.border_width.left,
+                style.border_style.left,
+                style.borders.left,
+            ),
+        ] {
+            writeln!(output, "  margin-{name}: {margin:?}").unwrap();
+            writeln!(output, "  padding-{name}: {padding:?}").unwrap();
+            writeln!(output, "  border-{name}-width: Px({width:?})").unwrap();
+            writeln!(output, "  border-{name}-style: {border_style:?}").unwrap();
+            writeln!(output, "  border-{name}-color: {:?}", color(border_color)).unwrap();
+        }
+        for pseudo in crate::style::PseudoElement::ALL {
+            if let Some(style) = styles.pseudo(id, pseudo) {
+                writeln!(output, "  ::{} computed (separate target)", pseudo.name()).unwrap();
+                writeln!(output, "    display: {:?}", style.display).unwrap();
+                writeln!(output, "    color: {:?}", color(style.text_color)).unwrap();
+                writeln!(
+                    output,
+                    "    background-color: {:?}",
+                    color(style.background)
+                )
+                .unwrap();
+                writeln!(output, "    font-size: Px({:?})", style.font_size).unwrap();
+                writeln!(output, "    width: {:?}", style.width).unwrap();
+                let content = format!("{:?}", style.content);
+                writeln!(
+                    output,
+                    "    content: {}",
+                    content.chars().take(1024).collect::<String>()
+                )
+                .unwrap();
+            }
+        }
+    }
+    output
+}
+
 pub fn format_css_tokens(source: &str) -> String {
     use crate::css::tokenizer::Tokenizer;
     use std::fmt::Write;
@@ -111,6 +360,18 @@ fn format_rule(rule: &crate::css::Rule, depth: usize, output: &mut String) {
             } else {
                 writeln!(output, "{indent}@{}{prelude};", rule.name())
                     .expect("writing a string cannot fail");
+                if let Some(imported) = rule.imported() {
+                    writeln!(
+                        output,
+                        "{indent}  Imported stylesheet ({}) {{",
+                        imported.url
+                    )
+                    .expect("writing a string");
+                    for rule in imported.stylesheet.rules() {
+                        format_rule(rule, depth + 2, output);
+                    }
+                    writeln!(output, "{indent}  }}").expect("writing a string");
+                }
                 return;
             }
         }

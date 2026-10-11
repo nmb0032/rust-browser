@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Selectors and generated content</title>
+<style>
+body {color:#243040; background:#faf8f3; margin:0; font-size:18px}
+main {display:block; padding:20px}
+h1 {color:#254f83}
+:where(#demo) {margin:0}
+.card {display:block; padding:12px; margin-bottom:12px; border:2px solid #254f83}
+.card:is(.selected, :unsupported) {background:#eef4fc}
+.card:has(> a) {border-left-width:6px}
+.card::before {content:"Generated before: " attr(data-label); display:block; color:#254f83; font-weight:bold}
+.card::after {content:"Generated after"; display:block; color:#28643d}
+a {color:#254f83}
+a:hover {color:#a53f26}
+a:active {color:#8b2671}
+a:focus {background:#fff0ab; padding:2px}
+a:focus-visible::before {content:"Keyboard focus: "; color:#28643d}
+li:nth-child(2n of .eligible) {background:#fff0ab}
+li::marker {content:"> "; color:#a53f26; font-weight:bold}
+</style>
+<main id="demo">
+<h1>Selectors and generated content</h1>
+<p>Hover or press the link to change its color. Tab focuses links and adds generated focus text.</p>
+<section class="card selected" data-label="card label">
+<p>These ordinary element declarations remain separate from pseudo-element styles.</p>
+<a href="#choices">Jump to choices</a>
+</section>
+<ul id="choices">
+<li class="eligible">First eligible item</li>
+<li>Excluded from the filtered nth-child list</li>
+<li class="eligible">Second eligible item, highlighted</li>
+<li class="eligible">Third eligible item</li>
+</ul>
+</main>
+</html>

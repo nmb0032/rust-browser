@@ -8,7 +8,10 @@ pub enum DumpFormat {
     Layout,
     DisplayList,
     Stylesheets,
+    Style,
+    Values,
     CssTokens,
+    CssCoverage,
     ParseErrors,
 }
 
@@ -18,6 +21,10 @@ pub fn run(
     trace: bool,
     throttle_ms: Option<u64>,
 ) -> Result<(), Box<dyn Error>> {
+    if dump == Some(DumpFormat::CssCoverage) {
+        print!("{}", crate::style::metadata::css_coverage());
+        return Ok(());
+    }
     let url = crate::net::location_url(location)?;
     let options = LoadOptions { trace, throttle_ms };
     if let Some(format) = dump {
@@ -30,11 +37,16 @@ pub fn run(
     crate::ui::window::run(navigation, font)
 }
 
-fn dump_frame(frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
-    if matches!(
+fn dump_frame(mut frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
+    let tree = if matches!(
         dump,
-        DumpFormat::Dom | DumpFormat::Stylesheets | DumpFormat::CssTokens
+        DumpFormat::Style | DumpFormat::Layout | DumpFormat::DisplayList | DumpFormat::Values
     ) {
+        Some(frame.layout_with_container_queries(&crate::paint::load_bundled_font()?))
+    } else {
+        None
+    };
+    if dump != DumpFormat::ParseErrors {
         for diagnostic in &frame.stylesheets.diagnostics {
             eprintln!(
                 "CSS/resource at {:?}: {}",
@@ -43,6 +55,13 @@ fn dump_frame(frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
         }
     }
     match dump {
+        DumpFormat::CssCoverage => print!("{}", crate::style::metadata::css_coverage()),
+        DumpFormat::Style => {
+            print!(
+                "{}",
+                crate::devtools::format_style(&frame.document, &frame.styles)
+            );
+        }
         DumpFormat::CssTokens => {
             print!("{}", crate::devtools::format_document_css_tokens(&frame));
         }
@@ -67,17 +86,18 @@ fn dump_frame(frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
                 );
             }
         }
-        DumpFormat::Layout | DumpFormat::DisplayList => {
-            let font = crate::paint::load_bundled_font()?;
-            let mut tree = frame.layout_tree();
-            tree.layout(crate::paint::DEFAULT_VIEWPORT_WIDTH, &font);
-            if dump == DumpFormat::Layout {
+        DumpFormat::Layout | DumpFormat::DisplayList | DumpFormat::Values => {
+            let tree = tree.expect("geometry dumps complete container feedback");
+            let environment = frame.media_environment();
+            if dump == DumpFormat::Values {
+                print!("{}", crate::devtools::format_values(&tree, 1.0));
+            } else if dump == DumpFormat::Layout {
                 crate::devtools::dump_layout(&tree);
             } else {
                 let list = crate::paint::build_display_list(
                     &tree,
-                    crate::paint::DEFAULT_VIEWPORT_WIDTH,
-                    crate::paint::DEFAULT_VIEWPORT_HEIGHT,
+                    environment.viewport_width,
+                    environment.viewport_height,
                     false,
                 );
                 crate::devtools::dump_display_list(&list);

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>Width media queries</title>
+  <style>
+    body { font: 16px/1.5 sans-serif; margin: 24px; color: navy; }
+    #panel { width: 70%; padding: 16px; background: lightblue; border: 3px solid navy; }
+    #narrow { display: none; }
+    @media screen and (max-width: 37.5em) {
+      #panel { width: auto; color: white; background: green; border-color: green; }
+      #wide { display: none; }
+      #narrow { display: block; }
+      @media (max-width: 400px) {
+        #panel { padding: 8px; }
+      }
+    }
+  </style>
+  <style media="screen and (min-width: 600px)">
+    #panel { border-width: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Resize this window</h1>
+  <div id="panel">
+    <p id="wide">Wide layout: more than 600 CSS pixels.</p>
+    <p id="narrow">Narrow layout: at most 600 CSS pixels.</p>
+    <p>At 600 pixels both inclusive boundaries match. Below 400 pixels padding shrinks.</p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS values and units</title>
+<style>
+  :root { font-size: 20px; --gutter: 2rem; }
+  body { margin: 0; }
+  #calc { width: calc(100% - var(--gutter)); margin: 0; background: red; }
+  #clamp { width: clamp(100px, 50%, 300px); margin: 0; background: blue; }
+  #viewport { width: calc(10svh + 10lvh + 10dvh); margin: 0; }
+</style>
+<div id="calc">Containing width minus two root ems.</div>
+<div id="clamp">A clamped percentage width.</div>
+<div id="viewport">Explicit viewport families coincide on desktop.</div>

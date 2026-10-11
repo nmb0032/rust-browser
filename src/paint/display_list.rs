@@ -1,16 +1,33 @@
 use std::{error::Error, sync::Arc};
 
+use crate::css::values::{BorderStyle, ResolvedColor};
 use crate::layout::{LayoutBox, LayoutTree};
 use crate::media::DecodedImage;
 
-pub(crate) const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
-pub(crate) const DEFAULT_VIEWPORT_HEIGHT: f32 = 600.0;
+pub(crate) const DEFAULT_VIEWPORT_WIDTH: f32 = crate::css::media::DEFAULT_VIEWPORT_WIDTH;
+pub(crate) const DEFAULT_VIEWPORT_HEIGHT: f32 = crate::css::media::DEFAULT_VIEWPORT_HEIGHT;
 pub(crate) const LINE_HEIGHT: f32 = 20.0;
 const BACKGROUND_COLOR: u32 = 0x00FF_FFFF;
 const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    ColorRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: ResolvedColor,
+    },
+    ColorText {
+        x: f32,
+        y: f32,
+        text: String,
+        size: f32,
+        color: ResolvedColor,
+        bold: bool,
+        italic: bool,
+    },
     ViewportBackground {
         w: f32,
         h: f32,
@@ -89,36 +106,36 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
         }
     }
     if let Some(marker) = layout_box.list_marker()
-        && let Some(color) = layout_box.style().color
-        && layout_box.style().font_size > 0.0
+        && marker.style.text_fill_color.alpha > 0.0
+        && marker.style.font_size > 0.0
     {
-        display_list.push(DisplayItem::Text {
+        display_list.push(text_item(DisplayItem::ColorText {
             x: marker.x,
             y: marker.y,
             text: marker.text.clone(),
-            size: layout_box.style().font_size,
-            color,
-            bold: layout_box.style().bold,
-            italic: layout_box.style().italic,
-        });
+            size: marker.style.font_size,
+            color: marker.style.text_fill_color,
+            bold: marker.style.bold,
+            italic: marker.style.italic,
+        }));
     }
 
     for fragment in layout_box.text_fragments() {
-        let Some(color) = fragment.color else {
+        if fragment.text_color.alpha == 0.0 {
             continue;
-        };
+        }
         if fragment.font_size == 0.0 {
             continue;
         }
-        display_list.push(DisplayItem::Text {
+        display_list.push(text_item(DisplayItem::ColorText {
             x: fragment.x,
             y: fragment.y,
             text: fragment.text.clone(),
             size: fragment.font_size,
-            color,
+            color: fragment.text_color,
             bold: fragment.bold,
             italic: fragment.italic,
-        });
+        }));
     }
 
     fn append_decoration_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
@@ -127,26 +144,31 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        if let Some(color) = style.background_color {
-            display_list.push(DisplayItem::Rect {
+        if style.background.alpha > 0.0 {
+            display_list.push(rect_item(DisplayItem::ColorRect {
                 x: rect.x,
                 y: rect.y,
                 w: rect.width,
                 h: rect.height,
-                color,
-            });
+                color: style.background,
+            }));
         }
         let widths = style.border_width;
-        let colors = style.border_color;
+        let colors = style.borders;
+        let styles = style.border_style;
         let inner_height = (rect.height - widths.top - widths.bottom).max(0.0);
-        for (x, y, w, h, color) in [
-            (rect.x, rect.y, rect.width, widths.top, colors.top),
+        for (x, y, w, h, color, border_style, horizontal) in [
+            (
+                rect.x, rect.y, rect.width, widths.top, colors.top, styles.top, true,
+            ),
             (
                 rect.x,
                 rect.y + rect.height - widths.bottom,
                 rect.width,
                 widths.bottom,
                 colors.bottom,
+                styles.bottom,
+                true,
             ),
             (
                 rect.x,
@@ -154,6 +176,8 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
                 widths.left,
                 inner_height,
                 colors.left,
+                styles.left,
+                false,
             ),
             (
                 rect.x + rect.width - widths.right,
@@ -161,19 +185,111 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
                 widths.right,
                 inner_height,
                 colors.right,
+                styles.right,
+                false,
             ),
         ] {
-            if w > 0.0
-                && h > 0.0
-                && let Some(color) = color
-            {
-                display_list.push(DisplayItem::Rect { x, y, w, h, color });
+            if w > 0.0 && h > 0.0 && color.alpha > 0.0 {
+                append_border(display_list, (x, y, w, h), color, border_style, horizontal);
             }
         }
     }
 
     for child in layout_box.children() {
         append_box_items(child, display_list);
+    }
+}
+
+fn append_border(
+    list: &mut Vec<DisplayItem>,
+    (x, y, w, h): (f32, f32, f32, f32),
+    color: ResolvedColor,
+    style: BorderStyle,
+    horizontal: bool,
+) {
+    let length = if horizontal { w } else { h };
+    let thickness = if horizontal { h } else { w };
+    let mut rect = |offset: f32, across: f32, length: f32, thickness: f32| {
+        let (x, y, w, h) = if horizontal {
+            (x + offset, y + across, length, thickness)
+        } else {
+            (x + across, y + offset, thickness, length)
+        };
+        list.push(rect_item(DisplayItem::ColorRect { x, y, w, h, color }));
+    };
+    match style {
+        BorderStyle::None | BorderStyle::Hidden => {}
+        BorderStyle::Solid => rect(0.0, 0.0, length, thickness),
+        BorderStyle::Double if thickness >= 3.0 => {
+            rect(0.0, 0.0, length, thickness / 3.0);
+            rect(0.0, thickness * 2.0 / 3.0, length, thickness / 3.0);
+        }
+        BorderStyle::Double => rect(0.0, 0.0, length, thickness),
+        BorderStyle::Dashed | BorderStyle::Dotted => {
+            let dash = thickness
+                * if style == BorderStyle::Dashed {
+                    3.0
+                } else {
+                    1.0
+                };
+            // Bound commands even for enormous author-provided box dimensions.
+            let stride = (dash * 2.0).max(length / 4096.0);
+            for index in 0..4096 {
+                let offset = index as f32 * stride;
+                if offset >= length {
+                    break;
+                }
+                rect(offset, 0.0, dash.min(length - offset), thickness);
+            }
+        }
+    }
+}
+
+// Preserve the existing display-list/debug API for exact opaque sRGB bytes.
+// Every other color stays typed until the rasterizer's framebuffer boundary.
+fn rect_item(item: DisplayItem) -> DisplayItem {
+    if let DisplayItem::ColorRect { x, y, w, h, color } = item
+        && let Some(color) = color.opaque_rgb()
+    {
+        return DisplayItem::Rect { x, y, w, h, color };
+    }
+    item
+}
+
+fn text_item(item: DisplayItem) -> DisplayItem {
+    match item {
+        DisplayItem::ColorText {
+            x,
+            y,
+            text,
+            size,
+            color,
+            bold,
+            italic,
+        } => {
+            if let Some(rgb) = color.opaque_rgb() {
+                DisplayItem::Text {
+                    x,
+                    y,
+                    text,
+                    size,
+                    color: rgb,
+                    bold,
+                    italic,
+                }
+            } else {
+                DisplayItem::ColorText {
+                    x,
+                    y,
+                    text,
+                    size,
+                    color,
+                    bold,
+                    italic,
+                }
+            }
+        }
+        other => other,
     }
 }
 
@@ -218,6 +334,49 @@ mod tests {
     }
 
     #[test]
+    fn border_styles_draw_supported_patterns_and_none_hidden_do_not_paint() {
+        for (style, expected) in [
+            ("solid", 1),
+            ("double", 2),
+            ("dashed", 4),
+            ("dotted", 10),
+            ("none", 0),
+            ("hidden", 0),
+        ] {
+            let tree = layout(
+                &format!(
+                    "<div style='width:60px; border-top:3px {style} red;
+                font:16px/20px serif'>text</div>"
+                ),
+                400.0,
+            );
+            let items = build_display_list(&tree, 400.0, 600.0, false);
+            let red = items
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        DisplayItem::Rect {
+                            color: 0xff0000,
+                            ..
+                        }
+                    )
+                })
+                .count();
+            assert_eq!(red, expected, "{style}: {items:?}");
+        }
+        let mut items = Vec::new();
+        append_border(
+            &mut items,
+            (0.0, 0.0, 1e30, 1.0),
+            ResolvedColor::BLACK,
+            BorderStyle::Dotted,
+            true,
+        );
+        assert!(items.len() <= 4096);
+    }
+
+    #[test]
     fn loaded_images_and_failed_image_alt_text_reach_paint_and_hidden_images_do_not() {
         use std::{io::Cursor, sync::Arc};
         let source = image::ImageBuffer::from_pixel(2, 1, image::Rgba([255u8, 0, 0, 255]));
@@ -226,7 +385,7 @@ mod tests {
             .write_to(&mut bytes, image::ImageFormat::Png)
             .unwrap();
         let image = Arc::new(DecodedImage::decode(&bytes.into_inner()).unwrap());
-        let document = parser::parse("<img id='loaded' width='10' style='padding:2px; border-width:1px; background-color:blue'>\
+        let document = parser::parse("<img id='loaded' width='10' style='padding:2px; border-width:1px; border-style:solid; background-color:blue'>\
             <img alt='Unavailable'><img id='hidden' style='display:none'>").unwrap();
         let mut images = crate::media::ImageMap::new();
         for id in document.preorder() {
@@ -369,7 +528,7 @@ mod tests {
     #[test]
     fn paints_parent_background_and_each_border_before_child_content() {
         let tree = layout(
-            "<div style='background-color:#123; border-width:1px 2px 3px 4px;\
+            "<div style='background-color:#123; border-width:1px 2px 3px 4px; border-style:solid;\
              border-color:red green blue yellow; padding:5px'>\
              <span style='color:rebeccapurple; background-color:white'>text</span></div>",
             400.0,

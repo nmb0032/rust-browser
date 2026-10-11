@@ -1,37 +1,116 @@
-use std::{collections::HashMap, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, OnceLock},
+};
 
 use crate::{
     css::{
         self, BlockItem, Rule, Stylesheet,
-        selectors::{self, Selector, Specificity},
-        values::{Color, Length},
+        media::{MediaEnvironment, MediaQueryList},
+        selectors::{
+            self, Selector, Specificity,
+            matching::{Bloom, element_keys},
+        },
+        values::{
+            Color, Edges, FontStyle, FontWeight, Length, LengthContext, LineHeight, ResolvedColor,
+            SpecifiedLength,
+        },
     },
     dom::{Document, NodeId, NodeKind},
 };
 
 use super::{
-    ComputedStyle, ComputedStyles, Diagnostic, Display, StylesheetCollection, collect_stylesheets,
-    declarations::{self, Property, StyledDeclaration, Value, WideKeyword},
+    ComputedStyle, ComputedStyles, Diagnostic, Display, InteractionState, PseudoElement,
+    StylesheetCollection, collect_stylesheets,
+    compat::DeclarationContext,
+    container::{ContainerQuery, ContainerSnapshot},
+    control::{self, Layers, Scope},
+    declarations::{self, DeclarationProperty, Property, StyledDeclaration, Value, WideKeyword},
+    matching::{MatchingContext, RuleIndex},
+    property::{Registration, Registrations},
     report_css_errors,
+    variables::{self, Budget, Failure},
 };
 
 const MAX_FONT_SIZE: f32 = 512.0;
 
 #[derive(Clone, Debug)]
 struct StyledRule {
-    selectors: Vec<Selector>,
+    selectors: Vec<StyledSelector>,
     declarations: Vec<StyledDeclaration>,
     order: usize,
+    active: bool,
+    layer: usize,
+    layer_rank: usize,
+    layer_count: usize,
+    scopes: Vec<Scope>,
+    containers: Vec<ContainerQuery>,
+}
+
+#[derive(Clone, Debug)]
+struct StyledSelector {
+    selector: Selector,
+    ancestors: Bloom,
+}
+
+#[derive(Clone, Debug, Default)]
+struct StyledSheet {
+    rules: Vec<StyledRule>,
+    index: RuleIndex,
+    registrations: Vec<RegisteredRule>,
+}
+
+#[derive(Clone, Debug)]
+struct RegisteredRule {
+    name: String,
+    registration: Registration,
+    layer: usize,
+    rank: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Origin {
+    UserAgent,
+    User,
+    Author,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CascadeLevel {
+    UserAgent,
+    User,
+    Presentational,
+    Author,
+    AuthorImportant,
+    UserImportant,
+    UserAgentImportant,
+}
+
+impl Origin {
+    fn level(self, important: bool) -> CascadeLevel {
+        match (self, important) {
+            (Self::UserAgent, false) => CascadeLevel::UserAgent,
+            (Self::User, false) => CascadeLevel::User,
+            (Self::Author, false) => CascadeLevel::Author,
+            (Self::Author, true) => CascadeLevel::AuthorImportant,
+            (Self::User, true) => CascadeLevel::UserImportant,
+            (Self::UserAgent, true) => CascadeLevel::UserAgentImportant,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Priority {
-    origin: u8,
+    level: CascadeLevel,
     inline: bool,
+    layer_rank: usize,
     specificity: Specificity,
+    proximity: std::cmp::Reverse<usize>,
     sheet: usize,
     rule: usize,
     declaration: usize,
+    layer: usize,
+    normal_rank: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -41,83 +120,477 @@ pub struct StyleResolution {
 }
 
 pub fn resolve(document: &Document) -> StyleResolution {
-    resolve_with_stylesheets(document, collect_stylesheets(document))
+    resolve_with_environment(document, MediaEnvironment::default())
+}
+
+/// Resolve embedded sheets for a CSS-pixel viewport and media environment.
+pub fn resolve_with_environment(
+    document: &Document,
+    environment: MediaEnvironment,
+) -> StyleResolution {
+    resolve_with_stylesheets_and_environment(document, collect_stylesheets(document), environment)
 }
 
 pub fn resolve_with_stylesheets(
     document: &Document,
-    mut stylesheets: StylesheetCollection,
+    stylesheets: StylesheetCollection,
 ) -> StyleResolution {
+    resolve_with_stylesheets_and_environment(document, stylesheets, MediaEnvironment::default())
+}
+
+/// Resolve retained author ASTs, including nested media and style/link media
+/// attributes, for an explicit environment. Does not fetch or discard sheets.
+pub fn resolve_with_stylesheets_and_environment(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    environment: MediaEnvironment,
+) -> StyleResolution {
+    resolve_with_user_stylesheets_and_environment(document, stylesheets, &[], environment)
+}
+
+/// Resolve collected author styles alongside user-origin CSS sources, in order.
+///
+/// Normal author declarations override normal user declarations; user
+/// `!important` declarations override even important inline author styles.
+/// User sources use syntax recovery, with diagnostics carrying no DOM node.
+pub fn resolve_with_user_stylesheets(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+) -> StyleResolution {
+    resolve_with_user_stylesheets_and_environment(
+        document,
+        stylesheets,
+        user_stylesheets,
+        MediaEnvironment::default(),
+    )
+}
+
+/// The environment-aware variant of [`resolve_with_user_stylesheets`].
+pub fn resolve_with_user_stylesheets_and_environment(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+    environment: MediaEnvironment,
+) -> StyleResolution {
+    resolve_internal::<2>(
+        document,
+        stylesheets,
+        user_stylesheets,
+        user_agent_rules(),
+        environment,
+    )
+}
+
+/// Resolve a snapshot with explicit media and interaction state. The caller
+/// retains collected ASTs and rebuilds layout/paint when either context changes.
+pub fn resolve_with_style_environment(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+    environment: MediaEnvironment,
+    state: &InteractionState,
+) -> StyleResolution {
+    resolve_internal_state::<2>(
+        document,
+        stylesheets,
+        user_stylesheets,
+        user_agent_rules(),
+        environment,
+        state,
+    )
+}
+
+/// Second style phase: evaluate container conditions/units against completed
+/// ancestor content geometry. Callers must iterate layout until snapshots agree.
+/// This API never loads resources; an empty snapshot is the bootstrap phase.
+pub fn resolve_with_container_environment(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+    environment: MediaEnvironment,
+    state: &InteractionState,
+    containers: &ContainerSnapshot,
+) -> StyleResolution {
+    resolve_internal_container_state::<2>(
+        document,
+        stylesheets,
+        user_stylesheets,
+        user_agent_rules(),
+        environment,
+        state,
+        containers,
+    )
+}
+
+/// Reference modes are deliberately opt-in, not part of the styling API.
+#[cfg(feature = "style-bench-reference")]
+#[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
+pub enum BenchmarkMatching {
+    Unindexed,
+    Indexed,
+    IndexedWithBloom,
+}
+
+#[cfg(feature = "style-bench-reference")]
+#[doc(hidden)]
+pub fn resolve_for_benchmark(document: &Document, matching: BenchmarkMatching) -> StyleResolution {
+    resolve_for_benchmark_with_environment(document, matching, MediaEnvironment::default())
+}
+
+#[cfg(feature = "style-bench-reference")]
+#[doc(hidden)]
+pub fn resolve_for_benchmark_with_environment(
+    document: &Document,
+    matching: BenchmarkMatching,
+    environment: MediaEnvironment,
+) -> StyleResolution {
+    resolve_for_benchmark_with_stylesheets(
+        document,
+        collect_stylesheets(document),
+        matching,
+        environment,
+    )
+}
+
+#[cfg(feature = "style-bench-reference")]
+#[doc(hidden)]
+pub fn resolve_for_benchmark_with_stylesheets(
+    document: &Document,
+    sheets: StylesheetCollection,
+    matching: BenchmarkMatching,
+    environment: MediaEnvironment,
+) -> StyleResolution {
+    match matching {
+        BenchmarkMatching::Unindexed => {
+            resolve_internal::<0>(document, sheets, &[], user_agent_rules(), environment)
+        }
+        BenchmarkMatching::Indexed => {
+            resolve_internal::<1>(document, sheets, &[], user_agent_rules(), environment)
+        }
+        BenchmarkMatching::IndexedWithBloom => {
+            resolve_internal::<2>(document, sheets, &[], user_agent_rules(), environment)
+        }
+    }
+}
+
+// 0 = unindexed reference, 1 = index only, 2 = production index + Bloom.
+#[cfg(feature = "style-bench-reference")]
+#[doc(hidden)]
+pub fn resolve_for_benchmark_with_containers(
+    document: &Document,
+    sheets: StylesheetCollection,
+    users: &[&str],
+    matching: BenchmarkMatching,
+    environment: MediaEnvironment,
+    state: &InteractionState,
+    containers: &ContainerSnapshot,
+) -> StyleResolution {
+    match matching {
+        BenchmarkMatching::Unindexed => resolve_internal_container_state::<0>(
+            document,
+            sheets,
+            users,
+            user_agent_rules(),
+            environment,
+            state,
+            containers,
+        ),
+        BenchmarkMatching::Indexed => resolve_internal_container_state::<1>(
+            document,
+            sheets,
+            users,
+            user_agent_rules(),
+            environment,
+            state,
+            containers,
+        ),
+        BenchmarkMatching::IndexedWithBloom => resolve_internal_container_state::<2>(
+            document,
+            sheets,
+            users,
+            user_agent_rules(),
+            environment,
+            state,
+            containers,
+        ),
+    }
+}
+
+// Const modes remove reference branches and ancestry maintenance from mode 0.
+fn resolve_internal<const MODE: u8>(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+    user_agent: &StyledSheet,
+    environment: MediaEnvironment,
+) -> StyleResolution {
+    resolve_internal_state::<MODE>(
+        document,
+        stylesheets,
+        user_stylesheets,
+        user_agent,
+        environment,
+        &InteractionState::default(),
+    )
+}
+
+fn resolve_internal_state<const MODE: u8>(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+    user_agent: &StyledSheet,
+    environment: MediaEnvironment,
+    state: &InteractionState,
+) -> StyleResolution {
+    resolve_internal_container_state::<MODE>(
+        document,
+        stylesheets,
+        user_stylesheets,
+        user_agent,
+        environment,
+        state,
+        &ContainerSnapshot::default(),
+    )
+}
+
+fn resolve_internal_container_state<const MODE: u8>(
+    document: &Document,
+    mut stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+    user_agent: &StyledSheet,
+    environment: MediaEnvironment,
+    state: &InteractionState,
+    containers: &ContainerSnapshot,
+) -> StyleResolution {
+    let declaration_context = DeclarationContext::for_document(document);
+    let mut user_layers = Layers::default();
+    let user_rules = user_stylesheets
+        .iter()
+        .map(|source| {
+            let parsed = css::parse_recovering(source);
+            let mut diagnostics = Vec::new();
+            report_css_errors(&parsed, None, "", &mut diagnostics);
+            let rules = Compiler::<MODE>::new(
+                None,
+                None,
+                &mut diagnostics,
+                environment,
+                &mut user_layers,
+                declaration_context,
+            )
+            .compile(&parsed.value, true);
+            append_sheet_diagnostics(
+                &mut stylesheets.diagnostics,
+                diagnostics,
+                "user stylesheet: ",
+            );
+            rules
+        })
+        .collect::<Vec<_>>();
+    let user_rules = rank_layers(user_rules, &user_layers);
+    let mut author_layers = Layers::default();
     let author_rules = stylesheets
         .stylesheets
         .iter()
         .map(|sheet| {
-            compile(
-                &sheet.stylesheet,
+            let mut diagnostics = Vec::new();
+            let media = document
+                .node(sheet.node_id)
+                .and_then(|node| node.as_element())
+                .filter(|element| {
+                    element.tag_name().eq_ignore_ascii_case("style")
+                        || element.tag_name().eq_ignore_ascii_case("link")
+                })
+                .and_then(|element| element.attribute("media"));
+            let active = media.is_none_or(|source| {
+                media_matches(
+                    source,
+                    environment,
+                    Some(sheet.node_id),
+                    &mut diagnostics,
+                    true,
+                )
+            });
+            let rules = Compiler::<MODE>::new(
                 Some(sheet.node_id),
-                &mut stylesheets.diagnostics,
+                document.node(sheet.node_id).and_then(|node| node.parent()),
+                &mut diagnostics,
+                environment,
+                &mut author_layers,
+                declaration_context,
             )
+            .compile(&sheet.stylesheet, active);
+            let prefix = sheet
+                .url
+                .as_ref()
+                .map(|url| format!("{url}: "))
+                .unwrap_or_default();
+            append_sheet_diagnostics(&mut stylesheets.diagnostics, diagnostics, &prefix);
+            rules
         })
         .collect::<Vec<_>>();
+    let author_rules = rank_layers(author_rules, &author_layers);
+    let has_pseudos = std::iter::once(user_agent)
+        .chain(user_rules.iter())
+        .chain(author_rules.iter())
+        .any(|sheet| {
+            sheet.rules.iter().any(|rule| {
+                rule.active
+                    && rule
+                        .selectors
+                        .iter()
+                        .any(|styled| styled.selector.pseudo_element().is_some())
+            })
+        });
+    let mut registered_candidates = BTreeMap::new();
+    for (origin, sheets) in [(Origin::User, &user_rules), (Origin::Author, &author_rules)] {
+        for (sheet_order, sheet) in sheets.iter().enumerate() {
+            for (order, rule) in sheet.registrations.iter().enumerate() {
+                let priority = (origin.level(false), rule.rank, sheet_order, order);
+                if registered_candidates
+                    .get(&rule.name)
+                    .is_none_or(|(old, _)| priority >= *old)
+                {
+                    registered_candidates
+                        .insert(rule.name.clone(), (priority, rule.registration.clone()));
+                }
+            }
+        }
+    }
+    let registrations: Registrations = registered_candidates
+        .into_iter()
+        .map(|(name, (_, registration))| (name, registration))
+        .collect();
     let mut nodes = HashMap::with_capacity(document.node_count());
-    let initial = ComputedStyle::default();
-    let mut pending = vec![document.root_id()];
-    while let Some(node_id) = pending.pop() {
+    let mut pseudos = HashMap::new();
+    let mut matching = MatchingContext {
+        state: state.clone(),
+        containers: containers.clone(),
+        environment,
+        ..MatchingContext::default()
+    };
+    let mut initial = ComputedNode::default();
+    initial.style.font_size =
+        if environment.initial_font_size.is_finite() && environment.initial_font_size > 0.0 {
+            environment.initial_font_size.min(MAX_FONT_SIZE)
+        } else {
+            16.0
+        };
+    let mut root_metrics = None;
+    let mut pending = vec![(document.root_id(), false)];
+    while let Some((node_id, exit)) = pending.pop() {
         let Some(node) = document.node(node_id) else {
             continue;
         };
-        pending.extend(node.children().iter().rev().copied());
+        if MODE == 2 && exit {
+            matching
+                .ancestors
+                .pop(node.as_element().expect("element exit"));
+            continue;
+        }
         let parent = node
             .parent()
+            .filter(|&id| {
+                !matches!(node.kind(), NodeKind::Element(_))
+                    || document
+                        .node(id)
+                        .is_some_and(|node| node.as_element().is_some())
+            })
             .and_then(|id| nodes.get(&id))
             .unwrap_or(&initial);
         let style = match node.kind() {
-            NodeKind::Document | NodeKind::DocumentFragment => ComputedStyle {
-                display: Display::Block,
-                ..initial.clone()
+            NodeKind::Document | NodeKind::DocumentFragment => ComputedNode {
+                style: ComputedStyle {
+                    display: Display::Block,
+                    ..initial.style.clone()
+                },
+                ..ComputedNode::default()
             },
-            NodeKind::Text(_) => ComputedStyle::inherit(parent),
+            NodeKind::Text(_) => ComputedNode {
+                style: ComputedStyle::inherit(&parent.style),
+                ..ComputedNode::default()
+            },
             NodeKind::Comment(_)
             | NodeKind::Doctype(_)
-            | NodeKind::ProcessingInstruction { .. } => ComputedStyle {
-                display: Display::None,
-                ..ComputedStyle::inherit(parent)
+            | NodeKind::ProcessingInstruction { .. } => ComputedNode {
+                style: ComputedStyle {
+                    display: Display::None,
+                    ..ComputedStyle::inherit(&parent.style)
+                },
+                ..ComputedNode::default()
             },
             NodeKind::Element(element) => {
-                let mut winners = HashMap::new();
-                apply_rules(
+                if MODE != 0 {
+                    matching.keys.clear();
+                    matching.keys.extend(element_keys(element));
+                }
+                let mut winners = Winners::default();
+                apply_rules::<MODE>(
                     document,
                     node_id,
-                    user_agent_rules(),
-                    false,
+                    user_agent,
+                    Origin::UserAgent,
                     0,
                     &mut winners,
+                    &mut matching,
                 );
-                if element.tag_name().eq_ignore_ascii_case("img")
-                    && let Some(width) = element
-                        .attribute("width")
-                        .and_then(crate::html::attributes::image_dimension)
+                for (attribute, property) in
+                    [("width", Property::Width), ("height", Property::Height)]
                 {
+                    if !element.tag_name().eq_ignore_ascii_case("img") {
+                        break;
+                    }
+                    let Some(dimension) = element
+                        .attribute(attribute)
+                        .and_then(crate::html::attributes::image_dimension)
+                    else {
+                        continue;
+                    };
                     insert(
                         &mut winners,
                         &StyledDeclaration {
-                            property: Property::Width,
-                            value: Value::Length(Length::Px(width)),
+                            property: DeclarationProperty::Longhand(property),
+                            value: Value::Length(Length::Px(dimension)),
                             important: false,
                             order: 0,
                         },
                         Priority {
-                            origin: 1,
+                            level: CascadeLevel::Presentational,
                             inline: false,
+                            layer_rank: author_layers.ranks().len() - 1,
                             specificity: Specificity::default(),
+                            proximity: std::cmp::Reverse(usize::MAX),
                             sheet: 0,
                             rule: 0,
                             declaration: 0,
+                            layer: 0,
+                            normal_rank: author_layers.ranks().len() - 1,
                         },
                     );
                 }
+                for (sheet, rules) in user_rules.iter().enumerate() {
+                    apply_rules::<MODE>(
+                        document,
+                        node_id,
+                        rules,
+                        Origin::User,
+                        sheet,
+                        &mut winners,
+                        &mut matching,
+                    );
+                }
                 for (sheet, rules) in author_rules.iter().enumerate() {
-                    apply_rules(document, node_id, rules, true, sheet, &mut winners);
+                    apply_rules::<MODE>(
+                        document,
+                        node_id,
+                        rules,
+                        Origin::Author,
+                        sheet,
+                        &mut winners,
+                        &mut matching,
+                    );
                 }
                 if let Some(source) = element.attribute("style") {
                     let parsed = css::parse_declarations_recovering(source);
@@ -128,48 +601,186 @@ pub fn resolve_with_stylesheets(
                         &mut stylesheets.diagnostics,
                     );
                     for (order, declaration) in parsed.value.iter().enumerate() {
-                        match declarations::parse(declaration, order) {
+                        match declarations::parse_with_context(
+                            declaration,
+                            order,
+                            declaration_context,
+                        ) {
                             Ok(declarations) => {
                                 for declaration in &declarations {
                                     insert(
                                         &mut winners,
                                         declaration,
                                         Priority {
-                                            origin: if declaration.important { 2 } else { 1 },
+                                            level: Origin::Author.level(declaration.important),
                                             inline: true,
+                                            layer_rank: 0,
                                             specificity: Specificity::default(),
+                                            proximity: std::cmp::Reverse(usize::MAX),
                                             sheet: 0,
                                             rule: 0,
                                             declaration: order,
+                                            layer: 0,
+                                            normal_rank: 0,
                                         },
                                     );
                                 }
                             }
-                            Err(message) => stylesheets.diagnostics.push(Diagnostic {
-                                node_id: Some(node_id),
+                            Err(message) => declaration_error(
+                                declaration,
+                                Some(node_id),
                                 message,
-                            }),
+                                &mut stylesheets.diagnostics,
+                            ),
                         }
                     }
                 }
-                compute(parent, &winners, node_id, &mut stylesheets.diagnostics)
+                let context = containers.unit_context(
+                    document,
+                    node_id,
+                    false,
+                    length_context(&parent.style, environment, root_metrics),
+                );
+                let is_root = root_metrics.is_none();
+                let result = compute_with_context(
+                    parent,
+                    &winners,
+                    node_id,
+                    &mut stylesheets.diagnostics,
+                    ComputationContext {
+                        lengths: context,
+                        is_root,
+                        initial_font_size: initial.style.font_size,
+                        registrations: &registrations,
+                    },
+                );
+                if is_root {
+                    root_metrics = Some((result.style.font_size, result.style.used_line_height()));
+                }
+                // Only visit targets actually present in candidate rules. Index
+                // keys still describe the originating element, not generated boxes.
+                let mut targets = [false; 8];
+                for rules in std::iter::once(user_agent)
+                    .chain(user_rules.iter())
+                    .chain(author_rules.iter())
+                    .filter(|_| has_pseudos)
+                {
+                    if MODE != 0 {
+                        rules.index.collect(
+                            &matching.keys,
+                            &mut matching.candidates,
+                            rules.rules.len(),
+                        );
+                    }
+                    let candidates: Vec<_> = if MODE == 0 {
+                        (0..rules.rules.len()).collect()
+                    } else {
+                        matching.candidates.rules.clone()
+                    };
+                    for candidate in candidates {
+                        let rule = &rules.rules[candidate];
+                        if rule.active {
+                            for styled in &rule.selectors {
+                                if let Some(pseudo) = styled.selector.pseudo_element() {
+                                    targets[pseudo as usize] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                for pseudo in PseudoElement::ALL {
+                    if !targets[pseudo as usize] {
+                        continue;
+                    }
+                    matching.pseudo = Some(pseudo);
+                    let mut pseudo_winners = Winners::default();
+                    apply_rules::<MODE>(
+                        document,
+                        node_id,
+                        user_agent,
+                        Origin::UserAgent,
+                        0,
+                        &mut pseudo_winners,
+                        &mut matching,
+                    );
+                    for (origin, rules) in
+                        [(Origin::User, &user_rules), (Origin::Author, &author_rules)]
+                    {
+                        for (sheet, rules) in rules.iter().enumerate() {
+                            apply_rules::<MODE>(
+                                document,
+                                node_id,
+                                rules,
+                                origin,
+                                sheet,
+                                &mut pseudo_winners,
+                                &mut matching,
+                            );
+                        }
+                    }
+                    if !pseudo_winners.candidates.is_empty()
+                        || !pseudo_winners.custom_candidates.is_empty()
+                    {
+                        let computed = compute_with_context(
+                            &result,
+                            &pseudo_winners,
+                            node_id,
+                            &mut stylesheets.diagnostics,
+                            ComputationContext {
+                                lengths: containers.unit_context(
+                                    document,
+                                    node_id,
+                                    true,
+                                    length_context(&result.style, environment, root_metrics),
+                                ),
+                                is_root: false,
+                                initial_font_size: initial.style.font_size,
+                                registrations: &registrations,
+                            },
+                        );
+                        pseudos.insert((node_id, pseudo), computed.style);
+                    }
+                }
+                matching.pseudo = None;
+                result
             }
         };
         nodes.insert(node_id, style);
+        if MODE == 2
+            && !node.children().is_empty()
+            && let Some(element) = node.as_element()
+        {
+            matching.ancestors.push(element);
+            pending.push((node_id, true));
+        }
+        pending.extend(node.children().iter().rev().map(|&id| (id, false)));
     }
+    stylesheets.diagnostics.extend(matching.diagnostics.entries);
     StyleResolution {
-        styles: ComputedStyles { nodes },
+        styles: ComputedStyles {
+            pseudos,
+            nodes: nodes
+                .into_iter()
+                .map(|(id, node)| (id, node.style))
+                .collect(),
+        },
         stylesheets,
     }
 }
 
-fn user_agent_rules() -> &'static [StyledRule] {
-    static RULES: OnceLock<Vec<StyledRule>> = OnceLock::new();
+fn user_agent_rules() -> &'static StyledSheet {
+    static RULES: OnceLock<StyledSheet> = OnceLock::new();
     RULES.get_or_init(|| {
         let sheet =
             css::parse(include_str!("user_agent.css")).expect("bundled user-agent CSS must parse");
         let mut diagnostics = Vec::new();
-        let rules = compile(&sheet, None, &mut diagnostics);
+        let rules = compile::<2>(
+            &sheet,
+            None,
+            &mut diagnostics,
+            MediaEnvironment::default(),
+            true,
+        );
         assert!(
             diagnostics.is_empty(),
             "invalid bundled user-agent CSS: {diagnostics:?}"
@@ -178,91 +789,644 @@ fn user_agent_rules() -> &'static [StyledRule] {
     })
 }
 
-fn compile(
+fn compile<const MODE: u8>(
     sheet: &Stylesheet,
     node_id: Option<NodeId>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<StyledRule> {
-    let mut result = Vec::new();
-    for (order, rule) in sheet.rules().iter().enumerate() {
-        let Rule::Qualified(rule) = rule else {
-            diagnostics.push(Diagnostic {
-                node_id,
-                message: "at-rules are not supported yet".into(),
-            });
-            continue;
-        };
-        let selectors = match selectors::parse(rule.prelude()) {
-            Ok(selectors) => selectors,
-            Err(error) => {
-                diagnostics.push(Diagnostic {
-                    node_id,
-                    message: format!("{}: {error}", rule.prelude()),
-                });
-                continue;
-            }
-        };
-        let mut declarations = Vec::new();
-        for (order, item) in rule.items().iter().enumerate() {
-            match item {
-                BlockItem::Declaration(declaration) => {
-                    match declarations::parse(declaration, order) {
-                        Ok(values) => declarations.extend(values),
-                        Err(message) => diagnostics.push(Diagnostic { node_id, message }),
-                    }
-                }
-                BlockItem::Rule(_) => diagnostics.push(Diagnostic {
-                    node_id,
-                    message: "nested rules are not supported yet".into(),
-                }),
-            }
-        }
-        result.push(StyledRule {
-            selectors,
-            declarations,
-            order,
-        });
-    }
-    result
+    environment: MediaEnvironment,
+    active: bool,
+) -> StyledSheet {
+    let mut layers = Layers::default();
+    let result = Compiler::<MODE>::new(
+        node_id,
+        None,
+        diagnostics,
+        environment,
+        &mut layers,
+        DeclarationContext::default(),
+    )
+    .compile(sheet, active);
+    rank_layers(vec![result], &layers).pop().unwrap()
 }
 
-type Winners = HashMap<Property, (Priority, Value)>;
+fn rank_layers(mut sheets: Vec<StyledSheet>, layers: &Layers) -> Vec<StyledSheet> {
+    let ranks = layers.ranks();
+    for sheet in &mut sheets {
+        for rule in &mut sheet.rules {
+            rule.layer_rank = ranks[rule.layer];
+            rule.layer_count = ranks.len();
+        }
+        for registration in &mut sheet.registrations {
+            registration.rank = ranks[registration.layer];
+        }
+    }
+    sheets
+}
 
-fn apply_rules(
+struct Compiler<'a, const MODE: u8> {
+    node_id: Option<NodeId>,
+    implicit_scope: Option<NodeId>,
+    diagnostics: &'a mut Vec<Diagnostic>,
+    environment: MediaEnvironment,
+    layers: &'a mut Layers,
+    namespaces: selectors::Namespaces,
+    result: StyledSheet,
+    containers: Vec<ContainerQuery>,
+    declaration_context: DeclarationContext,
+}
+
+impl<'a, const MODE: u8> Compiler<'a, MODE> {
+    fn new(
+        node_id: Option<NodeId>,
+        implicit_scope: Option<NodeId>,
+        diagnostics: &'a mut Vec<Diagnostic>,
+        environment: MediaEnvironment,
+        layers: &'a mut Layers,
+        declaration_context: DeclarationContext,
+    ) -> Self {
+        Self {
+            node_id,
+            implicit_scope,
+            diagnostics,
+            environment,
+            layers,
+            namespaces: selectors::Namespaces::default(),
+            result: StyledSheet::default(),
+            containers: Vec::new(),
+            declaration_context,
+        }
+    }
+
+    fn compile(mut self, sheet: &Stylesheet, active: bool) -> StyledSheet {
+        self.sheet(sheet, active, 0, &[]);
+        self.result
+    }
+
+    fn diagnostic(&mut self, message: impl Into<String>) {
+        self.diagnostics.push(Diagnostic {
+            node_id: self.node_id,
+            message: message.into(),
+        });
+    }
+
+    fn sheet(&mut self, sheet: &Stylesheet, active: bool, layer: usize, scopes: &[Scope]) {
+        let mut imports = true;
+        let mut namespaces = true;
+        let mut preamble_started = false;
+        for rule in sheet.rules() {
+            if let Rule::At(at) = rule {
+                if control::is_statement(at, "charset") {
+                    continue;
+                }
+                if at.name().eq_ignore_ascii_case("import") {
+                    if !imports || at.block().is_some() {
+                        self.diagnostic("@import must precede style rules and @namespace");
+                        continue;
+                    }
+                    self.import(at, active, layer, scopes);
+                    preamble_started = true;
+                    continue;
+                }
+                if at.name().eq_ignore_ascii_case("namespace") {
+                    imports = false;
+                    preamble_started = true;
+                    if !namespaces
+                        || at.block().is_some()
+                        || !control::namespace_rule(at.prelude(), &mut self.namespaces)
+                    {
+                        self.diagnostic("invalid or misplaced @namespace");
+                    }
+                    continue;
+                }
+                if control::is_statement(at, "layer") {
+                    if preamble_started {
+                        imports = false;
+                        namespaces = false;
+                    }
+                    self.rule(rule, active, layer, scopes, None);
+                    continue;
+                }
+            }
+            imports = false;
+            namespaces = false;
+            self.rule(rule, active, layer, scopes, None);
+        }
+    }
+
+    fn import(&mut self, rule: &css::AtRule, active: bool, layer: usize, scopes: &[Scope]) {
+        let Some(import) = css::control::import(rule.prelude()) else {
+            self.diagnostic("invalid @import prelude");
+            return;
+        };
+        let condition = import.supports.as_ref().is_none_or(|source| {
+            control::supports_with_context(
+                source,
+                &self.namespaces,
+                self.node_id,
+                self.diagnostics,
+                self.declaration_context,
+            )
+        });
+        let media = media_matches(
+            &import.media,
+            self.environment,
+            self.node_id,
+            self.diagnostics,
+            true,
+        );
+        let layer = if active {
+            import
+                .layer
+                .as_ref()
+                .map_or(layer, |path| self.layers.register(layer, path))
+        } else {
+            layer
+        };
+        if !condition {
+            return;
+        }
+        let Some(loaded) = rule.imported() else {
+            self.diagnostic(format!("@import {:?} has no loaded stylesheet", import.url));
+            return;
+        };
+        let previous = std::mem::take(&mut self.namespaces);
+        let start = self.diagnostics.len();
+        self.sheet(
+            &loaded.stylesheet,
+            active && condition && media,
+            layer,
+            scopes,
+        );
+        for diagnostic in &mut self.diagnostics[start..] {
+            diagnostic.message = format!("{}: {}", loaded.url, diagnostic.message);
+        }
+        self.namespaces = previous;
+    }
+
+    fn rule(
+        &mut self,
+        rule: &Rule,
+        active: bool,
+        layer: usize,
+        scopes: &[Scope],
+        parent: Option<Arc<[Selector]>>,
+    ) {
+        match rule {
+            Rule::Qualified(rule) => {
+                let selectors = match selectors::parse_scoped(
+                    rule.prelude(),
+                    &self.namespaces,
+                    parent,
+                    !scopes.is_empty(),
+                ) {
+                    Ok(value) => Arc::<[Selector]>::from(value),
+                    Err(error) => {
+                        self.diagnostic(format!("{}: {error}", rule.prelude()));
+                        return;
+                    }
+                };
+                self.items(rule.items(), active, layer, scopes, Some(selectors));
+            }
+            Rule::At(rule) => {
+                let name = rule.name().to_ascii_lowercase();
+                if name == "container" {
+                    let query = ContainerQuery::parse(rule.prelude());
+                    for message in query.diagnostics() {
+                        self.diagnostic(format!(
+                            "container query {:?}: {}",
+                            rule.prelude(),
+                            message.replace("media", "container")
+                        ));
+                    }
+                    let Some(block) = rule.block() else {
+                        self.diagnostic("@container requires a rule block");
+                        return;
+                    };
+                    let valid = query.valid();
+                    self.containers.push(query);
+                    self.items(block, active && valid, layer, scopes, parent);
+                    self.containers.pop();
+                    return;
+                }
+                let mut next_layer = layer;
+                let mut next_scopes = scopes.to_vec();
+                let mut next_active = active;
+                match name.as_str() {
+                    "media" => {
+                        next_active &= media_matches(
+                            rule.prelude(),
+                            self.environment,
+                            self.node_id,
+                            self.diagnostics,
+                            false,
+                        )
+                    }
+                    "supports" => {
+                        next_active &= control::supports_with_context(
+                            rule.prelude(),
+                            &self.namespaces,
+                            self.node_id,
+                            self.diagnostics,
+                            self.declaration_context,
+                        )
+                    }
+                    "layer" => {
+                        let paths = if rule.prelude().trim().is_empty() && rule.block().is_some() {
+                            Some(vec![Vec::new()])
+                        } else {
+                            css::control::layer_names(rule.prelude())
+                        };
+                        let Some(paths) = paths else {
+                            self.diagnostic("invalid @layer name or order statement");
+                            return;
+                        };
+                        if rule.block().is_some() && paths.len() != 1 {
+                            self.diagnostic("@layer block requires one layer name");
+                            return;
+                        }
+                        for path in paths {
+                            if active {
+                                next_layer = self.layers.register(layer, &path);
+                            }
+                        }
+                        if rule.block().is_none() {
+                            return;
+                        }
+                    }
+                    "scope" => {
+                        let Some(scope) = Scope::parse(
+                            rule.prelude(),
+                            &self.namespaces,
+                            self.implicit_scope,
+                            !scopes.is_empty(),
+                            parent.clone(),
+                        ) else {
+                            self.diagnostic("invalid or unsupported @scope prelude");
+                            return;
+                        };
+                        next_scopes.push(scope);
+                    }
+                    "import" | "namespace" => {
+                        self.diagnostic(format!("@{name} is not allowed in a nested block"));
+                        return;
+                    }
+                    "property" => {
+                        if parent.is_some() {
+                            self.diagnostic("@property is not allowed inside a style rule");
+                            return;
+                        }
+                        match Registration::parse(rule) {
+                            Ok((name, registration)) if active => {
+                                self.result.registrations.push(RegisteredRule {
+                                    name,
+                                    registration,
+                                    layer,
+                                    rank: 0,
+                                });
+                            }
+                            Ok(_) => {}
+                            Err(message) => self.diagnostic(message),
+                        }
+                        return;
+                    }
+                    _ => {
+                        self.diagnostic(format!("unsupported at-rule: @{name}"));
+                        return;
+                    }
+                }
+                let Some(block) = rule.block() else {
+                    self.diagnostic(format!("@{name} requires a rule block"));
+                    return;
+                };
+                self.items(block, next_active, next_layer, &next_scopes, parent);
+            }
+        }
+    }
+
+    fn items(
+        &mut self,
+        items: &[BlockItem],
+        active: bool,
+        layer: usize,
+        scopes: &[Scope],
+        parent: Option<Arc<[Selector]>>,
+    ) {
+        let mut declarations = Vec::new();
+        let declaration_parent = parent.clone().or_else(|| {
+            (!scopes.is_empty()).then(|| {
+                Arc::<[Selector]>::from(
+                    selectors::parse_scoped("&", &self.namespaces, None, true).unwrap(),
+                )
+            })
+        });
+        for (order, item) in items.iter().enumerate() {
+            match item {
+                BlockItem::Declaration(declaration) if declaration_parent.is_some() => {
+                    match declarations::parse_with_context(
+                        declaration,
+                        order,
+                        self.declaration_context,
+                    ) {
+                        Ok(values) => declarations.extend(values),
+                        Err(message) => {
+                            declaration_error(declaration, self.node_id, message, self.diagnostics)
+                        }
+                    }
+                }
+                BlockItem::Declaration(_) => self
+                    .diagnostic("declarations are not allowed directly inside a conditional rule"),
+                BlockItem::Rule(rule) => {
+                    if !declarations.is_empty() {
+                        self.emit(
+                            declaration_parent.as_ref().unwrap(),
+                            std::mem::take(&mut declarations),
+                            active,
+                            layer,
+                            scopes,
+                        );
+                    }
+                    self.rule(rule, active, layer, scopes, parent.clone());
+                }
+            }
+        }
+        if !declarations.is_empty() {
+            self.emit(
+                declaration_parent.as_ref().unwrap(),
+                declarations,
+                active,
+                layer,
+                scopes,
+            );
+        }
+    }
+
+    fn emit(
+        &mut self,
+        selectors: &[Selector],
+        declarations: Vec<StyledDeclaration>,
+        active: bool,
+        layer: usize,
+        scopes: &[Scope],
+    ) {
+        for pseudo in PseudoElement::ALL {
+            if matches!(
+                pseudo,
+                PseudoElement::FirstLine
+                    | PseudoElement::FirstLetter
+                    | PseudoElement::Placeholder
+                    | PseudoElement::Selection
+                    | PseudoElement::Backdrop
+            ) && selectors.iter().any(|s| s.pseudo_element() == Some(pseudo))
+            {
+                self.diagnostic(format!(
+                    "::{} computed style retained; layout/paint effect is not implemented",
+                    pseudo.name()
+                ));
+            }
+        }
+        if selectors.iter().any(|s| s.pseudo_element() == Some(PseudoElement::Marker))
+            && declarations.iter().any(|d| matches!(d.property, DeclarationProperty::Longhand(property) if             !matches!(property, Property::Color | Property::TextFillColor | Property::Content | Property::FontSize | Property::FontFamily | Property::FontWeight | Property::FontStyle | Property::LineHeight)))
+        {
+            self.diagnostic("::marker renders only content, color, and the supported font properties; other effects are not implemented");
+        }
+        let order = self.result.rules.len();
+        if MODE != 0 {
+            self.result.index.add_rule(order, selectors);
+        }
+        self.result.rules.push(StyledRule {
+            selectors: selectors
+                .iter()
+                .cloned()
+                .map(|selector| StyledSelector {
+                    ancestors: if MODE == 2 {
+                        selector.ancestor_requirements()
+                    } else {
+                        Bloom::default()
+                    },
+                    selector,
+                })
+                .collect(),
+            declarations,
+            order,
+            active,
+            layer,
+            layer_rank: 0,
+            layer_count: 1,
+            scopes: scopes.to_vec(),
+            containers: self.containers.clone(),
+        });
+    }
+}
+
+fn media_matches(
+    source: &str,
+    environment: MediaEnvironment,
+    node_id: Option<NodeId>,
+    diagnostics: &mut Vec<Diagnostic>,
+    allow_empty: bool,
+) -> bool {
+    let query = MediaQueryList::parse(source);
+    diagnostics.extend(query.diagnostics().iter().map(|message| Diagnostic {
+        node_id,
+        message: format!("media query {source:?}: {message}"),
+    }));
+    diagnostics.extend(
+        query
+            .evaluation_diagnostics(environment)
+            .into_iter()
+            .map(|message| Diagnostic {
+                node_id,
+                message: format!("media query {source:?}: {message}"),
+            }),
+    );
+    if !allow_empty && query.is_empty() {
+        diagnostics.push(Diagnostic {
+            node_id,
+            message: "@media requires a nonempty query".into(),
+        });
+        false
+    } else {
+        query.matches(environment)
+    }
+}
+
+fn declaration_error(
+    declaration: &css::Declaration,
+    node_id: Option<NodeId>,
+    message: String,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if declaration.property().starts_with("--")
+        || variables::contains_var(declaration.value_tokens())
+    {
+        let mut preview: String = message.chars().take(240).collect();
+        if message.chars().count() > 240 {
+            preview.push('…');
+        }
+        variables::report_message(
+            diagnostics,
+            node_id,
+            format!("CSS variable declaration: {preview}"),
+        );
+    } else {
+        diagnostics.push(Diagnostic { node_id, message });
+    }
+}
+
+fn append_sheet_diagnostics(
+    destination: &mut Vec<Diagnostic>,
+    diagnostics: Vec<Diagnostic>,
+    prefix: &str,
+) {
+    for mut diagnostic in diagnostics {
+        let variable = diagnostic.message.starts_with("CSS variable declaration:")
+            || diagnostic.message == "additional CSS variable diagnostics omitted";
+        diagnostic.message = format!("{prefix}{}", diagnostic.message);
+        if variable {
+            variables::report_message(destination, diagnostic.node_id, diagnostic.message);
+        } else {
+            destination.push(diagnostic);
+        }
+    }
+}
+
+type LonghandWinners = HashMap<Property, (Priority, Value)>;
+
+#[derive(Default)]
+struct Winners {
+    longhands: LonghandWinners,
+    custom: BTreeMap<String, (Priority, Value)>,
+    candidates: HashMap<Property, Vec<(Priority, Value)>>,
+    custom_candidates: BTreeMap<String, Vec<(Priority, Value)>>,
+}
+
+fn apply_rules<const MODE: u8>(
     document: &Document,
     node_id: NodeId,
-    rules: &[StyledRule],
-    author: bool,
+    sheet_rules: &StyledSheet,
+    origin: Origin,
     sheet: usize,
     winners: &mut Winners,
+    matching: &mut MatchingContext,
 ) {
-    for rule in rules {
-        let specificity = rule
-            .selectors
-            .iter()
-            .filter(|selector| selector.matches(document, node_id))
-            .map(Selector::specificity)
-            .max();
-        let Some(specificity) = specificity else {
+    if MODE != 0 {
+        sheet_rules.index.collect(
+            &matching.keys,
+            &mut matching.candidates,
+            sheet_rules.rules.len(),
+        );
+    }
+    let count = if MODE == 0 {
+        sheet_rules.rules.len()
+    } else {
+        matching.candidates.rules.len()
+    };
+    for candidate in 0..count {
+        let rule = &sheet_rules.rules[if MODE == 0 {
+            candidate
+        } else {
+            matching.candidates.rules[candidate]
+        }];
+        if !rule.active {
+            continue;
+        }
+        let mut container_matches = true;
+        for query in &rule.containers {
+            let (matches, invalid_math) = query.matches(
+                document,
+                node_id,
+                matching.pseudo.is_some(),
+                &matching.containers,
+                matching.environment,
+            );
+            if invalid_math {
+                let source: String = query.source.chars().take(240).collect();
+                matching.diagnostics.query_error(node_id,
+                    format!("container query {source:?}: non-finite query calculation; query does not match"));
+            }
+            container_matches &= matches;
+        }
+        if !container_matches {
+            continue;
+        }
+        let specificity = |root, matching: &mut MatchingContext| {
+            rule.selectors
+                .iter()
+                .filter(|styled| {
+                    (MODE != 2 || matching.ancestors.may_contain(&styled.ancestors))
+                        && matching.diagnostics.matched(
+                            styled.selector.try_matches_target(
+                                document,
+                                node_id,
+                                root,
+                                &matching.state,
+                                matching.pseudo,
+                            ),
+                            node_id,
+                        )
+                })
+                .map(|styled| styled.selector.specificity())
+                .max()
+        };
+        let matched = if rule.scopes.is_empty() {
+            specificity(None, matching)
+                .map(|specificity| (specificity, std::cmp::Reverse(usize::MAX)))
+        } else {
+            let mut scopes = vec![(None, usize::MAX)];
+            'scopes: for scope in &rule.scopes {
+                let mut seen = std::collections::HashSet::new();
+                let mut next = Vec::new();
+                for (outer, _) in std::mem::take(&mut scopes) {
+                    match scope.matches(document, node_id, outer, &matching.state) {
+                        Ok(roots) => {
+                            next.extend(
+                                roots
+                                    .into_iter()
+                                    .filter(|(root, _)| seen.insert(*root))
+                                    .map(|(root, distance)| (Some(root), distance)),
+                            );
+                        }
+                        Err(error) => {
+                            matching.diagnostics.report(node_id, error);
+                            break 'scopes;
+                        }
+                    }
+                }
+                scopes = next;
+                if scopes.is_empty() {
+                    break;
+                }
+            }
+            scopes
+                .into_iter()
+                .filter_map(|(root, proximity)| {
+                    specificity(root, matching)
+                        .map(|specificity| (specificity, std::cmp::Reverse(proximity)))
+                })
+                .max()
+        };
+        let Some((specificity, proximity)) = matched else {
             continue;
         };
         for declaration in &rule.declarations {
-            let origin = match (author, declaration.important) {
-                (false, false) => 0,
-                (true, false) => 1,
-                (true, true) => 2,
-                (false, true) => 3,
-            };
             insert(
                 winners,
                 declaration,
                 Priority {
-                    origin,
+                    level: origin.level(declaration.important),
                     inline: false,
+                    layer_rank: if declaration.important {
+                        rule.layer_count - 1 - rule.layer_rank
+                    } else {
+                        rule.layer_rank
+                    },
                     specificity,
+                    proximity,
                     sheet,
                     rule: rule.order,
                     declaration: declaration.order,
+                    layer: rule.layer,
+                    normal_rank: rule.layer_rank,
                 },
             );
         }
@@ -270,137 +1434,784 @@ fn apply_rules(
 }
 
 fn insert(winners: &mut Winners, declaration: &StyledDeclaration, priority: Priority) {
-    if winners
-        .get(&declaration.property)
-        .is_none_or(|(old, _)| priority >= *old)
-    {
-        winners.insert(declaration.property, (priority, declaration.value.clone()));
-    }
-}
-
-fn compute(
-    parent: &ComputedStyle,
-    winners: &Winners,
-    node_id: NodeId,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ComputedStyle {
-    let initial = ComputedStyle::default();
-    let mut style = ComputedStyle::inherit(parent);
-    // Resolve dependent values in CSS order, not hash-table iteration order.
-    if let Some((_, value)) = winners.get(&Property::FontSize) {
-        let value = computed_value(value, Property::FontSize, parent, &initial);
-        if let Value::Length(length) = &value
-            && length.resolve(parent.font_size, parent.font_size) > MAX_FONT_SIZE
-        {
-            diagnostics.push(Diagnostic {
-                node_id: Some(node_id),
-                message: format!(
-                    "font-size exceeds the {MAX_FONT_SIZE}px rasterization limit; clamped"
-                ),
-            });
+    match &declaration.property {
+        DeclarationProperty::Longhand(property) => {
+            winners
+                .candidates
+                .entry(*property)
+                .or_default()
+                .push((priority, declaration.value.clone()));
+            if winners
+                .longhands
+                .get(property)
+                .is_none_or(|(old, _)| priority >= *old)
+            {
+                winners
+                    .longhands
+                    .insert(*property, (priority, declaration.value.clone()));
+            }
         }
-        apply(&mut style, parent, Property::FontSize, value);
-    }
-    if let Some((_, value)) = winners.get(&Property::Color) {
-        apply(
-            &mut style,
-            parent,
-            Property::Color,
-            computed_value(value, Property::Color, parent, &initial),
-        );
-    }
-    style.border_color = crate::css::values::Edges::all(style.color);
-    for (&property, (_, value)) in winners {
-        if matches!(property, Property::FontSize | Property::Color) {
-            continue;
-        }
-        apply(
-            &mut style,
-            parent,
-            property,
-            computed_value(value, property, parent, &initial),
-        );
-    }
-    style
-}
-
-fn computed_value(
-    value: &Value,
-    property: Property,
-    parent: &ComputedStyle,
-    initial: &ComputedStyle,
-) -> Value {
-    let Value::Wide(keyword) = value else {
-        return value.clone();
-    };
-    let inherit = matches!(keyword, WideKeyword::Inherit)
-        || matches!(keyword, WideKeyword::Unset) && property.inherited();
-    let style = if inherit { parent } else { initial };
-    use Property as P;
-    match property {
-        P::Color => Value::Color(rgb(style.color)),
-        P::BackgroundColor => Value::Color(rgb(style.background_color)),
-        P::Display => Value::Display(style.display),
-        P::FontSize => Value::Length(Length::Px(style.font_size)),
-        P::FontFamily => Value::Family(style.font_family.clone()),
-        P::FontWeight => Value::Bold(style.bold),
-        P::FontStyle => Value::Italic(style.italic),
-        P::Width => style.width.map(Value::Length).unwrap_or(Value::Auto),
-        P::Margin(side) => Value::Length(*style.margin.get(side)),
-        P::Padding(side) => Value::Length(*style.padding.get(side)),
-        P::BorderWidth(side) => Value::Length(Length::Px(*style.border_width.get(side))),
-        P::BorderColor(side) => {
-            if inherit {
-                Value::Color(rgb(*style.border_color.get(side)))
-            } else {
-                Value::Color(Color::CurrentColor)
+        DeclarationProperty::Custom(name) => {
+            winners
+                .custom_candidates
+                .entry(name.clone())
+                .or_default()
+                .push((priority, declaration.value.clone()));
+            if winners
+                .custom
+                .get(name)
+                .is_none_or(|(old, _)| priority >= *old)
+            {
+                winners
+                    .custom
+                    .insert(name.clone(), (priority, declaration.value.clone()));
             }
         }
     }
 }
 
-fn rgb(color: Option<u32>) -> Color {
-    color.map(Color::Rgb).unwrap_or(Color::Transparent)
+fn cascade_origin(level: CascadeLevel) -> u8 {
+    match level {
+        CascadeLevel::UserAgent | CascadeLevel::UserAgentImportant => 0,
+        CascadeLevel::User | CascadeLevel::UserImportant => 1,
+        CascadeLevel::Presentational | CascadeLevel::Author | CascadeLevel::AuthorImportant => 2,
+    }
 }
 
-fn resolve_color(color: Color, current: Option<u32>) -> Option<u32> {
-    match color {
-        Color::Rgb(value) => Some(value),
-        Color::Transparent => None,
-        Color::CurrentColor => current,
+fn select_candidate(
+    candidates: &[(Priority, Value)],
+    mut substitute: impl FnMut(&Value) -> Value,
+) -> Option<(Priority, Value)> {
+    if let Some((priority, value)) = candidates.iter().max_by_key(|(priority, _)| *priority)
+        && !matches!(
+            value,
+            Value::Wide(WideKeyword::Revert | WideKeyword::RevertLayer) | Value::Pending(_)
+        )
+    {
+        return Some((*priority, value.clone()));
+    }
+    let mut candidates = candidates.to_vec();
+    candidates.sort_by_key(|(priority, _)| *priority);
+    while let Some((priority, value)) = candidates.pop() {
+        let value = substitute(&value);
+        match value {
+            Value::Wide(WideKeyword::Revert) => {
+                let origin = cascade_origin(priority.level);
+                candidates.retain(|(candidate, _)| cascade_origin(candidate.level) < origin);
+            }
+            Value::Wide(WideKeyword::RevertLayer) => {
+                if priority.inline {
+                    // Important inline rollback must preserve intervening
+                    // important author stylesheet declarations.
+                    candidates.retain(|(candidate, _)| {
+                        cascade_origin(candidate.level) != cascade_origin(priority.level)
+                            || !candidate.inline
+                    });
+                } else {
+                    let normal_level = match cascade_origin(priority.level) {
+                        0 => CascadeLevel::UserAgent,
+                        1 => CascadeLevel::User,
+                        _ => CascadeLevel::Author,
+                    };
+                    // Roll back the complete interval between this layer's
+                    // normal and important levels, not merely its own rules.
+                    candidates.retain(|(candidate, _)| {
+                        (candidate.level, candidate.inline, candidate.layer_rank)
+                            < (normal_level, false, priority.normal_rank)
+                    });
+                }
+            }
+            value => return Some((priority, value)),
+        }
+    }
+    None
+}
+
+fn substitute_winners(
+    winners: &Winners,
+    environment: &variables::Environment,
+    budget: &mut Budget,
+    node_id: NodeId,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> LonghandWinners {
+    let mut pending: HashMap<_, Result<Vec<Value>, Failure>> = HashMap::new();
+    let mut result = LonghandWinners::new();
+    // Deterministic property traversal also makes resource-budget diagnostics
+    // independent of HashMap iteration and matching optimization mode.
+    let mut properties: Vec<_> = winners.longhands.keys().copied().collect();
+    properties.sort();
+    for property in properties {
+        let winner = &winners.longhands[&property];
+        if !matches!(
+            winner.1,
+            Value::Wide(WideKeyword::Revert | WideKeyword::RevertLayer) | Value::Pending(_)
+        ) {
+            result.insert(property, winner.clone());
+            continue;
+        }
+        let fallback = std::slice::from_ref(&winners.longhands[&property]);
+        let candidates = winners
+            .candidates
+            .get(&property)
+            .map(Vec::as_slice)
+            .unwrap_or(fallback);
+        let selected = select_candidate(candidates, |value| {
+            let Value::Pending(declaration) = value else {
+                return value.clone();
+            };
+            let values = pending.entry(Arc::as_ptr(declaration)).or_insert_with(|| {
+                let result = declaration
+                    .value
+                    .substitute(environment, budget)
+                    .and_then(|tokens| {
+                        declarations::parse_tokens_with_context(
+                            &declaration.name,
+                            &tokens,
+                            declaration.context,
+                        )
+                        .ok_or(Failure::Grammar)
+                    });
+                if let Err(failure) = result {
+                    variables::report(diagnostics, node_id, &declaration.name, failure);
+                }
+                result
+            });
+            let index = declarations::properties(&declaration.name)
+                .unwrap()
+                .iter()
+                .position(|candidate| *candidate == property)
+                .unwrap();
+            values
+                .as_ref()
+                .map(|values| values[index].clone())
+                .unwrap_or(Value::Wide(WideKeyword::Unset))
+        });
+        if let Some(selected) = selected {
+            result.insert(property, selected);
+        }
+    }
+    result
+}
+
+#[derive(Default)]
+struct ComputedNode {
+    style: ComputedStyle,
+    colors: ComputedColors,
+}
+
+struct ComputedColors {
+    background: Color,
+    border: Edges<Color>,
+    fill: Color,
+}
+
+impl Default for ComputedColors {
+    fn default() -> Self {
+        Self {
+            background: Color::Transparent,
+            border: Edges::all(Color::CurrentColor),
+            fill: Color::CurrentColor,
+        }
+    }
+}
+
+#[cfg(test)]
+fn compute(
+    parent: &ComputedNode,
+    winners: &Winners,
+    node_id: NodeId,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ComputedNode {
+    compute_with_context(
+        parent,
+        winners,
+        node_id,
+        diagnostics,
+        ComputationContext {
+            lengths: length_context(&parent.style, MediaEnvironment::default(), None),
+            is_root: true,
+            initial_font_size: 16.0,
+            registrations: &Registrations::new(),
+        },
+    )
+}
+
+pub(super) fn length_context(
+    style: &ComputedStyle,
+    environment: MediaEnvironment,
+    root: Option<(f32, f32)>,
+) -> LengthContext {
+    let viewport = (environment.viewport_width, environment.viewport_height);
+    let (root_font_size, root_line_height) = root.unwrap_or((
+        environment.initial_font_size,
+        environment.initial_font_size * 1.25,
+    ));
+    let mut context = LengthContext {
+        font_size: style.font_size,
+        root_font_size,
+        zero_advance: style.font_size * 0.5,
+        x_height: style.font_size * 0.5,
+        line_height: style.used_line_height(),
+        root_line_height,
+        small_viewport: environment.small_viewport.unwrap_or(viewport),
+        large_viewport: environment.large_viewport.unwrap_or(viewport),
+        dynamic_viewport: environment.dynamic_viewport.unwrap_or(viewport),
+        container_width: None,
+        container_height: None,
+    };
+    set_font_metrics(&mut context);
+    context
+}
+
+fn set_font_metrics(context: &mut LengthContext) {
+    // Styling and rendering currently select the same bundled regular face.
+    static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    set_font_metrics_from(context, &FONT, crate::paint::load_bundled_font, |message| {
+        eprintln!("{message}")
+    });
+}
+
+fn set_font_metrics_from(
+    context: &mut LengthContext,
+    cache: &OnceLock<Option<fontdue::Font>>,
+    load: impl FnOnce() -> Result<fontdue::Font, Box<dyn std::error::Error>>,
+    report: impl FnOnce(String),
+) {
+    let font = cache.get_or_init(|| match load() {
+        Ok(font) => Some(font),
+        Err(error) => {
+            report(format!(
+                "CSS font metrics: could not load bundled assets/fonts/noto-sans/NotoSans.ttf: \
+                 {error}; ch/ex fall back to 0.5em; check the bundled font data and rebuild"
+            ));
+            None
+        }
+    });
+    if let Some(font) = font {
+        context.zero_advance = font.metrics('0', context.font_size).advance_width;
+        // fontdue's outline bounds are tighter than its pixel-rounded bitmap.
+        context.x_height = font.metrics('x', context.font_size).bounds.height;
+    } else {
+        context.zero_advance = context.font_size * 0.5;
+        context.x_height = context.font_size * 0.5;
+    }
+}
+
+struct ComputationContext<'a> {
+    lengths: LengthContext,
+    is_root: bool,
+    initial_font_size: f32,
+    registrations: &'a Registrations,
+}
+
+fn compute_with_context(
+    parent: &ComputedNode,
+    winners: &Winners,
+    node_id: NodeId,
+    diagnostics: &mut Vec<Diagnostic>,
+    computation: ComputationContext<'_>,
+) -> ComputedNode {
+    let ComputationContext {
+        lengths: mut context,
+        is_root,
+        initial_font_size,
+        registrations,
+    } = computation;
+    let mut budget = Budget::default();
+    let custom = winners
+        .custom
+        .iter()
+        .filter_map(|(name, winner)| {
+            let candidates = winners
+                .custom_candidates
+                .get(name)
+                .map(Vec::as_slice)
+                .unwrap_or(std::slice::from_ref(winner));
+            select_candidate(candidates, Clone::clone).map(|(_, value)| (name.clone(), value))
+        })
+        .collect();
+    let environment = variables::resolve(
+        &parent.style.custom_properties,
+        &custom,
+        &mut budget,
+        node_id,
+        diagnostics,
+        registrations,
+    );
+    let winners = substitute_winners(winners, &environment, &mut budget, node_id, diagnostics);
+    let initial = ComputedStyle {
+        font_size: initial_font_size,
+        ..ComputedStyle::default()
+    };
+    let mut style = ComputedStyle::inherit(&parent.style);
+    style.custom_properties = environment;
+    style.border_width = Edges::all(3.0);
+    let mut colors = ComputedColors {
+        fill: parent.colors.fill.clone(),
+        ..ComputedColors::default()
+    };
+    for (&property, (_, value)) in &winners {
+        if let Value::Color(color) = value {
+            style
+                .specified_colors
+                .insert(format!("{property:?}"), color.clone());
+        }
+        let length = match value {
+            Value::Length(length) | Value::LineHeight(LineHeight::Length(length)) => Some(length),
+            _ => None,
+        };
+        if let Some(length) = length {
+            style
+                .specified_lengths
+                .insert(format!("{property:?}"), SpecifiedLength(length.clone()));
+        }
+    }
+    // Resolve dependent values in CSS order, not hash-table iteration order.
+    if let Some((_, value)) = winners.get(&Property::FontSize) {
+        let value = computed_value(value, Property::FontSize, parent, &initial);
+        if let Some(value) = absolutize(value, Property::FontSize, &context, parent.style.font_size)
+        {
+            if let Value::Length(length) = &value
+                && length.resolve(parent.style.font_size, parent.style.font_size) > MAX_FONT_SIZE
+            {
+                diagnostics.push(Diagnostic {
+                    node_id: Some(node_id),
+                    message: format!(
+                        "font-size exceeds the {MAX_FONT_SIZE}px rasterization limit; clamped"
+                    ),
+                });
+            }
+            apply(&mut style, &parent.style, Property::FontSize, value);
+        } else {
+            invalid_math(diagnostics, node_id, Property::FontSize);
+        }
+    }
+    context.font_size = style.font_size;
+    set_font_metrics(&mut context);
+    if is_root {
+        context.root_font_size = style.font_size;
+    }
+    // lh/rlh in line-height refer to the parent/initial line-height, avoiding
+    // cycles; box properties then use this element's completed line-height.
+    if let Some((_, value)) = winners.get(&Property::LineHeight) {
+        let value = computed_value(value, Property::LineHeight, parent, &initial);
+        if let Some(value) = absolutize(value, Property::LineHeight, &context, style.font_size) {
+            apply(&mut style, &parent.style, Property::LineHeight, value);
+        } else {
+            invalid_math(diagnostics, node_id, Property::LineHeight);
+        }
+    }
+    context.line_height = style.used_line_height();
+    if is_root {
+        context.root_line_height = context.line_height;
+    }
+    if let Some((_, value)) = winners.get(&Property::Color) {
+        let value = computed_value(value, Property::Color, parent, &initial);
+        if let Some(value) = compute_color_value(
+            value,
+            parent.style.text_color,
+            node_id,
+            Property::Color,
+            diagnostics,
+        ) {
+            apply(&mut style, &parent.style, Property::Color, value);
+        }
+    }
+    style.border_color = Edges::all(style.color);
+    style.borders = Edges::all(style.text_color);
+    style.text_fill_color = colors
+        .fill
+        .resolve(style.text_color)
+        .expect("inherited fill");
+    let mut properties: Vec<_> = winners.keys().copied().collect();
+    properties.sort_unstable();
+    for property in properties {
+        let (_, value) = &winners[&property];
+        if matches!(
+            property,
+            Property::FontSize | Property::Color | Property::LineHeight
+        ) {
+            continue;
+        }
+        let value = computed_value(value, property, parent, &initial);
+        let Some(value) = absolutize(value, property, &context, style.font_size) else {
+            invalid_math(diagnostics, node_id, property);
+            continue;
+        };
+        let Some(value) =
+            compute_color_value(value, style.text_color, node_id, property, diagnostics)
+        else {
+            continue;
+        };
+        // Keep currentcolor symbolic for explicit inheritance. Paint still gets
+        // colors resolved against this element's color through ComputedStyle.
+        match (property, &value) {
+            (Property::BackgroundColor, Value::Color(color)) => colors.background = color.clone(),
+            (Property::BorderColor(side), Value::Color(color)) => {
+                *colors.border.get_mut(side) = color.clone()
+            }
+            (Property::TextFillColor, Value::Color(color)) => colors.fill = color.clone(),
+            _ => {}
+        }
+        apply(&mut style, &parent.style, property, value);
+    }
+    for side in [
+        crate::css::values::Side::Top,
+        crate::css::values::Side::Right,
+        crate::css::values::Side::Bottom,
+        crate::css::values::Side::Left,
+    ] {
+        if !style.border_style.get(side).visible() {
+            *style.border_width.get_mut(side) = 0.0;
+        }
+    }
+    ComputedNode { style, colors }
+}
+
+fn compute_color_value(
+    value: Value,
+    current: ResolvedColor,
+    node_id: NodeId,
+    property: Property,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Value> {
+    let Value::Color(color) = value else {
+        return Some(value);
+    };
+    if let Some(color) = color.computed(current)
+        && color.resolve(current).is_some()
+    {
+        return Some(Value::Color(color));
+    }
+    diagnostics.push(Diagnostic {
+        node_id: Some(node_id),
+        message: format!("invalid at computed-value time: {property:?} (non-finite or resource-limited color calculation)"),
+    });
+    None
+}
+
+fn invalid_math(diagnostics: &mut Vec<Diagnostic>, node_id: NodeId, property: Property) {
+    diagnostics.push(Diagnostic {
+        node_id: Some(node_id),
+        message: format!(
+            "invalid at computed-value time: {property:?} (non-finite CSS math result)"
+        ),
+    });
+}
+
+fn absolutize(
+    value: Value,
+    property: Property,
+    context: &LengthContext,
+    reference: f32,
+) -> Option<Value> {
+    match value {
+        Value::Length(length) => {
+            let mut computed = length.computed(context)?.0;
+            if matches!(
+                property,
+                Property::Width | Property::Height | Property::Padding(_)
+            ) && let Length::Px(value) = &mut computed
+            {
+                *value = value.max(0.0);
+            }
+            if property.computes_absolute_length() {
+                Some(Value::Length(Length::Px(
+                    computed.used(context, reference)?.0,
+                )))
+            } else {
+                Some(Value::Length(computed))
+            }
+        }
+        Value::LineHeight(LineHeight::Length(length)) => Some(Value::LineHeight(
+            LineHeight::Length(Length::Px(length.used(context, reference)?.0.max(0.0))),
+        )),
+        Value::NumberMath(expression) => {
+            let value = expression.computed(context)?.evaluate(context, 0.0)?;
+            Some(match property {
+                Property::LineHeight => Value::LineHeight(LineHeight::Number(value.max(0.0))),
+                Property::FontWeight => Value::Weight(FontWeight(value.clamp(1.0, 1000.0))),
+                _ => unreachable!("number math only applies to numeric properties"),
+            })
+        }
+        other => Some(other),
+    }
+}
+
+fn computed_value(
+    value: &Value,
+    property: Property,
+    parent: &ComputedNode,
+    initial: &ComputedStyle,
+) -> Value {
+    if let Value::FontSizeKeyword(keyword) = value {
+        return Value::Length(Length::Px(keyword.resolve(initial.font_size)));
+    }
+    if let Value::RelativeWeight(bolder) = value {
+        let weight = parent.style.font_weight.0;
+        let weight = if *bolder {
+            if weight < 350.0 {
+                400.0
+            } else if weight < 550.0 {
+                700.0
+            } else {
+                weight.max(900.0)
+            }
+        } else if weight < 550.0 {
+            weight.min(100.0)
+        } else if weight < 750.0 {
+            400.0
+        } else {
+            700.0
+        };
+        return Value::Weight(FontWeight(weight));
+    }
+    let Value::Wide(keyword) = value else {
+        return value.clone();
+    };
+    let inherit = matches!(keyword, WideKeyword::Inherit)
+        || matches!(keyword, WideKeyword::Unset) && property.inherited();
+    if !inherit {
+        return computed_value(
+            &declarations::initial_value(property),
+            property,
+            parent,
+            initial,
+        );
+    }
+    let style = &parent.style;
+    use Property as P;
+    match property {
+        P::Content => Value::Content(style.content.clone()),
+        P::Color => Value::Color(Color::Absolute(style.text_color)),
+        P::TextFillColor => Value::Color(parent.colors.fill.clone()),
+        P::BackgroundColor => Value::Color(parent.colors.background.clone()),
+        P::BackgroundImage => Value::BackgroundImage(style.background_image),
+        P::Display => Value::Display(style.display),
+        P::BoxSizing => Value::BoxSizing(style.box_sizing),
+        P::FontSize => Value::Length(Length::Px(style.font_size)),
+        P::FontFamily => Value::Family(style.font_family.clone()),
+        P::FontWeight => Value::Weight(style.font_weight),
+        P::FontStyle => Value::FontStyle(style.font_style),
+        P::LineHeight => Value::LineHeight(style.line_height.clone()),
+        P::Width => style
+            .width
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::Auto),
+        P::Height => style
+            .height
+            .clone()
+            .map(Value::Length)
+            .unwrap_or(Value::Auto),
+        P::ContainerType => Value::ContainerType(style.container_type),
+        P::ContainerName => Value::ContainerNames(style.container_names.clone()),
+        P::Margin(side) => Value::Length(style.margin.get(side).clone()),
+        P::Padding(side) => Value::Length(style.padding.get(side).clone()),
+        P::BorderWidth(side) => Value::Length(Length::Px(*style.border_width.get(side))),
+        P::BorderStyle(side) => Value::BorderStyle(*style.border_style.get(side)),
+        P::BorderColor(side) => Value::Color(parent.colors.border.get(side).clone()),
     }
 }
 
 fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, value: Value) {
     use Property as P;
     match (property, value) {
-        (P::Color, Value::Color(color)) => style.color = resolve_color(color, parent.color),
-        (P::BackgroundColor, Value::Color(color)) => {
-            style.background_color = resolve_color(color, style.color)
+        (P::Content, Value::Content(content)) => style.content = content,
+        (P::Color, Value::Color(color)) => {
+            style.text_color = color.resolve(parent.text_color).expect("validated color");
+            style.color = style.text_color.legacy();
         }
+        (P::TextFillColor, Value::Color(color)) => {
+            style.text_fill_color = color
+                .resolve(style.text_color)
+                .expect("validated fill color");
+        }
+        (P::BackgroundColor, Value::Color(color)) => {
+            style.background = color.resolve(style.text_color).expect("validated color");
+            style.background_color = style.background.legacy();
+        }
+        (P::BackgroundImage, Value::BackgroundImage(image)) => style.background_image = image,
         (P::Display, Value::Display(display)) => style.display = display,
+        (P::BoxSizing, Value::BoxSizing(sizing)) => style.box_sizing = sizing,
         (P::FontSize, Value::Length(length)) => {
             style.font_size = length
                 .resolve(parent.font_size, parent.font_size)
                 .clamp(0.0, MAX_FONT_SIZE);
         }
         (P::FontFamily, Value::Family(family)) => style.font_family = family,
-        (P::FontWeight, Value::Bold(bold)) => style.bold = bold,
-        (P::FontStyle, Value::Italic(italic)) => style.italic = italic,
-        (P::Width, Value::Length(length)) => style.width = Some(length.compute(style.font_size)),
+        (P::FontWeight, Value::Weight(weight)) => {
+            style.font_weight = weight;
+            style.bold = weight.0 >= 600.0;
+        }
+        (P::FontStyle, Value::FontStyle(font_style)) => {
+            style.font_style = font_style;
+            style.italic = font_style != FontStyle::Normal;
+        }
+        (P::LineHeight, Value::LineHeight(line_height)) => {
+            style.line_height = match line_height {
+                LineHeight::Length(length) => {
+                    LineHeight::Length(Length::Px(length.resolve(style.font_size, style.font_size)))
+                }
+                other => other,
+            };
+        }
+        (P::Width, Value::Length(length)) => style.width = Some(length),
         (P::Width, Value::Auto) => style.width = None,
-        (P::Margin(side), Value::Length(length)) => {
-            *style.margin.get_mut(side) = length.compute(style.font_size)
-        }
-        (P::Padding(side), Value::Length(length)) => {
-            *style.padding.get_mut(side) = length.compute(style.font_size)
-        }
+        (P::Height, Value::Length(length)) => style.height = Some(length),
+        (P::Height, Value::Auto) => style.height = None,
+        (P::ContainerType, Value::ContainerType(kind)) => style.container_type = kind,
+        (P::ContainerName, Value::ContainerNames(names)) => style.container_names = names,
+        (P::Margin(side), Value::Length(length)) => *style.margin.get_mut(side) = length,
+        (P::Padding(side), Value::Length(length)) => *style.padding.get_mut(side) = length,
         (P::BorderWidth(side), Value::Length(length)) => {
-            *style.border_width.get_mut(side) = length.resolve(style.font_size, 0.0)
+            *style.border_width.get_mut(side) = length.resolve(style.font_size, 0.0).max(0.0)
+        }
+        (P::BorderStyle(side), Value::BorderStyle(border_style)) => {
+            *style.border_style.get_mut(side) = border_style;
         }
         (P::BorderColor(side), Value::Color(color)) => {
-            *style.border_color.get_mut(side) = resolve_color(color, style.color)
+            let color = color.resolve(style.text_color).expect("validated color");
+            *style.borders.get_mut(side) = color;
+            *style.border_color.get_mut(side) = color.legacy();
         }
         _ => unreachable!("typed declarations must match their property"),
+    }
+}
+
+#[cfg(test)]
+#[path = "matching_tests.rs"]
+mod matching_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_font_metrics_load_is_reported_once_and_cached_across_elements() {
+        let cache = OnceLock::new();
+        let loads = std::cell::Cell::new(0);
+        let mut diagnostics = Vec::new();
+        for font_size in [16.0, 24.0, 32.0] {
+            let mut context = LengthContext {
+                font_size,
+                ..LengthContext::default()
+            };
+            set_font_metrics_from(
+                &mut context,
+                &cache,
+                || {
+                    loads.set(loads.get() + 1);
+                    Err(std::io::Error::other("invalid test font data").into())
+                },
+                |message| diagnostics.push(message),
+            );
+            assert_eq!(context.zero_advance, font_size * 0.5);
+            assert_eq!(context.x_height, font_size * 0.5);
+        }
+        assert_eq!(loads.get(), 1);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("assets/fonts/noto-sans/NotoSans.ttf"));
+        assert!(diagnostics[0].contains("invalid test font data"));
+        assert!(diagnostics[0].contains("ch/ex fall back to 0.5em"));
+        assert!(diagnostics[0].contains("check the bundled font data and rebuild"));
+    }
+
+    #[test]
+    fn all_six_cascade_levels_dominate_specificity_inline_and_source_order() {
+        let origins = [Origin::UserAgent, Origin::User, Origin::Author];
+        let mut levels = origins
+            .into_iter()
+            .flat_map(|origin| [origin.level(false), origin.level(true)])
+            .collect::<Vec<_>>();
+        levels.sort();
+        assert_eq!(
+            levels,
+            [
+                CascadeLevel::UserAgent,
+                CascadeLevel::User,
+                CascadeLevel::Author,
+                CascadeLevel::AuthorImportant,
+                CascadeLevel::UserImportant,
+                CascadeLevel::UserAgentImportant,
+            ]
+        );
+        let document = crate::html::parser::parse("<p id='p'>text</p>").unwrap();
+        let node_id = document
+            .preorder()
+            .find(|&id| {
+                document
+                    .node(id)
+                    .unwrap()
+                    .as_element()
+                    .is_some_and(|element| element.attribute("id") == Some("p"))
+            })
+            .unwrap();
+        for (low, high) in levels.iter().zip(&levels[1..]) {
+            let mut winners = Winners::default();
+            let declaration = StyledDeclaration {
+                property: DeclarationProperty::Longhand(Property::Color),
+                value: Value::Color(Color::Rgb(0xFF0000)),
+                important: false,
+                order: 0,
+            };
+            let selectors = selectors::parse("#p#p#p").unwrap();
+            let priority = Priority {
+                level: *low,
+                inline: true,
+                layer_rank: 0,
+                specificity: selectors[0].specificity(),
+                proximity: std::cmp::Reverse(usize::MAX),
+                sheet: usize::MAX,
+                rule: usize::MAX,
+                declaration: usize::MAX,
+                layer: 0,
+                normal_rank: 0,
+            };
+            insert(&mut winners, &declaration, priority);
+            let (origin, important) = match high {
+                CascadeLevel::User => (Origin::User, false),
+                CascadeLevel::Author => (Origin::Author, false),
+                CascadeLevel::AuthorImportant => (Origin::Author, true),
+                CascadeLevel::UserImportant => (Origin::User, true),
+                CascadeLevel::UserAgentImportant => (Origin::UserAgent, true),
+                CascadeLevel::UserAgent | CascadeLevel::Presentational => unreachable!(),
+            };
+            let source = if important {
+                "p {color:blue !important}"
+            } else {
+                "p {color:blue}"
+            };
+            let mut diagnostics = Vec::new();
+            let rules = compile::<2>(
+                &css::parse(source).unwrap(),
+                None,
+                &mut diagnostics,
+                MediaEnvironment::default(),
+                true,
+            );
+            assert!(diagnostics.is_empty());
+            let mut matching = MatchingContext::default();
+            matching.keys.extend(element_keys(
+                document.node(node_id).unwrap().as_element().unwrap(),
+            ));
+            apply_rules::<2>(
+                &document,
+                node_id,
+                &rules,
+                origin,
+                0,
+                &mut winners,
+                &mut matching,
+            );
+            insert(&mut winners, &declaration, priority);
+            let computed = compute(
+                &ComputedNode::default(),
+                &winners,
+                node_id,
+                &mut diagnostics,
+            );
+            assert_eq!(computed.style.color, Some(0x0000FF), "{low:?} < {high:?}");
+        }
     }
 }

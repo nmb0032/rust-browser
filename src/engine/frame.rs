@@ -3,10 +3,11 @@ use std::{collections::HashMap, sync::Arc};
 use url::Url;
 
 use crate::{
+    css::media::MediaEnvironment,
     dom::{Attribute, Document, ElementData, NodeId},
     layout::{self, LayoutTree},
     media::ImageMap,
-    style::{self, ComputedStyles, StylesheetCollection},
+    style::{self, ComputedStyles, InteractionState, StylesheetCollection},
 };
 
 #[derive(Clone, Debug)]
@@ -26,6 +27,11 @@ pub struct Frame {
     pub error: Option<String>,
     pub parse_errors: Vec<crate::html::tokenizer::ParseError>,
     pub dropped_parse_errors: usize,
+    media_environment: MediaEnvironment,
+    interaction_state: InteractionState,
+    // Keep collection/resource diagnostics separate from resolution diagnostics,
+    // so repeated restyles do not append the same errors to previous results.
+    collected_stylesheets: StylesheetCollection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,8 +42,22 @@ pub enum FragmentTarget {
 
 impl Frame {
     pub fn new(url: Url, document: Document) -> Self {
-        let resolution = style::resolve(&document);
-        Self {
+        Self::new_with_environment(url, document, MediaEnvironment::default())
+    }
+
+    /// Build a document snapshot at an explicit CSS-pixel viewport.
+    pub fn new_with_environment(
+        url: Url,
+        document: Document,
+        media_environment: MediaEnvironment,
+    ) -> Self {
+        let collected_stylesheets = style::collect_stylesheets(&document);
+        let resolution = style::resolve_with_stylesheets_and_environment(
+            &document,
+            collected_stylesheets.clone(),
+            media_environment,
+        );
+        let mut frame = Self {
             url,
             document,
             stylesheets: resolution.stylesheets,
@@ -47,7 +67,55 @@ impl Frame {
             error: None,
             parse_errors: Vec::new(),
             dropped_parse_errors: 0,
+            media_environment,
+            interaction_state: InteractionState::default(),
+            collected_stylesheets,
+        };
+        frame.refresh_target();
+        frame
+    }
+
+    pub fn media_environment(&self) -> MediaEnvironment {
+        self.media_environment
+    }
+
+    pub fn interaction_state(&self) -> &InteractionState {
+        &self.interaction_state
+    }
+
+    /// Snapshot-local input state; no DOM or history mutation. Reuses retained
+    /// sheets and the normal cascade, then callers rebuild layout and paint.
+    pub fn set_interaction_state(&mut self, state: InteractionState) -> bool {
+        if state == self.interaction_state {
+            return false;
         }
+        self.interaction_state = state;
+        self.set_stylesheets(self.collected_stylesheets.clone());
+        true
+    }
+
+    pub fn refresh_target(&mut self) -> bool {
+        let mut state = self.interaction_state.clone();
+        state.target =
+            self.url
+                .fragment()
+                .and_then(|fragment| match self.fragment_target(fragment) {
+                    Some(FragmentTarget::Node(id)) => Some(id),
+                    _ => None,
+                });
+        self.set_interaction_state(state)
+    }
+
+    /// Restyle the retained document and sheet ASTs without fetching resources.
+    /// Returns whether it changed. Callers must rebuild layout and paint after
+    /// a change. This is a full restyle, not incremental invalidation.
+    pub fn set_media_environment(&mut self, environment: MediaEnvironment) -> bool {
+        if self.media_environment == environment {
+            return false;
+        }
+        self.media_environment = environment;
+        self.set_stylesheets(self.collected_stylesheets.clone());
+        true
     }
 
     pub fn fragment_target(&self, fragment: &str) -> Option<FragmentTarget> {
@@ -86,18 +154,68 @@ impl Frame {
         current == next && self.error.is_none()
     }
 
+    /// Low-level box construction from current styles. For converged container
+    /// conditions/units use `layout_with_container_queries` instead.
     pub fn layout_tree(&self) -> LayoutTree {
-        for diagnostic in &self.stylesheets.diagnostics {
-            eprintln!(
-                "CSS/resource at {:?}: {}",
-                diagnostic.node_id, diagnostic.message
-            );
-        }
         layout::build_layout_tree_with_resources(&self.document, &self.styles, &self.images)
     }
 
+    /// Resolve and lay out a fresh snapshot to bounded container-query
+    /// convergence. Restarting the bootstrap on every render avoids reusing
+    /// geometry from an earlier viewport, interaction state, or navigation.
+    /// Retained sheets/images are reused; no external fetch occurs here.
+    pub fn layout_with_container_queries(&mut self, font: &fontdue::Font) -> LayoutTree {
+        self.layout_with_container_query_limit(font, 16)
+    }
+
+    pub(crate) fn layout_with_container_query_limit(
+        &mut self,
+        font: &fontdue::Font,
+        limit: usize,
+    ) -> LayoutTree {
+        let mut snapshot = style::ContainerSnapshot::default();
+        let mut last = None;
+        for _ in 0..limit.max(1) {
+            let resolution = style::resolve_with_container_environment(
+                &self.document,
+                self.collected_stylesheets.clone(),
+                &[],
+                self.media_environment,
+                &self.interaction_state,
+                &snapshot,
+            );
+            self.stylesheets = resolution.stylesheets;
+            self.styles = resolution.styles;
+            let mut tree = self.layout_tree();
+            tree.layout(self.media_environment.viewport_width, font);
+            let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
+            if next == snapshot {
+                return tree;
+            }
+            snapshot = next;
+            last = Some(tree);
+        }
+        let message = format!(
+            "container style/layout feedback did not converge within {} passes; retaining the last consistent style/layout pair (queries may be unresolved)",
+            limit.max(1)
+        );
+        eprintln!("CSS: {message}");
+        self.stylesheets.diagnostics.push(style::Diagnostic {
+            node_id: None,
+            message,
+        });
+        last.expect("at least one feedback layout pass")
+    }
+
     pub(super) fn set_stylesheets(&mut self, stylesheets: StylesheetCollection) {
-        let resolution = style::resolve_with_stylesheets(&self.document, stylesheets);
+        self.collected_stylesheets = stylesheets.clone();
+        let resolution = style::resolve_with_style_environment(
+            &self.document,
+            stylesheets,
+            &[],
+            self.media_environment,
+            &self.interaction_state,
+        );
         self.stylesheets = resolution.stylesheets;
         self.styles = resolution.styles;
     }
@@ -183,5 +301,62 @@ mod tests {
         let good = Frame::new(url.clone(), Document::new());
         assert!(good.is_same_document(&url.join("#part").unwrap()));
         assert!(!good.is_same_document(&url.join("?query").unwrap()));
+    }
+
+    #[test]
+    fn restyling_keeps_ast_urls_resources_and_diagnostic_counts_stable() {
+        let document = parser::parse(
+            "<style>p {color:red; color:bogus; broken}\
+            @media (min-width:600px) {p {color:blue}}\
+            @media not (future-height:1px) {p {color:purple}}</style>\
+            <p id='target' style='padding:bad'>target</p>",
+        )
+        .unwrap();
+        let mut frame = Frame::new_with_environment(
+            Url::parse("https://example.test/#target").unwrap(),
+            document,
+            MediaEnvironment::new(400.0, 600.0),
+        );
+        let target = frame
+            .document
+            .preorder()
+            .find(|&id| {
+                frame
+                    .document
+                    .node(id)
+                    .unwrap()
+                    .as_element()
+                    .is_some_and(|e| e.attribute("id") == Some("target"))
+            })
+            .unwrap();
+        let sheet = Arc::clone(&frame.stylesheets.stylesheets[0].stylesheet);
+        let diagnostics = frame
+            .stylesheets
+            .diagnostics
+            .iter()
+            .map(|d| (d.node_id, d.message.clone()))
+            .collect::<Vec<_>>();
+        for width in [800.0, 400.0, 800.0, 400.0] {
+            let environment = MediaEnvironment::new(width, 600.0);
+            assert!(frame.set_media_environment(environment));
+            assert!(!frame.set_media_environment(environment));
+            assert_eq!(
+                frame.styles.get(target).unwrap().color,
+                Some(if width >= 600.0 { 0x0000FF } else { 0xFF0000 })
+            );
+            assert_eq!(
+                frame
+                    .stylesheets
+                    .diagnostics
+                    .iter()
+                    .map(|d| (d.node_id, d.message.clone()))
+                    .collect::<Vec<_>>(),
+                diagnostics
+            );
+            assert!(Arc::ptr_eq(
+                &sheet,
+                &frame.stylesheets.stylesheets[0].stylesheet
+            ));
+        }
     }
 }

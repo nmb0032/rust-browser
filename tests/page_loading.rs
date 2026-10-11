@@ -68,6 +68,71 @@ fn font() -> fontdue::Font {
 }
 
 #[test]
+fn redirected_cached_variable_tokens_restyle_through_media_inline_importance_and_user_origins() {
+    use rust_browser::css::{
+        media::MediaEnvironment,
+        values::{BorderStyle, Length},
+    };
+
+    let server = Server::new(vec![
+        ("/", Reply::ok("text/html", br#"<!doctype html>
+            <style>main {--theme:red; --size:20px; --font:italic 20px/2 serif}
+            #target {color:var(--theme); width:var(--size); font:var(--font); border:var(--border,solid)}</style>
+            <link rel='stylesheet' href='theme.css' media='(min-width:600px)'>
+            <link rel='stylesheet' href='theme.css' media='(min-width:600px)'>
+            <main><p id='target' style='--border:5px dashed purple !important;
+            border-left-color:var(--theme) !important'>theme</p></main>"#.to_vec())),
+        ("/theme.css", Reply::redirect("/final-theme.css")),
+        ("/final-theme.css", Reply::ok("text/css", br#"main {
+            --theme:rgb(1, 2, 3); --size:40px; --font:oblique 650 24px/1.25 "Noto Sans", serif}
+            #target {--border:1px solid blue !important}"#.to_vec())),
+    ], 3);
+    let mut frame = load_page(&server.url, LoadOptions::default(), |_| Ok(()), || false).unwrap();
+    assert!(frame.stylesheets.diagnostics.is_empty());
+    assert_eq!(frame.stylesheets.stylesheets.len(), 3);
+    assert!(Arc::ptr_eq(
+        &frame.stylesheets.stylesheets[1].stylesheet,
+        &frame.stylesheets.stylesheets[2].stylesheet
+    ));
+    assert!(
+        frame.stylesheets.stylesheets[1]
+            .url
+            .as_ref()
+            .unwrap()
+            .path()
+            .ends_with("final-theme.css")
+    );
+    let node = id(&frame, "target");
+    for (width, color, size, font_size) in [
+        (400.0, 0xff0000, 20.0, 20.0),
+        (600.0, 0x010203, 40.0, 24.0),
+        (400.0, 0xff0000, 20.0, 20.0),
+    ] {
+        frame.set_media_environment(MediaEnvironment::new(width, 600.0));
+        let style = frame.styles.get(node).unwrap();
+        assert_eq!(style.color, Some(color));
+        assert_eq!(style.width, Some(Length::Px(size)));
+        assert_eq!(style.font_size, font_size);
+        assert_eq!(style.border_width.top, 5.0);
+        assert_eq!(style.border_style.top, BorderStyle::Dashed);
+        assert_eq!(style.border_color.top, Some(0x800080));
+        assert_eq!(style.border_color.left, Some(color));
+        assert!(frame.stylesheets.diagnostics.is_empty());
+    }
+    let resolution = style::resolve_with_user_stylesheets_and_environment(
+        &frame.document,
+        frame.stylesheets.clone(),
+        &["p {--theme:green !important; --border:3px double blue !important}"],
+        MediaEnvironment::new(600.0, 600.0),
+    );
+    let target = resolution.styles.get(node).unwrap();
+    assert_eq!(target.color, Some(0x008000));
+    assert_eq!(target.border_width.top, 3.0);
+    assert_eq!(target.border_style.top, BorderStyle::Double);
+    assert_eq!(server.finish(), ["/", "/theme.css", "/final-theme.css"]);
+}
+
+#[test]
 fn progressive_loading_publishes_changes_to_an_existing_text_node() {
     let source = format!("<p>{}</p>", "x".repeat(1024));
     let server = Server::new(vec![("/", Reply::ok("text/html", source.into_bytes()))], 1);
@@ -174,6 +239,171 @@ fn redirected_document_resolves_base_and_cascades_external_sheets_in_document_or
             "/assets/last.css"
         ]
     );
+}
+
+#[test]
+fn external_embedded_inline_and_user_origins_cascade_with_wide_keywords() {
+    let server = Server::new(
+        vec![
+            (
+                "/",
+                Reply::ok(
+                    "text/html",
+                    b"<style>#normal {color:red} #important {color:red !important}</style>\
+                    <link rel='stylesheet' href='cascade.css'>\
+                    <style>#order {color:purple !important}</style>\
+                    <main style='color:navy; font-size:20px; padding:2em; width:50%'>\
+                    <p id='normal'>normal</p>\
+                    <p id='important' style='color:purple'>important</p>\
+                    <p id='inline' style='color:purple !important'>inline</p>\
+                    <p id='order'>order</p><h1 id='keywords'>keywords</h1>\
+                    <span id='user'>user</span>\
+                    <p id='user-important' style='color:purple !important; padding:8px !important'>\
+                    user important</p></main>"
+                        .to_vec(),
+                ),
+            ),
+            ("/cascade.css", Reply::redirect("/final.css")),
+            (
+                "/final.css",
+                Reply::ok(
+                    "text/css",
+                    b"#normal {color:blue} #important {color:blue !important}\
+                    #inline {color:blue !important} #order {color:blue !important}\
+                    #keywords {font-size:initial; font-weight:initial; display:unset;\
+                    margin:unset; padding:inherit; width:inherit; color:inherit}\
+                    #user-important {color:blue !important; padding:9px !important}"
+                        .to_vec(),
+                ),
+            ),
+        ],
+        3,
+    );
+    let frame = load_page(&server.url, LoadOptions::default(), |_| Ok(()), || false).unwrap();
+    let result = style::resolve_with_user_stylesheets(
+        &frame.document,
+        frame.stylesheets.clone(),
+        &[
+            "#normal#normal {color:green} #user {color:green}\
+             p {color:red !important}",
+            "#user-important {color:inherit !important; padding:initial !important}",
+        ],
+    );
+    assert!(result.stylesheets.diagnostics.is_empty());
+    let get = |name| result.styles.get(id(&frame, name)).unwrap();
+    // Normal user specificity cannot beat author origin; important user rules
+    // beat both important external rules and important inline declarations.
+    for name in ["normal", "important", "inline", "order"] {
+        assert_eq!(get(name).color, Some(0xFF0000), "{name}");
+    }
+
+    assert_eq!(get("user").color, Some(0x008000));
+    assert_eq!(get("user-important").color, Some(0x000080));
+    assert_eq!(
+        get("user-important").padding,
+        rust_browser::css::values::Edges::default()
+    );
+    let keywords = get("keywords");
+    assert_eq!(keywords.font_size, 16.0);
+    assert!(!keywords.bold);
+    assert_eq!(keywords.display, style::Display::Inline);
+    assert_eq!(keywords.color, Some(0x000080));
+    assert_eq!(keywords.margin, rust_browser::css::values::Edges::default());
+    assert_eq!(
+        keywords.padding,
+        rust_browser::css::values::Edges::all(rust_browser::css::values::Length::Px(40.0))
+    );
+    assert_eq!(
+        keywords.width,
+        Some(rust_browser::css::values::Length::Percent(50.0))
+    );
+    let author = style::resolve_with_stylesheets(&frame.document, frame.stylesheets.clone());
+    let get = |name| author.styles.get(id(&frame, name)).unwrap();
+    assert_eq!(get("normal").color, Some(0x0000FF));
+    assert_eq!(get("important").color, Some(0x0000FF));
+    assert_eq!(get("inline").color, Some(0x800080));
+    assert_eq!(get("order").color, Some(0x800080));
+    assert_eq!(server.finish(), ["/", "/cascade.css", "/final.css"]);
+}
+
+#[test]
+fn media_attributes_and_nested_redirected_cached_sheets_restyle_without_refetch() {
+    use rust_browser::css::{
+        Rule,
+        media::{MediaEnvironment, MediaType},
+    };
+    let server = Server::new(vec![
+        ("/", Reply::ok("text/html", b"<!doctype html>\
+        <style>html {font-size:100px} p {color:red; width:10px}</style>\
+        <link id='narrow' rel='stylesheet' href='sheet.css' media='(max-width:37.5em)'>\
+        <style media='screen and (min-width:600px)'>p {color:green; width:200px}</style>\
+        <link id='wide' rel='stylesheet' href='sheet.css' media='only screen and (min-width:37.5rem)'>\
+        <link id='print' rel='stylesheet' href='sheet.css' media='print'>\
+        <style media='only (width:600px)'>p {color:yellow}</style>\
+        <p id='target'>responsive</p><img id='image' src='pixel'>".to_vec())),
+        ("/sheet.css", Reply::redirect("/final.css")),
+        ("/final.css", Reply::ok("text/css", b"p {color:blue; width:300px}\
+        @media (max-width:600px) {p {color:purple; width:100px}}\
+        @media not (future-height:600px) {p {color:yellow}}".to_vec())),
+        ("/pixel", Reply::ok("image/png", image_bytes())),
+    ], 4);
+    let mut frame = load_page(&server.url, LoadOptions::default(), |_| Ok(()), || false).unwrap();
+    assert_eq!(server.finish(), ["/", "/sheet.css", "/final.css", "/pixel"]);
+    assert_eq!(frame.stylesheets.stylesheets.len(), 6);
+    let narrow = id(&frame, "narrow");
+    let wide = id(&frame, "wide");
+    let print = id(&frame, "print");
+    let target = id(&frame, "target");
+    let image_id = id(&frame, "image");
+    let sheets = &frame.stylesheets.stylesheets;
+    let sheet = Arc::clone(&sheets[1].stylesheet);
+    assert!(Arc::ptr_eq(&sheet, &sheets[3].stylesheet));
+    assert!(Arc::ptr_eq(&sheet, &sheets[4].stylesheet));
+    assert!(
+        sheets[1]
+            .url
+            .as_ref()
+            .unwrap()
+            .path()
+            .ends_with("/final.css")
+    );
+    assert!(matches!(sheet.rules()[1], Rule::At(_)));
+    assert!(Arc::ptr_eq(
+        &frame.external_stylesheet_sources[&narrow].source,
+        &frame.external_stylesheet_sources[&wide].source
+    ));
+    assert!(Arc::ptr_eq(
+        &frame.external_stylesheet_sources[&narrow].source,
+        &frame.external_stylesheet_sources[&print].source
+    ));
+    let image = Arc::clone(&frame.images[&image_id]);
+    let diagnostics = frame.stylesheets.diagnostics.len();
+    assert_eq!(diagnostics, 4);
+    let font = font();
+    for (width, color, expected_width) in [
+        (400.0, 0x800080, 100.0),
+        (600.0, 0x800080, 100.0),
+        (800.0, 0x0000FF, 300.0),
+        (400.0, 0x800080, 100.0),
+    ] {
+        frame.set_media_environment(MediaEnvironment::new(width, 600.0));
+        assert_eq!(frame.styles.get(target).unwrap().color, Some(color));
+        let mut tree = frame.layout_tree();
+        tree.layout(width, &font);
+        assert_eq!(tree.node_rect(target).unwrap().width, expected_width);
+        assert_eq!(frame.stylesheets.diagnostics.len(), diagnostics);
+        assert!(Arc::ptr_eq(
+            &sheet,
+            &frame.stylesheets.stylesheets[1].stylesheet
+        ));
+        assert!(Arc::ptr_eq(&image, &frame.images[&image_id]));
+        assert_eq!(frame.external_stylesheet_sources.len(), 3);
+    }
+    frame.set_media_environment(MediaEnvironment {
+        media_type: MediaType::Print,
+        ..MediaEnvironment::new(800.0, 600.0)
+    });
+    assert_eq!(frame.styles.get(target).unwrap().color, Some(0x0000FF));
 }
 
 #[test]
@@ -335,7 +565,7 @@ fn image_dimensions_intrinsic_ratio_block_inline_and_link_hit_testing_are_wired(
         ("/", Reply::ok("text/html", b"<a href='/next'><img id='natural' src='pixel'></a>\
             <img id='width' src='pixel' width='20'><img id='height' src='pixel' height='12'>\
             <img id='both' src='pixel' width='10' height='15'>\
-            <img id='css' src='pixel' width='10' style='width:30px; display:block; padding:2px; border-width:1px'>\
+            <img id='css' src='pixel' width='10' style='width:30px; display:block; padding:2px; border-width:1px; border-style:solid'>\
             <img id='zero' src='pixel' width='0'>\
             <img id='auto' src='pixel' width='20' style='width:auto'>".to_vec())),
         ("/pixel", Reply::ok("image/png", image_bytes())),
@@ -379,17 +609,18 @@ fn failed_css_images_and_wrong_mime_are_diagnostic_without_failing_the_page() {
         ("/", Reply::ok("text/html", b"<link rel='stylesheet' href='missing.css'>\
             <link rel='stylesheet' href='wrong.css'><link rel='stylesheet' href='bad.css'>\
             <link rel='alternate stylesheet' href='skip'><link rel='stylesheet' disabled href='skip'>\
-            <link rel='stylesheet' media='print' href='skip'>\
+            <link rel='stylesheet' media='print' href='print.css'>\
             <img src='broken' alt='Image unavailable'><p>still visible</p>".to_vec())),
         ("/missing.css", Reply { status: 404, headers: Vec::new(), body: Vec::new() }),
         ("/wrong.css", Reply::ok("text/html", b"p { color: red }".to_vec())),
         ("/bad.css", Reply::ok("text/css", b"p {".to_vec())),
+        ("/print.css", Reply::ok("text/css", b"p {color:red}".to_vec())),
         ("/broken", Reply::ok("image/png", b"broken".to_vec())),
-    ], 5);
+    ], 6);
     let frame = load_page(&server.url, LoadOptions::default(), |_| Ok(()), || false).unwrap();
     assert!(frame.error.is_none());
     assert!(frame.images.is_empty());
-    assert_eq!(frame.stylesheets.stylesheets.len(), 1);
+    assert_eq!(frame.stylesheets.stylesheets.len(), 2);
     let rules = frame.stylesheets.stylesheets[0].stylesheet.rules();
     assert!(
         matches!(rules, [rust_browser::css::Rule::Qualified(rule)] if rule.prelude() == "p" && rule.items().is_empty())
@@ -400,7 +631,7 @@ fn failed_css_images_and_wrong_mime_are_diagnostic_without_failing_the_page() {
         .iter()
         .map(|diagnostic| diagnostic.message.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(messages.len(), 5);
+    assert_eq!(messages.len(), 4);
     assert!(messages.iter().any(|message| message.contains("404")));
     assert!(
         messages
@@ -412,7 +643,14 @@ fn failed_css_images_and_wrong_mime_are_diagnostic_without_failing_the_page() {
     assert!(tree.root().rect().height > 0.0);
     assert_eq!(
         server.finish(),
-        ["/", "/missing.css", "/wrong.css", "/bad.css", "/broken"]
+        [
+            "/",
+            "/missing.css",
+            "/wrong.css",
+            "/bad.css",
+            "/print.css",
+            "/broken"
+        ]
     );
 }
 
