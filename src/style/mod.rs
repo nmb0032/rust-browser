@@ -33,8 +33,10 @@ mod container;
 mod control;
 mod declarations;
 mod generated_properties;
+pub(crate) mod grid;
 mod matching;
 pub mod metadata;
+pub use grid::{GridAutoFlow, GridLine, GridRepeat, GridTrack, TrackBreadth, TrackSize};
 mod property;
 mod stylesheets;
 mod variables;
@@ -94,6 +96,8 @@ mod container_tests;
 mod control_tests;
 #[cfg(test)]
 mod flex_tests;
+#[cfg(test)]
+mod grid_tests;
 #[cfg(test)]
 mod margin_tests;
 #[cfg(test)]

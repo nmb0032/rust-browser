@@ -219,7 +219,7 @@ fn import_graph_retains_redirected_base_cache_conditions_layers_and_source_order
         ("/assets/inline.css", Reply::ok("text/css", b"p {color:red; width:10px}".to_vec())),
         ("/assets/entry.css", Reply::redirect("/final/entry.css")),
         ("/final/entry.css", Reply::ok("text/css", br#"@import "child.css" layer(theme) supports((display:block) and selector(p)) (min-width:600px);
-            @import "child.css" layer(base) supports(display:grid);
+            @import "child.css" layer(base) supports(grid-template-columns:subgrid);
             @import "print.css" layer(theme) print;
             p {padding:4px}"#.to_vec())),
         ("/final/child.css", Reply::ok("text/css", b"p {color:blue; width:30px} @media (min-width:900px) {p {width:40px}}".to_vec())),
@@ -443,7 +443,7 @@ fn false_supports_and_import_placement_do_not_trigger_network_requests() {
             Reply::ok(
                 "text/html",
                 br#"<!doctype html><style>
-            @layer default, theme; @import 'unsupported.css' supports(display:grid);
+            @layer default, theme; @import 'unsupported.css' supports(grid-template-columns:subgrid);
             @layer theme; @import 'misplaced.css'; p {color:blue}
             </style><p id='target'>text</p>"#
                     .to_vec(),

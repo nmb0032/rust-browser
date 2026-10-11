@@ -33,7 +33,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         };
         boxes.push((b, flow));
         let mut children: Vec<_> = b.children.iter().collect();
-        if b.style.display.is_flex() {
+        if b.style.display.is_item_container() {
             children.sort_by_key(|child| child.style.order);
         }
         for child in children {
@@ -65,7 +65,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
             }
             if ancestor.style.position != Position::Static
                 || ancestor.atomic_inline()
-                || ancestor.is_flex_item
+                || ancestor.is_layout_item()
             {
                 return id;
             }
@@ -78,7 +78,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         if id != root && !groups.contains_key(&id) {
             let owner = definitions[&id];
             let real = matches!(owner.style.z_index, ZIndex::Integer(_))
-                && (owner.style.position != Position::Static || owner.is_flex_item);
+                && (owner.style.position != Position::Static || owner.is_layout_item());
             let mut parent = owner.parent_box;
             let mut context = root;
             while let Some(id) = parent {
@@ -86,12 +86,12 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 if Some(id) == root_element || id == root {
                     break;
                 }
-                if (ancestor.style.position != Position::Static || ancestor.is_flex_item)
+                if (ancestor.style.position != Position::Static || ancestor.is_layout_item())
                     && matches!(ancestor.style.z_index, ZIndex::Integer(_))
                     || !real
                         && owner.style.position == Position::Static
                         && (ancestor.style.position != Position::Static
-                            || ancestor.is_flex_item
+                            || ancestor.is_layout_item()
                             || ancestor.atomic_inline())
                 {
                     context = id;
@@ -193,7 +193,9 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         }
         let inline_group = |g: &Group<'_>| {
             let owner = g.boxes[0].0;
-            owner.atomic_inline() && owner.style.position == Position::Static && !owner.is_flex_item
+            owner.atomic_inline()
+                && owner.style.position == Position::Static
+                && !owner.is_layout_item()
         };
         for (_, g) in children.iter().filter(|(_, g)| inline_group(g)) {
             let (b, flow, order) = g.boxes[0];
@@ -208,7 +210,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         }
         foreground.sort_by_key(|(flow, line, order, phase, _, _)| (*flow, *line, *order, *phase));
         for (_, _, _, _, b, phase) in foreground {
-            if b.atomic_inline() && b.style.position == Position::Static && !b.is_flex_item {
+            if b.atomic_inline() && b.style.position == Position::Static && !b.is_layout_item() {
                 paint(b.box_id, root_element, groups, list);
             } else {
                 list.push((b, phase));

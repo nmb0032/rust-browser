@@ -255,7 +255,7 @@ fn inactive_media_supports_and_layers_do_not_fetch_and_activation_has_a_separate
           @layer high {@font-face {font-family:Choice;src:url(bold.ttf)}}
           @layer low {@font-face {font-family:Choice;src:url(italic.ttf)}}
           @media (max-width:500px) {@font-face {font-family:Narrow;src:url(narrow.woff)}}
-          @supports (display:grid) {@font-face {font-family:Unsupported;src:url(must-not-fetch.ttf)}}
+          @supports (grid-template-columns:subgrid) {@font-face {font-family:Unsupported;src:url(must-not-fetch.ttf)}}
           @media print {@font-face {font-family:Print;src:url(must-not-fetch.ttf)}}
           p {font-family:Choice} @media (max-width:500px) {p {font-family:Narrow}}
         </style><p id=target>AVffi</p>"#.to_vec())),

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Grid — named regions and responsive cards</title>
+  <style>
+    html, body { margin: 0; background: #eef3f2; color: #183b42; }
+    body { font: 16px/24px sans-serif; }
+    main { position: relative; display: grid; width: 720px;
+      grid-template-columns: [sidebar] 140px [content] minmax(0px, 1fr) [end];
+      grid-template-rows: 80px auto 60px auto;
+      grid-template-areas: "heading heading" "navigation cards" "footer footer" "scroll scroll";
+      gap: 16px; }
+    header { grid-area: heading; display: flex; align-items: center;
+      padding: 16px; background: #183b42; color: white; }
+    h1 { margin: 0; font: bold 24px/32px sans-serif; }
+    nav { grid-area: navigation; padding: 12px; background: #d3e5df; }
+    nav a { display: block; color: #183b42; margin-bottom: 12px; }
+    .cards { grid-area: cards; display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      grid-auto-rows: minmax(100px, auto); gap: 12px; }
+    article { display: flex; flex-direction: column; min-width: 0;
+      padding: 12px; background: white; border: 2px solid #7b9d95; }
+    article h2 { font: bold 18px/24px sans-serif; margin: 0 0 8px; }
+    article p { margin: 0; }
+    footer { grid-area: footer; align-self: center; }
+    .status { display: inline-grid; grid-template-columns: 12px auto;
+      align-items: baseline; gap: 8px; padding: 4px 8px; background: #d3e5df; }
+    .dot { height: 12px; background: #007d65; }
+    .badge { position: absolute; grid-area: heading; justify-self: end;
+      align-self: center; width: 24px; height: 24px; margin-right: 16px;
+      background: #e7be5c; z-index: 2; }
+    .scroll { grid-area: scroll; height: 60px; overflow: auto;
+      background: #d3e5df; }
+    .rail { display: grid; width: 1000px; grid-template-columns: repeat(4, 240px);
+      gap: 12px; grid-auto-rows: 40px; }
+    .rail a { padding: 8px; background: white; color: #183b42; }
+    @media (width < 760px) {
+      main { width: 100%; grid-template-columns: 100px minmax(0px, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <main id="host">
+    <header id="heading"><h1>Grid regions</h1></header>
+    <nav id="navigation"><a href="#cards">Cards</a><a href="#scroll">Scroll rail</a></nav>
+    <section class="cards" id="cards">
+      <article id="card-a"><h2>Named areas</h2><p>Explicit regions preserve their semantic boxes.</p></article>
+      <article id="card-b"><h2>Flexible tracks</h2><p>Fractions share the remaining track space.</p></article>
+      <article id="card-c"><h2>Auto placement</h2><p>Responsive tracks keep independent contents.</p></article>
+    </section>
+    <footer id="footer">Atomic baseline: <span class="status" id="status"><i class="dot"></i><strong>Ready</strong></span></footer>
+    <span class="badge" id="badge"></span>
+    <section class="scroll" id="scroll"><div class="rail"><a href="#one">One</a><a href="#two">Two</a><a href="#three">Three</a><a href="#four">Four</a></div></section>
+  </main>
+</body>
+</html>

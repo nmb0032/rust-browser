@@ -95,6 +95,9 @@ pub struct LayoutBox {
     pub(super) definite_width: bool,
     pub(super) inline_line: Option<usize>,
     pub(super) is_flex_item: bool,
+    pub(super) is_grid_item: bool,
+    pub(super) grid_area: Option<(usize, Rect)>,
+    /// Shared flex/grid static-alignment rectangle for out-of-flow children.
     pub(super) flex_static: Option<super::flex::StaticPosition>,
     pub(super) node_id: Option<NodeId>,
     pub(super) tag_name: String,
@@ -147,6 +150,12 @@ impl LayoutBox {
     pub fn is_flex_item(&self) -> bool {
         self.is_flex_item
     }
+    pub fn is_grid_item(&self) -> bool {
+        self.is_grid_item
+    }
+    pub(super) fn is_layout_item(&self) -> bool {
+        self.is_flex_item || self.is_grid_item
+    }
     pub fn pseudo_element(&self) -> Option<PseudoElement> {
         self.pseudo
     }
@@ -182,7 +191,10 @@ impl LayoutBox {
         &self.line_boxes
     }
     pub(super) fn atomic_inline(&self) -> bool {
-        self.style.display == Display::InlineFlex && !self.style.position.out_of_flow()
+        matches!(
+            self.style.display,
+            Display::InlineFlex | Display::InlineGrid
+        ) && !self.style.position.out_of_flow()
     }
     pub(super) fn local_root(&self) -> bool {
         self.kind == BoxKind::Block || self.atomic_inline()
@@ -191,9 +203,22 @@ impl LayoutBox {
     /// Before finalization, descendants' baselines relative to this border
     /// origin are used to position an outside marker in the parent's flow.
     pub(super) fn first_local_baseline(&self) -> Option<f32> {
-        if self.style.display.is_flex() {
-            let mut items: Vec<_> = self.children.iter().filter(|c| c.is_flex_item).collect();
-            items.sort_by_key(|c| c.style.order);
+        if self.style.display.is_item_container() {
+            let mut items: Vec<_> = self
+                .children
+                .iter()
+                .filter(|c| c.is_layout_item())
+                .collect();
+            if self.style.display.is_grid() {
+                items.sort_by(|a, b| {
+                    a.rect
+                        .y
+                        .total_cmp(&b.rect.y)
+                        .then_with(|| a.style.order.cmp(&b.style.order))
+                });
+            } else {
+                items.sort_by_key(|c| c.style.order);
+            }
             let first = items.first()?;
             return Some(first.first_local_baseline().unwrap_or(first.rect.height) + first.rect.y);
         }
@@ -244,6 +269,7 @@ impl LayoutBox {
         self.definite_width = false;
         self.inline_line = None;
         self.flex_static = None;
+        self.grid_area = None;
         self.rect = Rect::default();
         self.content_rect = Rect::default();
         self.margin = Edges::default();
@@ -376,7 +402,9 @@ impl LayoutTree {
             super::PaintPhase::Text(index) => text_hit(&layout_box.text_fragments[index]),
             super::PaintPhase::Decoration if layout_box.kind == BoxKind::Text => false,
             super::PaintPhase::Decoration
-                if layout_box.kind == BoxKind::Inline && layout_box.image.is_none() =>
+                if layout_box.kind == BoxKind::Inline
+                    && layout_box.image.is_none()
+                    && !layout_box.atomic_inline() =>
             {
                 layout_box
                     .inline_fragments
@@ -542,6 +570,9 @@ pub(super) fn absolutize_y(
     if let Some(anchor) = &mut layout_box.flex_static {
         anchor.area.y += offset as f32;
     }
+    if let Some((_, area)) = &mut layout_box.grid_area {
+        area.y += offset as f32;
+    }
     for fragment in &mut layout_box.text_fragments {
         fragment.y = finite_used(
             fragment_offset + fragment.y as f64,
@@ -672,6 +703,7 @@ struct Construction {
     parent: Option<usize>,
     positioned: Option<usize>,
     flex_parent: bool,
+    grid_parent: bool,
 }
 
 impl Construction {
@@ -810,7 +842,10 @@ fn build_box(
             .expect("every node in this document snapshot must have a computed style")
             .clone(),
     );
-    if identity.flex_parent && node.as_element().is_some() && !style.position.out_of_flow() {
+    if (identity.flex_parent || identity.grid_parent)
+        && node.as_element().is_some()
+        && !style.position.out_of_flow()
+    {
         style.display = style.display.blockified();
     }
     if style.display == Display::None {
@@ -822,8 +857,10 @@ fn build_box(
         }
         NodeKind::Element(element) => {
             let kind = match style.display {
-                Display::Block | Display::ListItem | Display::Flex => BoxKind::Block,
-                Display::Inline | Display::InlineFlex => BoxKind::Inline,
+                Display::Block | Display::ListItem | Display::Flex | Display::Grid => {
+                    BoxKind::Block
+                }
+                Display::Inline | Display::InlineFlex | Display::InlineGrid => BoxKind::Inline,
                 Display::None => return None,
             };
             (format!("<{}>", element.tag_name()), kind, None)
@@ -836,6 +873,7 @@ fn build_box(
     let box_id = identity.allocate();
     let parent_box = identity.parent.replace(box_id);
     let flex_parent = std::mem::replace(&mut identity.flex_parent, style.display.is_flex());
+    let grid_parent = std::mem::replace(&mut identity.grid_parent, style.display.is_grid());
     let position_parent = identity.positioned;
     if style.position != style::Position::Static {
         identity.positioned = Some(box_id);
@@ -927,6 +965,8 @@ fn build_box(
         definite_width: false,
         inline_line: None,
         is_flex_item: flex_parent && !style.position.out_of_flow() && kind != BoxKind::Text,
+        is_grid_item: grid_parent && !style.position.out_of_flow() && kind != BoxKind::Text,
+        grid_area: None,
         flex_static: None,
         node_id: Some(node_id),
         tag_name,
@@ -952,14 +992,15 @@ fn build_box(
         inline_start: true,
         inline_end: true,
     };
-    if layout_box.style.display.is_flex() && layout_box.image.is_none() {
-        normalize_flex_children(&mut layout_box, identity);
+    if layout_box.style.display.is_item_container() && layout_box.image.is_none() {
+        normalize_item_children(&mut layout_box, identity);
     } else if kind == BoxKind::Block && layout_box.image.is_none() {
         normalize_block_children(&mut layout_box, identity);
     }
     identity.parent = parent_box;
     identity.positioned = position_parent;
     identity.flex_parent = flex_parent;
+    identity.grid_parent = grid_parent;
     Some(layout_box)
 }
 
@@ -987,7 +1028,7 @@ fn normalize_block_children(parent: &mut LayoutBox, identity: &mut Construction)
     flush_inline_run(parent, &mut run, identity);
 }
 
-fn normalize_flex_children(parent: &mut LayoutBox, identity: &mut Construction) {
+fn normalize_item_children(parent: &mut LayoutBox, identity: &mut Construction) {
     fn flush(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: &mut Construction) {
         if run.iter().all(|b| {
             b.text.as_ref().is_none_or(|s| {
@@ -1000,8 +1041,15 @@ fn normalize_flex_children(parent: &mut LayoutBox, identity: &mut Construction) 
         }
         flush_inline_run(parent, run, identity);
         if let Some(item) = parent.children.last_mut() {
-            item.tag_name = "#anonymous-flex-item".into();
-            item.is_flex_item = true;
+            let grid = parent.style.display.is_grid();
+            item.tag_name = if grid {
+                "#anonymous-grid-item"
+            } else {
+                "#anonymous-flex-item"
+            }
+            .into();
+            item.is_flex_item = !grid;
+            item.is_grid_item = grid;
         }
     }
     let mut run = Vec::new();
@@ -1048,6 +1096,8 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         definite_width: false,
         inline_line: None,
         is_flex_item: false,
+        is_grid_item: false,
+        grid_area: None,
         flex_static: None,
         node_id: None,
         tag_name: "#anonymous-block".into(),
@@ -1131,7 +1181,7 @@ fn generated_box(
     identity: &mut Construction,
 ) -> Option<LayoutBox> {
     let mut style = Box::new(styles.pseudo(node_id, pseudo)?.clone());
-    if identity.flex_parent && !style.position.out_of_flow() {
+    if (identity.flex_parent || identity.grid_parent) && !style.position.out_of_flow() {
         style.display = style.display.blockified();
     }
     if style.display == Display::None {
@@ -1153,6 +1203,8 @@ fn generated_box(
         definite_width: false,
         inline_line: None,
         is_flex_item: false,
+        is_grid_item: false,
+        grid_area: None,
         flex_static: None,
         node_id: Some(node_id),
         tag_name: "#generated-text".into(),
@@ -1185,12 +1237,14 @@ fn generated_box(
         definite_width: false,
         inline_line: None,
         is_flex_item: identity.flex_parent && !style.position.out_of_flow(),
+        is_grid_item: identity.grid_parent && !style.position.out_of_flow(),
+        grid_area: None,
         flex_static: None,
         node_id: Some(node_id),
         tag_name: format!("::{}", pseudo.name()),
         kind: if matches!(
             style.display,
-            Display::Block | Display::ListItem | Display::Flex
+            Display::Block | Display::ListItem | Display::Flex | Display::Grid
         ) {
             BoxKind::Block
         } else {
@@ -1214,8 +1268,8 @@ fn generated_box(
         inline_start: true,
         inline_end: true,
     };
-    if generated.style.display.is_flex() {
-        normalize_flex_children(&mut generated, identity);
+    if generated.style.display.is_item_container() {
+        normalize_item_children(&mut generated, identity);
     }
     Some(generated)
 }

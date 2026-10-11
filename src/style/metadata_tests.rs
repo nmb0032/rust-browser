@@ -80,6 +80,18 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::FlexBasis => format!("{:?}", style.flex_basis),
         P::Order => format!("{:?}", style.order),
         P::JustifyContent => format!("{:?}", style.justify_content),
+        P::JustifyItems => format!("{:?}", style.justify_items),
+        P::JustifySelf => format!("{:?}", style.justify_self),
+        P::GridTemplateColumns => format!("{:?}", style.grid_template_columns),
+        P::GridTemplateRows => format!("{:?}", style.grid_template_rows),
+        P::GridTemplateAreas => format!("{:?}", style.grid_template_areas),
+        P::GridAutoColumns => format!("{:?}", style.grid_auto_columns),
+        P::GridAutoRows => format!("{:?}", style.grid_auto_rows),
+        P::GridAutoFlow => format!("{:?}", style.grid_auto_flow),
+        P::GridColumnStart => format!("{:?}", style.grid_column_start),
+        P::GridColumnEnd => format!("{:?}", style.grid_column_end),
+        P::GridRowStart => format!("{:?}", style.grid_row_start),
+        P::GridRowEnd => format!("{:?}", style.grid_row_end),
         P::AlignItems => format!("{:?}", style.align_items),
         P::AlignSelf => format!("{:?}", style.align_self),
         P::AlignContent => format!("{:?}", style.align_content),
@@ -206,17 +218,17 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 91, 667, 63]);
-    assert_eq!(longhands.len(), 68);
+    assert_eq!(counts, [0, 109, 649, 63]);
+    assert_eq!(longhands.len(), 80);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 67);
+    assert_eq!(all.len(), 79);
     longhands.remove(&Property::Direction);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **90 partial**, **667 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **108 partial**, **649 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**68 longhands**, **22 shorthands**"));
+    assert!(report.contains("**80 longhands**, **28 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -573,8 +585,8 @@ fn missing_unknown_and_unsupported_metadata_never_becomes_a_catch_all_parser() {
         "opacity:0.5",
         "font-stretch:normal",
         "-webkit-text-stroke-color:red",
-        "display:inline-grid",
-        "display:grid",
+        "display:subgrid",
+        "grid-template-columns:subgrid",
         "width:min-content",
         "height:fit-content",
         "margin:auto nonsense",

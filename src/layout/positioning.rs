@@ -50,6 +50,9 @@ fn translate_own(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diag
     if let Some(anchor) = &mut b.flex_static {
         rect(&mut anchor.area, dx, dy, id, diagnostics);
     }
+    if let Some((_, area)) = &mut b.grid_area {
+        rect(area, dx, dy, id, diagnostics);
+    }
     for f in &mut b.inline_fragments {
         rect(&mut f.rect, dx, dy, id, diagnostics);
         rect(&mut f.content_rect, dx, dy, id, diagnostics);
@@ -294,7 +297,7 @@ pub(super) fn position_tree(
     ids.sort_unstable();
     for id in ids {
         let b = find_mut(root, id).expect("positioned construction identity");
-        let cb = if b.style.position == Position::Fixed {
+        let mut cb = if b.style.position == Position::Fixed {
             ContainingBlock {
                 rect: viewport,
                 space: CoordinateSpace::Viewport,
@@ -305,6 +308,12 @@ pub(super) fn position_tree(
                 .and_then(|id| blocks.get(&id).copied())
                 .unwrap_or(initial)
         };
+        if b.style.position != Position::Fixed
+            && let Some((owner, area)) = b.grid_area
+            && b.position_parent == Some(owner)
+        {
+            cb.rect = area;
+        }
         position_box(b, cb, font, diagnostics);
         collect_containing(b, &mut blocks, true);
     }
@@ -558,6 +567,9 @@ pub(super) fn intrinsic_content(
     }
     if b.style.display.is_flex() {
         return super::flex::intrinsic_widths(b, reference, font, diagnostics);
+    }
+    if b.style.display.is_grid() {
+        return super::grid::intrinsic_widths(b, reference, font, diagnostics);
     }
     if let Some(image) = &b.image {
         let metrics = super::inline::font_metrics(font, &b.style, b.node_id, diagnostics);

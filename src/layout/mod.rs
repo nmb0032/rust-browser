@@ -8,12 +8,15 @@
 //! carried as spatial ancestry independently of flattened stacking groups.
 //! Flex containers share intrinsic/block sizing helpers, iterative flexible
 //! lengths, wrapped/reversed axes, baseline alignment and atomic inline-flex.
+//! Grid adds bounded named/implicit tracks, phased dense/sparse placement,
+//! spanning intrinsic growth, fractional allocation and atomic inline-grid.
 //! Paragraph bidi and advanced language-dependent text tailoring are deferred.
 //! Consumes computed styles, never CSS source.
 
 mod block;
 mod flex;
 mod geometry;
+mod grid;
 mod inline;
 mod overflow;
 mod positioning;
@@ -37,6 +40,8 @@ pub use tree::{
 mod collapse_tests;
 #[cfg(test)]
 mod flex_tests;
+#[cfg(test)]
+mod grid_tests;
 #[cfg(test)]
 mod inline_tests;
 #[cfg(test)]

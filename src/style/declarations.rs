@@ -58,8 +58,20 @@ pub(super) enum Property {
     FlexGrow,
     FlexShrink,
     FlexBasis,
+    GridTemplateColumns,
+    GridTemplateRows,
+    GridTemplateAreas,
+    GridAutoColumns,
+    GridAutoRows,
+    GridAutoFlow,
+    GridColumnStart,
+    GridColumnEnd,
+    GridRowStart,
+    GridRowEnd,
     Order,
     JustifyContent,
+    JustifyItems,
+    JustifySelf,
     AlignItems,
     AlignSelf,
     AlignContent,
@@ -114,6 +126,10 @@ pub(super) enum Value {
     Integer(i32),
     FlexDirection(FlexDirection),
     FlexWrap(FlexWrap),
+    GridTracks(Vec<super::GridTrack>),
+    GridAreas(Vec<Vec<Option<String>>>),
+    GridLine(super::GridLine),
+    GridAutoFlow(super::GridAutoFlow),
     Alignment(Alignment),
     Family(FontFamily),
     Weight(FontWeight),
@@ -228,6 +244,24 @@ pub(super) fn parse_tokens_with_context(
         return Some(vec![Value::Wide(wide); properties.len()]);
     }
     match parser {
+        Parser::GridPlacement => super::grid::placement(&tokens, properties.len())
+            .map(|values| values.into_iter().map(Value::GridLine).collect()),
+        Parser::Place => {
+            // Each alignment can have a two-token safety/baseline modifier.
+            for split in (1..=tokens.len()).rev() {
+                if let Some(first) = value(properties[0], &tokens[..split]) {
+                    let second = if split == tokens.len() {
+                        value(properties[1], &tokens[..split])
+                    } else {
+                        value(properties[1], &tokens[split..])
+                    };
+                    if let Some(second) = second {
+                        return Some(vec![first, second]);
+                    }
+                }
+            }
+            None
+        }
         Parser::Flex => flex(&tokens),
         Parser::FlexFlow => {
             if tokens.is_empty() || tokens.len() > 2 {
@@ -435,9 +469,29 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     }
     if matches!(
         property,
-        P::JustifyContent | P::AlignItems | P::AlignSelf | P::AlignContent
+        P::JustifyContent
+            | P::JustifyItems
+            | P::JustifySelf
+            | P::AlignItems
+            | P::AlignSelf
+            | P::AlignContent
     ) {
         return alignment(property, tokens).map(Value::Alignment);
+    }
+    match property {
+        P::GridTemplateColumns | P::GridTemplateRows | P::GridAutoColumns | P::GridAutoRows => {
+            return super::grid::tracks(
+                tokens,
+                matches!(property, P::GridAutoColumns | P::GridAutoRows),
+            )
+            .map(Value::GridTracks);
+        }
+        P::GridTemplateAreas => return super::grid::areas(tokens).map(Value::GridAreas),
+        P::GridAutoFlow => return super::grid::flow(tokens).map(Value::GridAutoFlow),
+        P::GridColumnStart | P::GridColumnEnd | P::GridRowStart | P::GridRowEnd => {
+            return super::grid::line(tokens).map(Value::GridLine);
+        }
+        _ => {}
     }
     if property == P::Content {
         return content(tokens).map(Value::Content);
@@ -475,7 +529,22 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::FlexDirection
         | P::FlexWrap
         | P::ContainerType => unreachable!("generated simple dispatch or content"),
-        P::JustifyContent | P::AlignItems | P::AlignSelf | P::AlignContent => unreachable!(),
+        P::JustifyContent
+        | P::JustifyItems
+        | P::JustifySelf
+        | P::AlignItems
+        | P::AlignSelf
+        | P::AlignContent
+        | P::GridTemplateColumns
+        | P::GridTemplateRows
+        | P::GridAutoColumns
+        | P::GridAutoRows
+        | P::GridTemplateAreas
+        | P::GridAutoFlow
+        | P::GridColumnStart
+        | P::GridColumnEnd
+        | P::GridRowStart
+        | P::GridRowEnd => unreachable!(),
         P::ContainerName => unreachable!(),
         P::BaselineShift => {
             (token.number()? == 0.0).then_some(Value::BaselineShift(BaselineShift::Zero))
@@ -605,17 +674,36 @@ fn alignment(property: Property, tokens: &[Component]) -> Option<Alignment> {
         _ => return None,
     };
     let keyword = match token.ident()?.to_ascii_lowercase().as_str() {
-        "auto" if property == Property::AlignSelf => A::Auto,
+        "legacy" if property == Property::JustifyItems && tokens.len() == 1 => A::Normal,
+        "auto" if matches!(property, Property::AlignSelf | Property::JustifySelf) => A::Auto,
         "normal" => A::Normal,
-        "stretch" if property != Property::JustifyContent => A::Stretch,
+        "stretch" => A::Stretch,
         "flex-start" => A::FlexStart,
         "flex-end" => A::FlexEnd,
         "start" => A::Start,
         "end" => A::End,
-        "self-start" if matches!(property, Property::AlignItems | Property::AlignSelf) => {
+        "self-start"
+            if matches!(
+                property,
+                Property::AlignItems
+                    | Property::AlignSelf
+                    | Property::JustifyItems
+                    | Property::JustifySelf
+            ) =>
+        {
             A::SelfStart
         }
-        "self-end" if matches!(property, Property::AlignItems | Property::AlignSelf) => A::SelfEnd,
+        "self-end"
+            if matches!(
+                property,
+                Property::AlignItems
+                    | Property::AlignSelf
+                    | Property::JustifyItems
+                    | Property::JustifySelf
+            ) =>
+        {
+            A::SelfEnd
+        }
         "center" => A::Center,
         "baseline" if property != Property::JustifyContent => A::Baseline,
         "space-between"

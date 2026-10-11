@@ -143,11 +143,19 @@ pub enum Display {
     Inline,
     Flex,
     InlineFlex,
+    Grid,
+    InlineGrid,
     ListItem,
     None,
 }
 
 impl Display {
+    pub fn is_grid(self) -> bool {
+        matches!(self, Self::Grid | Self::InlineGrid)
+    }
+    pub(crate) fn is_item_container(self) -> bool {
+        self.is_flex() || self.is_grid()
+    }
     pub fn is_flex(self) -> bool {
         matches!(self, Self::Flex | Self::InlineFlex)
     }
@@ -156,6 +164,7 @@ impl Display {
         match self {
             Self::Inline => Self::Block,
             Self::InlineFlex => Self::Flex,
+            Self::InlineGrid => Self::Grid,
             other => other,
         }
     }
@@ -356,8 +365,8 @@ pub struct ComputedStyle {
     pub italic: bool,
     pub width: Option<Length>,
     pub height: Option<Length>,
-    /// Physical min/max prerequisites for flex sizing; auto minimum is
-    /// content-based only for a non-scrollable flex main axis.
+    /// Physical min/max prerequisites. Flex/grid determine content-based auto
+    /// minima from item overflow, spanned tracks and preferred sizes.
     pub min_width: Option<Length>,
     pub min_height: Option<Length>,
     pub max_width: Option<Length>,
@@ -367,12 +376,24 @@ pub struct ComputedStyle {
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: FlexBasis,
+    pub grid_template_columns: Vec<super::GridTrack>,
+    pub grid_template_rows: Vec<super::GridTrack>,
+    pub grid_template_areas: Vec<Vec<Option<String>>>,
+    pub grid_auto_columns: Vec<super::GridTrack>,
+    pub grid_auto_rows: Vec<super::GridTrack>,
+    pub grid_auto_flow: super::GridAutoFlow,
+    pub grid_column_start: super::GridLine,
+    pub grid_column_end: super::GridLine,
+    pub grid_row_start: super::GridLine,
+    pub grid_row_end: super::GridLine,
     pub order: i32,
     pub justify_content: Alignment,
+    pub justify_items: Alignment,
+    pub justify_self: Alignment,
     pub align_items: Alignment,
     pub align_self: Alignment,
     pub align_content: Alignment,
-    /// `None` represents normal (zero in flex layout).
+    /// `None` represents normal (zero in flex/grid layout).
     pub row_gap: Option<Length>,
     pub column_gap: Option<Length>,
     pub margin: Edges<LengthOrAuto>,
@@ -435,8 +456,20 @@ impl Default for ComputedStyle {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_template_areas: Vec::new(),
+            grid_auto_columns: vec![super::GridTrack::Size(super::TrackSize::default())],
+            grid_auto_rows: vec![super::GridTrack::Size(super::TrackSize::default())],
+            grid_auto_flow: super::GridAutoFlow::default(),
+            grid_column_start: super::GridLine::Auto,
+            grid_column_end: super::GridLine::Auto,
+            grid_row_start: super::GridLine::Auto,
+            grid_row_end: super::GridLine::Auto,
             order: 0,
             justify_content: Alignment::default(),
+            justify_items: Alignment::default(),
+            justify_self: Alignment::new(AlignKeyword::Auto),
             align_items: Alignment::default(),
             align_self: Alignment::new(AlignKeyword::Auto),
             align_content: Alignment::default(),

@@ -266,7 +266,7 @@ fn append_box_items(
     ) {
         if layout_box.kind() == BoxKind::Inline
             && !layout_box.is_replaced_image()
-            && !layout_box.style().display.is_flex()
+            && !layout_box.style().display.is_item_container()
         {
             for (index, fragment) in layout_box.inline_fragments().iter().enumerate() {
                 if selected.is_some_and(|selected| selected != index) {
@@ -481,7 +481,7 @@ fn append_own_outline(
         }
     } else if layout_box.kind() == BoxKind::Inline
         && !layout_box.is_replaced_image()
-        && !layout_box.style().display.is_flex()
+        && !layout_box.style().display.is_item_container()
     {
         for fragment in layout_box.inline_fragments() {
             outline(fragment.rect, OUTLINE_COLOR);

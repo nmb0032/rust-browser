@@ -2581,17 +2581,93 @@ and the CSSOM parts covered here meet the conformance gate.
   CSS coverage is generated from the engine overlay: **68 longhands** and
   **22 shorthands**, still classified partial, with no WPT/parity claim.
 
-  **Finite limits:** horizontal writing only; no grid, floats/tables,
+  **Finite limits:** horizontal writing only; no floats/tables,
   `visibility:collapse` struts, pagination, intrinsic-size keyword grammar,
   `aspect-ratio` property, complete replaced min/max ratio constraints,
   paragraph bidi, last-baseline groups or generalized Box Alignment.
   Column and `align-content` baseline alignment diagnose a flex-start
   fallback. Cyclic intrinsic percentage decorations and multi-line column
   intrinsic cross sizing remain partial. These are not CSS Flexbox WPT
-  conformance or full-browser parity results. **8.11 remains unimplemented;
-  milestone 8 is not complete.**
-- [ ] **8.11 Implement grid.**
+  conformance or full-browser parity results. Grid is scoped to 8.11 below;
+  **milestone 8 is not complete.**
+- [x] **8.11 Implement grid.**
   *You'll see:* grid-based page layouts.
+
+  **Implemented:** `display:grid` and atomic `inline-grid`, direct item
+  blockification, anonymous non-whitespace text items, generated/replaced
+  items, independent margin boundaries and nested flex/grid formatting.
+  The existing semantic box tree, block/inline formatter, selected font
+  resources and shaped glyph runs remain authoritative; no opaque external
+  layout tree replaces them.
+
+  Typed, non-inherited track and placement properties participate in the
+  existing wide-keyword, variable, layer rollback and recovery paths:
+  `grid-template-columns/rows/areas`, `grid-auto-columns/rows/flow`,
+  `grid-row/column-start/end`, `grid-row/column/area`, `justify-items/self`
+  and atomic `place-items/self/content`. Tracks accept fixed/percentage
+  lengths and contextual math, auto, min-content, max-content, fr, minmax,
+  fit-content, positive integer repeat and fixed-size auto-fill/auto-fit.
+  Rectangular quoted areas generate named boundary lines; explicit names,
+  occurrences, negative explicit-grid lines and anchored named spans work.
+  Invalid syntax is rejected atomically and does not consume later declarations.
+
+  **Layout contracts:** explicit overlapping placements precede major-axis
+  locked items and the remaining order-modified sparse/dense cursor pass;
+  row and column flows create cyclic implicit tracks. Intrinsic contributions
+  include spanning items, merge equal-span planned increases rather than
+  accumulating them in source order, water-fill eligible tracks to their
+  growth limits and allocate flexible tracks using their factors (including
+  sums below one, intrinsic minima and indefinite-axis hypothetical fr sizes).
+  Auto-fit collapses empty tracks and their gutters. Items use area-relative
+  padding/margins, content-based automatic minima where permitted, explicit
+  min/max bounds, replaced intrinsic ratios, auto margins, stretch reflow,
+  first-row baselines and safe/logical alignment. Horizontal RTL reverses
+  physical columns without reordering semantic children. Container height
+  bounds are applied before final track alignment.
+
+  Intrinsic percentage tracks/gaps contribute auto/zero when their axis is
+  indefinite; cyclic row percentages resolve once against the intrinsic,
+  range-constrained container height, without feeding overflow back into
+  that height. A resolved grid area supplies item percentage references.
+  Atomic inline-grid uses shared intrinsic widths and its first-row baseline.
+  Absolute/fixed children do not occupy cells or contribute track sizes;
+  grid placement supplies a containing area only when the grid establishes
+  the appropriate containing block, while static-alignment anchors remain
+  independent. Auto positioning edges use that grid's padding edge; fixed
+  children retain viewport containing blocks. Relative item offsets never
+  move tracks or glyph-internal positions.
+
+  **Painting and retained state:** shared order-modified CSS2 stacking phases
+  paint grid items atomically; static integer grid-item `z-index` creates real
+  contexts, with stable ties and proper auto descendant escape. Atomic inline
+  backgrounds, borders and hit rectangles agree. Existing spatial overflow,
+  scroll extents and persistent frame offsets apply unchanged; resize,
+  container-query feedback and asynchronous font overlays converge without
+  losing selected metrics or the latest scroll state.
+
+  `tests/pages/grid.html` demonstrates named page regions, responsive
+  auto-fit cards, nested flex, an inline-grid baseline, positioned alignment
+  and a scrollable rail. **37 grid/style regressions** plus deterministic CLI
+  layout/style/value/display-list checks exercise actual track geometry,
+  shaped glyph IDs/positions, sampled raster pixels and reverse-order hits.
+  The all-features suite passes **700 tests**, with formatting, strict
+  all-target/all-feature clippy, benchmark compilation and seven offline CSS
+  generator tests/checks. Generated coverage now has **80 longhands** and
+  **28 shorthands**, all still partial.
+
+  **Finite limits:** at most **256 tracks per axis** and **1,048,576 occupancy
+  cell probes** per grid placement pass. Oversized repeats, lines, spans and
+  extents are bounded with diagnostics; exhausted placement uses bounded
+  overlap fallback cells. No subgrid/masonry, nested repeats, `grid` or
+  `grid-template` shorthands, vertical writing, paragraph bidi, last-baseline
+  groups, legacy center/left/right alignment or general intrinsic-size/
+  aspect-ratio property grammar is claimed. Unanchored named auto spans
+  diagnose integer-span fallback; inline-axis and align-content baseline
+  requests diagnose start fallback. Cyclic intrinsic decoration sizing,
+  full replaced min/max ratio constraints and all Grid Level 1/WPT edge-case
+  algorithms remain partial. These are engine regression results, **not full
+  WPT conformance or browser parity**. **8.12 remains unimplemented; milestone
+  8 is not complete.**
 - [ ] **8.12 Implement floats and tables.**
   *You'll see:* older sites and data tables laid out correctly.
 - [ ] **8.13 Add reftests.** Render test pages and compare screenshots with

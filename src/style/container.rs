@@ -122,7 +122,7 @@ impl ContainerSnapshot {
             let style = layout.style();
             if let Some(node) = layout.dom_node_id()
                 && layout.pseudo_element().is_none()
-                && (layout.kind() == BoxKind::Block || layout.style().display.is_flex())
+                && (layout.kind() == BoxKind::Block || layout.style().display.is_item_container())
                 && !layout.tag_name().eq_ignore_ascii_case("<img>")
                 && style.container_type != container::ContainerType::Normal
             {

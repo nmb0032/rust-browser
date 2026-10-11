@@ -2057,11 +2057,14 @@ fn compute_with_context(
     style.overflow_x = x.coupled(y);
     style.overflow_y = y.coupled(x);
     style.positioned_inline = style.position.out_of_flow()
-        && matches!(style.display, Display::Inline | Display::InlineFlex);
+        && matches!(
+            style.display,
+            Display::Inline | Display::InlineFlex | Display::InlineGrid
+        );
     if style.positioned_inline {
         style.display = style.display.blockified();
     }
-    if parent.style.display.is_flex() && !style.position.out_of_flow() {
+    if parent.style.display.is_item_container() && !style.position.out_of_flow() {
         style.display = style.display.blockified();
     }
     ComputedNode { style, colors }
@@ -2105,6 +2108,9 @@ fn absolutize(
     reference: f32,
 ) -> Option<Value> {
     match value {
+        Value::GridTracks(values) => {
+            super::grid::computed_tracks(values, context).map(Value::GridTracks)
+        }
         Value::Length(length) => {
             let mut computed = length.computed(context)?.0;
             if matches!(
@@ -2259,6 +2265,18 @@ fn computed_value(
         },
         P::Order => Value::Integer(style.order),
         P::JustifyContent => Value::Alignment(style.justify_content),
+        P::JustifyItems => Value::Alignment(style.justify_items),
+        P::JustifySelf => Value::Alignment(style.justify_self),
+        P::GridTemplateColumns => Value::GridTracks(style.grid_template_columns.clone()),
+        P::GridTemplateRows => Value::GridTracks(style.grid_template_rows.clone()),
+        P::GridAutoColumns => Value::GridTracks(style.grid_auto_columns.clone()),
+        P::GridAutoRows => Value::GridTracks(style.grid_auto_rows.clone()),
+        P::GridTemplateAreas => Value::GridAreas(style.grid_template_areas.clone()),
+        P::GridAutoFlow => Value::GridAutoFlow(style.grid_auto_flow),
+        P::GridColumnStart => Value::GridLine(style.grid_column_start.clone()),
+        P::GridColumnEnd => Value::GridLine(style.grid_column_end.clone()),
+        P::GridRowStart => Value::GridLine(style.grid_row_start.clone()),
+        P::GridRowEnd => Value::GridLine(style.grid_row_end.clone()),
         P::AlignItems => Value::Alignment(style.align_items),
         P::AlignSelf => Value::Alignment(style.align_self),
         P::AlignContent => Value::Alignment(style.align_content),
@@ -2368,6 +2386,18 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         (P::FlexBasis, Value::Length(l)) => style.flex_basis = super::FlexBasis::Length(l),
         (P::Order, Value::Integer(v)) => style.order = v,
         (P::JustifyContent, Value::Alignment(v)) => style.justify_content = v,
+        (P::JustifyItems, Value::Alignment(v)) => style.justify_items = v,
+        (P::JustifySelf, Value::Alignment(v)) => style.justify_self = v,
+        (P::GridTemplateColumns, Value::GridTracks(v)) => style.grid_template_columns = v,
+        (P::GridTemplateRows, Value::GridTracks(v)) => style.grid_template_rows = v,
+        (P::GridAutoColumns, Value::GridTracks(v)) => style.grid_auto_columns = v,
+        (P::GridAutoRows, Value::GridTracks(v)) => style.grid_auto_rows = v,
+        (P::GridTemplateAreas, Value::GridAreas(v)) => style.grid_template_areas = v,
+        (P::GridAutoFlow, Value::GridAutoFlow(v)) => style.grid_auto_flow = v,
+        (P::GridColumnStart, Value::GridLine(v)) => style.grid_column_start = v,
+        (P::GridColumnEnd, Value::GridLine(v)) => style.grid_column_end = v,
+        (P::GridRowStart, Value::GridLine(v)) => style.grid_row_start = v,
+        (P::GridRowEnd, Value::GridLine(v)) => style.grid_row_end = v,
         (P::AlignItems, Value::Alignment(v)) => style.align_items = v,
         (P::AlignSelf, Value::Alignment(v)) => style.align_self = v,
         (P::AlignContent, Value::Alignment(v)) => style.align_content = v,

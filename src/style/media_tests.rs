@@ -85,7 +85,7 @@ fn malformed_unsupported_and_empty_media_never_leak_declarations_and_ast_is_reta
         @media not (future-height:600px) {p {color:purple}}\
         @media /*empty*/ {p {color:purple}}\
         @media (width:600px);\
-        @media screen {color:purple; @supports (display:grid) {p {color:purple}}}\
+        @media screen {color:purple; @supports (grid-template-columns:subgrid) {p {color:purple}}}\
         </style><p id='target'>target</p>",
     )
     .unwrap();

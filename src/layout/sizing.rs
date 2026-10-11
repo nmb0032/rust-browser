@@ -1,4 +1,4 @@
-//! Physical min/max prerequisites shared by block, positioned and flex layout.
+//! Physical min/max prerequisites shared by block, positioned, flex and grid.
 use crate::{css::values::Length, style::Diagnostic};
 
 use super::{LayoutBox, tree::resolve_length};

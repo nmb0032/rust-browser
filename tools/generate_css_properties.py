@@ -260,7 +260,7 @@ def generate(data, engine, provenance):
         lines.append(syntax_record(entry) + ",")
     lines.extend([
         "];", "#[derive(Clone, Copy)]",
-        "pub(super) enum Parser { Longhand, Wide, Four, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap }",
+        "pub(super) enum Parser { Longhand, Wide, Four, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place }",
         "pub(super) fn parser(name: &str) -> Option<Parser> { Some(match name {",
     ])
     for name, details in sorted(supported.items()):

@@ -25,6 +25,32 @@ fn flex_summary(style: &crate::style::ComputedStyle) -> String {
     )
 }
 
+fn grid_summary(style: &crate::style::ComputedStyle) -> String {
+    format!(
+        "display={:?} columns={:?} rows={:?} areas={:?} auto-columns={:?} auto-rows={:?} auto-flow={:?} column={:?}/{:?} row={:?}/{:?} order={} justify-items={:?} justify-self={:?} align-items={:?} align-self={:?} content={:?}/{:?} gap={:?}/{:?}",
+        style.display,
+        style.grid_template_columns,
+        style.grid_template_rows,
+        style.grid_template_areas,
+        style.grid_auto_columns,
+        style.grid_auto_rows,
+        style.grid_auto_flow,
+        style.grid_column_start,
+        style.grid_column_end,
+        style.grid_row_start,
+        style.grid_row_end,
+        style.order,
+        style.justify_items,
+        style.justify_self,
+        style.align_items,
+        style.align_self,
+        style.justify_content,
+        style.align_content,
+        style.column_gap,
+        style.row_gap
+    )
+}
+
 /// Explicit length stages, with used/actual geometry from the laid-out tree.
 /// "Actual" here is unclipped rectangle quantization, not glyph rasterization.
 pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
@@ -80,6 +106,15 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
             )
             .unwrap();
             writeln!(output, "  used flex-item: {}", layout_box.is_flex_item()).unwrap();
+        }
+        if layout_box.style().display.is_grid() || layout_box.is_grid_item() {
+            writeln!(
+                output,
+                "  computed grid: {}",
+                grid_summary(layout_box.style())
+            )
+            .unwrap();
+            writeln!(output, "  used grid-item: {}", layout_box.is_grid_item()).unwrap();
         }
         writeln!(
             output,
@@ -277,6 +312,9 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
         writeln!(output, "  display: {:?}", style.display).unwrap();
         if style.display.is_flex() {
             writeln!(output, "  flex: {}", flex_summary(style)).unwrap();
+        }
+        if style.display.is_grid() {
+            writeln!(output, "  grid: {}", grid_summary(style)).unwrap();
         }
         writeln!(output, "  overflow-x: {:?}", style.overflow_x).unwrap();
         writeln!(output, "  overflow-y: {:?}", style.overflow_y).unwrap();
@@ -718,6 +756,13 @@ fn dump_layout_box(tree: &LayoutTree, layout_box: &LayoutBox, depth: usize) {
             "{indent}  flex-item={} {}",
             layout_box.is_flex_item(),
             flex_summary(layout_box.style())
+        );
+    }
+    if layout_box.style().display.is_grid() || layout_box.is_grid_item() {
+        println!(
+            "{indent}  grid-item={} {}",
+            layout_box.is_grid_item(),
+            grid_summary(layout_box.style())
         );
     }
     if let Some(container) = tree.box_scroll_container(layout_box) {

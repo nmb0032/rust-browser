@@ -153,7 +153,12 @@ fn effective_align(child: &LayoutBox, parent: Alignment) -> Alignment {
 
 /// Positions are measured from the flex axis start. Logical start/end are
 /// mapped independently of flex reversal (the physical axis start is known).
-fn distribution(align: Alignment, remaining: f32, count: usize, reverse: bool) -> (f32, f32) {
+pub(super) fn distribution(
+    align: Alignment,
+    remaining: f32,
+    count: usize,
+    reverse: bool,
+) -> (f32, f32) {
     if count == 0 {
         return (0.0, 0.0);
     }

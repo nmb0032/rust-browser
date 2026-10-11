@@ -138,6 +138,18 @@ fn layout_block(
         BlockMode::Positioned { height, .. } => height,
         _ => explicit_height,
     };
+    let grid_height_bounds = style.display.is_grid().then(|| {
+        super::sizing::bounds(
+            layout_box,
+            false,
+            containing_height,
+            vertical,
+            0.0,
+            diagnostics,
+        )
+    });
+    let explicit_height = explicit_height
+        .map(|height| grid_height_bounds.map_or(height, |bounds| height.clamp(bounds.0, bounds.1)));
     let mut replaced_size = layout_box.image.as_ref().map(|image| {
         let metrics = font_metrics(font, style, layout_box.node_id, diagnostics);
         let line_height = metrics.above + metrics.below;
@@ -257,8 +269,8 @@ fn layout_block(
         explicit_height
     };
     let collapse_children = matches!(mode, BlockMode::Flow(_))
-        && !layout_box.style.display.is_flex()
-        && !layout_box.is_flex_item
+        && !layout_box.style.display.is_item_container()
+        && !layout_box.is_layout_item()
         && layout_box.image.is_none()
         && layout_box.style.container_type == ContainerType::Normal
         && !layout_box.style.overflow_x.scroll_container()
@@ -287,6 +299,16 @@ fn layout_block(
             layout_box.text_fragments.push(fragment);
         }
         height as f64
+    } else if layout_box.style.display.is_grid() {
+        super::grid::layout_grid(
+            layout_box,
+            (content_x, content_y, width),
+            explicit_height,
+            layout_box.definite_height,
+            grid_height_bounds.expect("grid height bounds"),
+            font,
+            diagnostics,
+        ) as f64
     } else if layout_box.style.display.is_flex() {
         super::flex::layout_flex(
             layout_box,
@@ -316,14 +338,16 @@ fn layout_block(
         }
     });
     let height = finite_used(height, layout_box.node_id, "height", diagnostics);
-    let bounds = super::sizing::bounds(
-        layout_box,
-        false,
-        containing_height,
-        vertical,
-        0.0,
-        diagnostics,
-    );
+    let bounds = grid_height_bounds.unwrap_or_else(|| {
+        super::sizing::bounds(
+            layout_box,
+            false,
+            containing_height,
+            vertical,
+            0.0,
+            diagnostics,
+        )
+    });
     let height = height.clamp(bounds.0, bounds.1);
     if !matches!(mode, BlockMode::Positioned { .. })
         && containing_height.is_none()
