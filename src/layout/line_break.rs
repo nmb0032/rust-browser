@@ -206,7 +206,8 @@ fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
                         source.push(*c);
                     }
                 }
-                Token::Begin(_) | Token::End(_) if tokens[index].width(assembly.boxes) == 0.0 => {}
+                Token::Begin(_) | Token::End(_) | Token::Positioned(_)
+                    if tokens[index].width(assembly.boxes) == 0.0 => {}
                 _ => break,
             }
             index += 1;
@@ -601,7 +602,11 @@ fn emit(
     for (index, token) in tokens.iter().enumerate().rev() {
         if matches!(
             token,
-            Token::Begin(_) | Token::End(_) | Token::Control(..) | Token::Break(_)
+            Token::Begin(_)
+                | Token::End(_)
+                | Token::Control(..)
+                | Token::Break(_)
+                | Token::Positioned(_)
         ) {
             continue;
         }
@@ -672,6 +677,7 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
         {
             continue;
         }
+
         if boundary.context_break {
             discretionary_work += boundary.end - start;
             if discretionary_work > 1_048_576 {
@@ -753,4 +759,54 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
             previous = None;
         }
     }
+}
+
+/// Intrinsic widths use the same whitespace, shaping clusters, tab stops and
+/// legal opportunities as line fitting, without inventing a measurement viewport.
+pub(super) fn intrinsic(
+    tokens: Vec<Token>,
+    block: &ComputedStyle,
+    assembly: &mut Assembly<'_>,
+) -> (f32, f32) {
+    let mut tokens = normalize(tokens, assembly);
+    let opportunities = opportunities(&tokens, assembly.boxes, block);
+    shape_tokens(&mut tokens, assembly);
+    let face = assembly.font.select(block);
+    let tab = (face.metrics(' ', block.font_size).advance_width as f64 * 8.0).max(0.0001);
+    let half_ch = face.metrics('0', block.font_size).advance_width as f64 * 0.5;
+    let mut minimum: f64 = 0.0;
+    let mut maximum: f64 = 0.0;
+    let mut line = Measure::default();
+    let mut interval = Measure::default();
+    let mut start = 0;
+    for boundary in opportunities {
+        for token in &tokens[start..boundary.end] {
+            line.add(token, assembly.boxes, tab, half_ch);
+            interval.add(token, assembly.boxes, tab, half_ch);
+        }
+        let protected = matches!(tokens[..boundary.end].iter().rev().find(|t| character(t).is_some()), Some(Token::Glyphs(_, _, run)) if run.unsafe_after);
+        if boundary.forced || !protected {
+            minimum = minimum.max(interval.fit());
+            interval = Measure::default();
+        }
+        if boundary.forced {
+            maximum = maximum.max(line.fit());
+            line = Measure::default();
+        }
+        start = boundary.end;
+    }
+    (
+        finite_used(
+            minimum.max(0.0),
+            None,
+            "min-content width",
+            assembly.diagnostics,
+        ),
+        finite_used(
+            maximum.max(minimum).max(0.0),
+            None,
+            "max-content width",
+            assembly.diagnostics,
+        ),
+    )
 }

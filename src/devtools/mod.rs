@@ -51,6 +51,20 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
         writeln!(output, "  computed width: {:?}", layout_box.style().width).unwrap();
         writeln!(
             output,
+            "  computed position: {:?} inset={:?} z-index={:?}",
+            layout_box.style().position,
+            layout_box.style().inset,
+            layout_box.style().z_index
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  used coordinate-space: {:?}",
+            layout_box.coordinate_space()
+        )
+        .unwrap();
+        writeln!(
+            output,
             "  computed direction: {:?}",
             layout_box.style().direction
         )
@@ -194,6 +208,12 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
             }
         };
         writeln!(output, "  display: {:?}", style.display).unwrap();
+        writeln!(
+            output,
+            "  position: {:?} inset={:?} z-index={:?}",
+            style.position, style.inset, style.z_index
+        )
+        .unwrap();
         writeln!(output, "  direction: {:?}", style.direction).unwrap();
         writeln!(output, "  text-align: {:?}", style.text_align).unwrap();
         writeln!(output, "  text-align-last: {:?}", style.text_align_last).unwrap();
@@ -322,6 +342,12 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
             if let Some(style) = styles.pseudo(id, pseudo) {
                 writeln!(output, "  ::{} computed (separate target)", pseudo.name()).unwrap();
                 writeln!(output, "    display: {:?}", style.display).unwrap();
+                writeln!(
+                    output,
+                    "    position: {:?} inset={:?} z-index={:?}",
+                    style.position, style.inset, style.z_index
+                )
+                .unwrap();
                 writeln!(output, "    color: {:?}", color(style.text_color)).unwrap();
                 writeln!(
                     output,
@@ -597,6 +623,13 @@ fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
         rect.y,
         rect.width,
         rect.height
+    );
+    println!(
+        "{indent}  position={:?} inset={:?} z-index={:?} coordinate-space={:?}",
+        layout_box.style().position,
+        layout_box.style().inset,
+        layout_box.style().z_index,
+        layout_box.coordinate_space()
     );
     for line in layout_box.line_boxes() {
         println!(

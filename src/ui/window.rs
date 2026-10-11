@@ -234,8 +234,8 @@ impl BrowserWindow {
         let (Some(window), Some((x, y))) = (&self.window, self.cursor) else {
             return Ok(None);
         };
-        let (x, y) = input::document_point(x, y, window.scale_factor(), self.scroll_offset);
-        let Some(node) = self.layout_tree.hit_test(x, y) else {
+        let (x, y) = input::document_point(x, y, window.scale_factor(), 0.0);
+        let Some(node) = self.layout_tree.hit_test_viewport(x, y, self.scroll_offset) else {
             return Ok(None);
         };
         link_url(&self.frame.document, node, &self.frame.url)
@@ -263,13 +263,12 @@ impl BrowserWindow {
                 .window
                 .as_ref()
                 .zip(self.cursor)
-                .map(|(window, (x, y))| {
-                    input::document_point(x, y, window.scale_factor(), self.scroll_offset)
-                });
-            if !update_interaction_for_window(
+                .map(|(window, (x, y))| input::document_point(x, y, window.scale_factor(), 0.0));
+            if !update_interaction_for_window_scrolled(
                 Arc::make_mut(&mut self.frame),
                 &self.layout_tree,
                 point,
+                self.scroll_offset,
                 if pass == 0 {
                     event
                 } else {
@@ -358,15 +357,26 @@ enum InteractionEvent {
 }
 
 /// The GUI and tests use the same hit-test/input/restyle boundary. Coordinates
-/// have already been converted from device pixels and include document scroll.
+/// have already been converted from device pixels to CSS viewport coordinates.
+#[cfg(test)]
 fn update_interaction_for_window(
     frame: &mut Frame,
     tree: &LayoutTree,
     point: Option<(f32, f32)>,
     event: InteractionEvent,
 ) -> bool {
+    update_interaction_for_window_scrolled(frame, tree, point, 0.0, event)
+}
+
+fn update_interaction_for_window_scrolled(
+    frame: &mut Frame,
+    tree: &LayoutTree,
+    point: Option<(f32, f32)>,
+    scroll: f32,
+    event: InteractionEvent,
+) -> bool {
     let mut state = frame.interaction_state().clone();
-    let mut hit = point.and_then(|(x, y)| tree.hit_test(x, y));
+    let mut hit = point.and_then(|(x, y)| tree.hit_test_viewport(x, y, scroll));
     while let Some(id) = hit {
         let node = frame
             .document

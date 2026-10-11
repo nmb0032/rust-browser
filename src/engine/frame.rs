@@ -197,7 +197,11 @@ impl Frame {
             self.stylesheets = resolution.stylesheets;
             self.styles = resolution.styles;
             let mut tree = self.layout_tree();
-            tree.layout(self.media_environment.viewport_width, &font);
+            tree.layout_viewport(
+                self.media_environment.viewport_width,
+                self.media_environment.viewport_height,
+                &font,
+            );
             let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
             if next == snapshot {
                 return tree;

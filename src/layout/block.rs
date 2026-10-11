@@ -51,15 +51,27 @@ struct ChildrenFlow {
     all_through: bool,
 }
 
+#[derive(Clone, Copy)]
+enum BlockMode {
+    Root(Option<f32>),
+    Flow(Option<f32>),
+    Positioned { width: f32, height: Option<f32> },
+}
+
 fn layout_block(
     layout_box: &mut LayoutBox,
     x: f32,
     available_width: f32,
     containing_direction: Direction,
-    is_root: bool,
+    mode: BlockMode,
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> BlockFlow {
+    layout_box.flow_width = available_width;
+    let containing_height = match mode {
+        BlockMode::Root(height) | BlockMode::Flow(height) => height,
+        BlockMode::Positioned { .. } => None,
+    };
     let style = &layout_box.style;
     let margins = resolve_margins(style, available_width, layout_box.node_id, diagnostics);
     let padding = resolve_edges(
@@ -100,13 +112,13 @@ fn layout_block(
     let explicit_height = style
         .height
         .as_ref()
-        .filter(|length| !length.has_percentage())
+        .filter(|length| !length.has_percentage() || containing_height.is_some())
         .map(|length| {
             style.box_sizing.content_size(
                 resolve_length(
                     length,
                     style.font_size,
-                    0.0,
+                    containing_height.unwrap_or(0.0),
                     layout_box.node_id,
                     "height",
                     diagnostics,
@@ -114,22 +126,43 @@ fn layout_block(
                 vertical,
             )
         });
+    let explicit_height = match mode {
+        BlockMode::Positioned { height, .. } => height,
+        _ => explicit_height,
+    };
     let replaced_size = layout_box.image.as_ref().map(|image| {
         let metrics = font_metrics(font, style, layout_box.node_id, diagnostics);
         let line_height = metrics.above + metrics.below;
-        image.size(style, explicit_width, explicit_height, line_height, font)
+        image.size(
+            style,
+            match mode {
+                BlockMode::Positioned { width, .. } => Some(width),
+                _ => explicit_width,
+            },
+            explicit_height,
+            line_height,
+            font,
+        )
     });
-    let (width, left, right) = solve_width(
-        available_width as f64,
-        horizontal as f64,
-        replaced_size
-            .map(|size| size.0)
-            .or(explicit_width)
-            .map(f64::from),
-        margins.left.map(f64::from),
-        margins.right.map(f64::from),
-        containing_direction,
-    );
+    let (width, left, right) = if let BlockMode::Positioned { width, .. } = mode {
+        (
+            f64::from(width),
+            f64::from(margins.left.unwrap_or(0.0)),
+            f64::from(margins.right.unwrap_or(0.0)),
+        )
+    } else {
+        solve_width(
+            available_width as f64,
+            horizontal as f64,
+            replaced_size
+                .map(|size| size.0)
+                .or(explicit_width)
+                .map(f64::from),
+            margins.left.map(f64::from),
+            margins.right.map(f64::from),
+            containing_direction,
+        )
+    };
     let width = finite_used(width, layout_box.node_id, "width equation", diagnostics);
     let margin = crate::css::values::Edges {
         left: finite_used(
@@ -170,7 +203,8 @@ fn layout_block(
     );
     layout_box.padding = padding;
     layout_box.margin = margin;
-    let collapse_children = !is_root
+    layout_box.definite_height = explicit_height;
+    let collapse_children = matches!(mode, BlockMode::Flow(_))
         && layout_box.image.is_none()
         && layout_box.style.container_type == ContainerType::Normal;
     let collapse_top = collapse_children && border.top == 0.0 && padding.top == 0.0;
@@ -217,11 +251,13 @@ fn layout_block(
         }
     });
     let height = finite_used(height, layout_box.node_id, "height", diagnostics);
-    if layout_box
-        .style
-        .height
-        .as_ref()
-        .is_some_and(|length| length.has_percentage())
+    if !matches!(mode, BlockMode::Positioned { .. })
+        && containing_height.is_none()
+        && layout_box
+            .style
+            .height
+            .as_ref()
+            .is_some_and(|length| length.has_percentage())
     {
         eprintln!(
             "CSS at {:?}: percentage height has no definite containing block height in block layout; using auto",
@@ -264,6 +300,56 @@ fn layout_block(
             && explicit_height.is_none_or(|height| height == 0.0)
             && children_flow.all_through,
     }
+}
+
+pub(super) fn layout_positioned(
+    layout_box: &mut LayoutBox,
+    reference_width: f32,
+    width: f32,
+    height: Option<f32>,
+    font: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    layout_block(
+        layout_box,
+        0.0,
+        reference_width,
+        layout_box.style.direction,
+        BlockMode::Positioned { width, height },
+        font,
+        diagnostics,
+    );
+    if layout_box.style.display == Display::ListItem {
+        let text = layout_box
+            .marker_text
+            .clone()
+            .unwrap_or_else(|| "\u{2022}".into());
+        assign_marker(layout_box, text, font, diagnostics);
+    }
+}
+
+fn assign_marker(
+    child: &mut LayoutBox,
+    text: String,
+    font: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let style = child.marker_style.as_ref().unwrap_or(&child.style).clone();
+    let metrics = font_metrics(font, &style, child.node_id, diagnostics);
+    let glyphs = font.shape(&style, &text);
+    let baseline = child
+        .first_local_baseline()
+        .map_or(child.content_rect.y + metrics.above, |baseline| {
+            child.rect.y + baseline
+        });
+    child.list_marker = Some(ListMarker {
+        x: child.content_rect.x - glyphs.width - style.font_size * 0.5,
+        y: baseline - metrics.ascent,
+        baseline,
+        text,
+        glyphs,
+        style,
+    });
 }
 
 /// CSS2 10.3.3 after resolving lengths and box-sizing, or 10.3.4 after
@@ -340,10 +426,14 @@ fn flow_children(
     let mut list_index = 0;
     let mut index = 0;
     while index < layout_box.children.len() {
-        if layout_box.children[index].kind != BoxKind::Block {
+        if layout_box.children[index].kind != BoxKind::Block
+            || layout_box.children[index].style.position.out_of_flow()
+        {
             let end = layout_box.children[index..]
                 .iter()
-                .position(|child| child.kind == BoxKind::Block)
+                .position(|child| {
+                    child.kind == BoxKind::Block && !child.style.position.out_of_flow()
+                })
                 .map_or(layout_box.children.len(), |offset| index + offset);
             let inline_y = finite_used(
                 cursor_y + pending.value(),
@@ -355,7 +445,7 @@ fn flow_children(
                 &mut layout_box.children[index..end],
                 &layout_box.style,
                 layout_box.node_id,
-                (x, inline_y, width),
+                (x, inline_y, width, layout_box.definite_height),
                 font,
                 diagnostics,
             );
@@ -376,7 +466,11 @@ fn flow_children(
                 x,
                 width,
                 layout_box.style.direction,
-                is_document && !child.is_anonymous(),
+                if is_document && !child.is_anonymous() {
+                    BlockMode::Root(layout_box.definite_height)
+                } else {
+                    BlockMode::Flow(layout_box.definite_height)
+                },
                 font,
                 diagnostics,
             );
@@ -407,22 +501,7 @@ fn flow_children(
                         "\u{2022}".into()
                     }
                 });
-                let style = child.marker_style.as_ref().unwrap_or(&child.style).clone();
-                let metrics = font_metrics(font, &style, child.node_id, diagnostics);
-                let glyphs = font.shape(&style, &text);
-                let baseline = child
-                    .first_local_baseline()
-                    .map_or(child.content_rect.y + metrics.above, |baseline| {
-                        child.rect.y + baseline
-                    });
-                child.list_marker = Some(ListMarker {
-                    x: child.content_rect.x - glyphs.width - style.font_size * 0.5,
-                    y: baseline - metrics.ascent,
-                    baseline,
-                    text,
-                    glyphs,
-                    style,
-                });
+                assign_marker(child, text, font, diagnostics);
             }
             // Root margins never adjoin another box's margins.
             if is_document && !child.is_anonymous() {

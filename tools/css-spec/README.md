@@ -62,7 +62,7 @@ of `sans-serif`. `medium` font-size resolves using the existing initial font
 environment; CanvasText uses the existing fixed light system palette. Tests
 check *every* supported initial/inheritance rule and shorthand mapping against
 the full frozen snapshot and actual cascade/defaults, including content,
-height, containers, font, background and all physical border sides.
+height, containers, font, background, positioning/inset/z-index, and all physical border sides.
 
 Executable generated grammar is intentionally finite: keyword and color
 dispatch calls the existing parsers. Reachable spec keywords validate mappings;
@@ -74,8 +74,8 @@ referenced productions and animation descriptors are **not executable**
 grammar/computation/animation implementations. No unsupported metadata entry
 enters a catch-all property parser or makes `@supports` succeed.
 
-Coverage is 0 fully implemented, 50 partial canonical properties (36 longhands
-and 14 shorthands), 707 unimplemented canonical properties and 64 legacy
+Coverage is 0 fully implemented, 68 partial canonical properties (50 longhands
+and 18 shorthands), 689 unimplemented canonical properties and 64 legacy
 aliases (1 accepted for a partial target, 63 unsupported). Partial requires
 an executable engine handler, but every
 partial row records parser, cascade, computed, used/layout/paint and animation

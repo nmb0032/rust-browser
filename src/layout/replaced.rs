@@ -81,6 +81,7 @@ impl ImageContent {
             diagnostics,
         );
         Some(TextFragment {
+            line_index: 0,
             x: rect.x,
             y: finite_used(
                 baseline as f64 - metrics.ascent as f64,

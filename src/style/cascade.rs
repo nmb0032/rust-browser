@@ -2053,6 +2053,10 @@ fn compute_with_context(
             *style.border_width.get_mut(side) = 0.0;
         }
     }
+    style.positioned_inline = style.position.out_of_flow() && style.display == Display::Inline;
+    if style.positioned_inline {
+        style.display = Display::Block;
+    }
     ComputedNode { style, colors }
 }
 
@@ -2176,6 +2180,12 @@ fn computed_value(
         P::BackgroundColor => Value::Color(parent.colors.background.clone()),
         P::BackgroundImage => Value::BackgroundImage(style.background_image),
         P::Display => Value::Display(style.display),
+        P::Position => Value::Position(style.position),
+        P::ZIndex => Value::ZIndex(style.z_index),
+        P::Inset(side) => match style.inset.get(side) {
+            crate::css::values::LengthOrAuto::Length(length) => Value::Length(length.clone()),
+            crate::css::values::LengthOrAuto::Auto => Value::Auto,
+        },
         P::Direction => Value::Direction(style.direction),
         P::TextAlignAll => Value::TextAlign(style.text_align),
         P::TextAlignLast => Value::TextAlignLast(style.text_align_last),
@@ -2216,6 +2226,14 @@ fn computed_value(
 fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, value: Value) {
     use Property as P;
     match (property, value) {
+        (P::Position, Value::Position(position)) => style.position = position,
+        (P::ZIndex, Value::ZIndex(index)) => style.z_index = index,
+        (P::Inset(side), Value::Length(length)) => {
+            *style.inset.get_mut(side) = length.into();
+        }
+        (P::Inset(side), Value::Auto) => {
+            *style.inset.get_mut(side) = crate::css::values::LengthOrAuto::Auto;
+        }
         (P::Content, Value::Content(content)) => style.content = content,
         (P::Color, Value::Color(color)) => {
             style.text_color = color.resolve(parent.text_color).expect("validated color");

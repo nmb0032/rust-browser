@@ -48,6 +48,9 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::BackgroundColor => format!("{:?}", style.background),
         P::BackgroundImage => format!("{:?}", style.background_image),
         P::Display => format!("{:?}", style.display),
+        P::Position => format!("{:?}", style.position),
+        P::Inset(side) => format!("{:?}", style.inset.get(side)),
+        P::ZIndex => format!("{:?}", style.z_index),
         P::Direction => format!("{:?}", style.direction),
         P::TextAlignAll => format!("{:?}", style.text_align),
         P::TextAlignLast => format!("{:?}", style.text_align_last),
@@ -185,20 +188,20 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 62, 696, 63]);
-    assert_eq!(longhands.len(), 44);
+    assert_eq!(counts, [0, 69, 689, 63]);
+    assert_eq!(longhands.len(), 50);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 43);
+    assert_eq!(all.len(), 49);
     longhands.remove(&Property::Direction);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **61 partial**, **696 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **68 partial**, **689 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**44 longhands**, **17 shorthands**"));
+    assert!(report.contains("**50 longhands**, **18 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
-    assert!(report.contains("height percentage/containment"));
+    assert!(report.contains("Indefinite percentage-height"));
     assert!(report.contains("border image-1D alternative"));
     let rows: Vec<_> = report
         .split("## All snapshot properties")

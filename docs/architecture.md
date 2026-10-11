@@ -1705,14 +1705,14 @@ not comparisons of encoding throughput on equivalent trees.
   Run `python3 tools/generate_css_properties.py --check` or
   `cargo run -- --dump=css-coverage` (no page fetch). The
   [generated report](css-coverage.md) covers **821** entries: **757** canonical
-  properties (**0 implemented**, **50 partial**, **707 unimplemented**, updated
-  by 7.15) and **64 legacy aliases** (**1 accepted for a partial target**,
+  properties (**0 implemented**, **68 partial**, **689 unimplemented**, updated
+  through 8.8) and **64 legacy aliases** (**1 accepted for a partial target**,
   **63 unsupported**), not independent conformance successes.
   Partial means an actual finite engine handler exists, not generic AST
   acceptance. Every partial entry lists parser/cascade/computed/layout/paint/
   animation gaps, including missing shorthand resets. Custom properties and
   finite registrations are reported separately from that denominator.
-  Exhaustive local tests verify all **36 longhands** and **14 shorthands**,
+  Exhaustive local tests verify all **50 longhands** and **18 shorthands**,
   generated metadata against the snapshot, initial/inherited cascade behavior,
   unknown/unsupported/unauthorized-alias rejection, deterministic regeneration, and CLI
   output. See [provenance, update and validation instructions](../tools/css-spec/README.md).
@@ -1791,7 +1791,8 @@ not comparisons of encoding throughput on equivalent trees.
   quirks table/font UA rules need the real inline/table/inheritance model
   in milestone 8. The engine does not support table display or text-decoration;
   no table/font compatibility is claimed. Remaining eligible length properties
-  (position offsets, clip/rect, spacing, min/max sizes, etc.) are unsupported.
+  (clip/rect, spacing, min/max sizes, etc.) are unsupported; 8.8 adds physical
+  position offsets.
   Compat animations/keyframes, gradients (including their legacy direction
   semantics), remaining aliases and box/flex mappings, text stroke,
   text-size-adjust and appearance/native controls remain unsupported.
@@ -2325,9 +2326,82 @@ and the CSSOM parts covered here meet the conformance gate.
   import/redirect bases, layer precedence, local names/collection indices,
   CORS and failed source recovery, inactive/activated media, cancellation,
   independent navigation, progressive publication and no relayout refetch.
-- [ ] **8.8 Implement positioned layout and stacking.** Support `relative`,
+- [x] **8.8 Implement positioned layout and stacking.** Support `relative`,
   `absolute`, `fixed`, `z-index`, and CSS 2 Appendix E painting order.
   *You'll see:* overlays and fixed headers.
+
+  **Implemented boundary:** `position: static/relative/absolute/fixed`, signed
+  physical length/percentage/math offsets or `auto`, the pinned modern `inset`
+  shorthand, and distinct `z-index: auto` / signed 32-bit lexical integers.
+  All participate in CSS-wide, variables, origin/layer rollback, resets and
+  non-inheritance; absolute/fixed inline displays blockify while retaining
+  their hypothetical inline static-position behavior.
+
+  Normal formatting ignores out-of-flow boxes for widths, line metrics,
+  heights and adjoining margin sets, but retains zero-advance static anchors.
+  Relative offsets move visual fragments without changing flow allocation.
+  Absolute/fixed layout uses CSS2 horizontal/vertical inset equations,
+  shrink-to-fit from actual shaped min/max-content measurements, opposing
+  insets, natural/definite heights, border-box sizing and auto margins. Padding
+  and all margin percentages use containing width; vertical insets/heights
+  use containing height. Definite content heights also provide percentage
+  height references to normal block/replaced descendants; indefinite height
+  percentages remain auto (with the existing block-layout diagnostic).
+
+  Absolute containing blocks are the closest positioned ancestor's padding
+  box, or the initial viewport. Positioned non-replaced inline ancestors use
+  the first padding fragment's top/left and last padding fragment's bottom/right.
+  Construction identities, not DOM IDs or anonymous wrappers, join split
+  inline continuations and preserve lifted block descendants' ancestry.
+  CSS2 leaves discontinuous/empty inline containing geometry partly undefined:
+  the engine deterministically uses that first/last rectangle (negative
+  extents clamp to zero), or the empty inline's static anchor.
+
+  Fixed boxes use viewport coordinates independently of positioned ancestors
+  and root scroll. All descendants, indexed text origins/baselines, markers,
+  images and debug rectangles share that space; glyph-internal offsets stay
+  baseline-relative. `LayoutTree::layout_viewport` accepts both viewport
+  dimensions; the legacy width-only API retains a 600px height. Frame/container
+  feedback uses both dimensions, resets geometry and performs no font/resource
+  I/O. Document scroll extent includes absolute/relative ink but excludes
+  viewport-space fixed descendants.
+
+  A shared CSS2 Appendix E phase traversal drives display lists and reverse
+  paint-order hit testing: canvas/root backgrounds, negative contexts, in-flow
+  block backgrounds/borders, interleaved inline decoration/foreground,
+  positioned auto/zero groups, then positive contexts. Positioned integer
+  contexts are atomic, non-context ancestors let descendant contexts escape,
+  and equal levels preserve source order. Foreground uses source formatting
+  context/line identities, not shifted coordinate sorting, including overlapping
+  zero-height lines; hits reverse that exact per-fragment sequence.
+  HTML canvas backgrounds propagate
+  from the root or transparent-root body without double alpha blending. Debug
+  outlines remain a final overlay, explicitly tagged by coordinate space.
+  GUI input passes viewport points and one explicit root scroll offset.
+
+  **Inspection/tests:** `cargo run -- tests/pages/positioning_stacking.html
+  --bundled-fonts --dump=layout` (also `style`, `values`, `display-list`) exposes
+  used rectangles, position/insets/z-index, stack-ordered commands and document
+  versus viewport space. Deterministic geometry/pixel/hit tests cover overlays,
+  fixed headers and descendants across scroll/resize, negative/auto/zero/positive
+  isolation, source ties, background/text interleaving, inline continuations,
+  static fallback, percentage/margin equations, repeated layout and cloned
+  frame/container feedback.
+  Validation: **603 Rust tests** (including 29 positioned-layout regressions
+  and the CLI fixture) and **7 offline generator tests** pass; strict all-target
+  Clippy, formatting, all-target/bench compilation and regeneration checks pass.
+
+  **Not a full CSS conformance gate:** floats/tables and their Appendix E phases
+  wait for 8.12; paragraph bidi/RTL inline static-position geometry, writing modes
+  and logical insets wait for 8.14. Min/max/general intrinsic sizing, anchors,
+  transforms/effect-created containing blocks/contexts, integer math/animation,
+  and paged media remain absent. Fixed auto follows CSS2 (not the modern rule
+  that fixed unconditionally creates a context). Overflow clips/nested scroll
+  containers remain 8.9, sticky remains 8.19, and broader fragment hit testing
+  remains milestone 9. No WPT or full browser parity is claimed.
+  Cyclic descendant percentage sizing during intrinsic measurement uses the
+  available containing width, not a complete CSS Sizing percentage-cycle model
+  (8.15).
 - [ ] **8.9 Handle overflow.** Support `overflow: hidden` and nested
   scroll containers.
   *You'll see:* clipped content and scrollable panels.

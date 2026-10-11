@@ -146,6 +146,28 @@ pub enum Display {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Position {
+    #[default]
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+}
+
+impl Position {
+    pub fn out_of_flow(self) -> bool {
+        matches!(self, Self::Absolute | Self::Fixed)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ZIndex {
+    #[default]
+    Auto,
+    Integer(i32),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BoxSizing {
     #[default]
     ContentBox,
@@ -175,6 +197,11 @@ pub struct ComputedStyle {
     /// guaranteed-invalid value; absence has the same substitution semantics.
     pub custom_properties: BTreeMap<String, Option<Arc<[TokenKind]>>>,
     pub display: Display,
+    pub position: Position,
+    pub inset: Edges<LengthOrAuto>,
+    pub z_index: ZIndex,
+    /// Pre-blockification display used by CSS2's hypothetical static position.
+    pub positioned_inline: bool,
     pub direction: Direction,
     pub text_align: TextAlign,
     pub text_align_last: TextAlignLast,
@@ -225,6 +252,10 @@ impl Default for ComputedStyle {
             specified_colors: BTreeMap::new(),
             custom_properties: BTreeMap::new(),
             display: Display::Inline,
+            position: Position::Static,
+            inset: Edges::all(LengthOrAuto::Auto),
+            z_index: ZIndex::Auto,
+            positioned_inline: false,
             direction: Direction::Ltr,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,

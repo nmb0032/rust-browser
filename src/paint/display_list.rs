@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::css::values::{BorderStyle, Edges, ResolvedColor};
-use crate::layout::{BoxKind, LayoutBox, LayoutTree, Rect};
+use crate::layout::{BoxKind, CoordinateSpace, LayoutBox, LayoutTree, PaintPhase, Rect};
 use crate::media::DecodedImage;
 
 pub(crate) const DEFAULT_VIEWPORT_WIDTH: f32 = crate::css::media::DEFAULT_VIEWPORT_WIDTH;
@@ -12,6 +12,8 @@ const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    /// Subsequent drawing commands use this coordinate space until changed.
+    CoordinateSpace(CoordinateSpace),
     ColorRect {
         x: f32,
         y: f32,
@@ -86,17 +88,70 @@ pub(crate) fn build_display_list(
         h: viewport_height,
         color: BACKGROUND_COLOR,
     }];
+    // CSS2 14.2: the root background covers the canvas. For HTML, a
+    // transparent root propagates the body's background instead.
+    let canvas = layout.root_element().and_then(|root| {
+        if root.style().background.alpha > 0.0 {
+            Some(root)
+        } else if root.tag_name() == "<html>" {
+            root.children().iter().find(|b| b.tag_name() == "<body>")
+        } else {
+            None
+        }
+    });
+    if let Some(canvas) = canvas.filter(|b| b.style().background.alpha > 0.0) {
+        display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Viewport));
+        display_list.push(rect_item(DisplayItem::ColorRect {
+            x: 0.0,
+            y: 0.0,
+            w: viewport_width,
+            h: viewport_height,
+            color: canvas.style().background,
+        }));
+        display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
+    }
 
-    append_box_items(layout.root(), &mut display_list);
+    let mut space = CoordinateSpace::Document;
+    for (layout_box, phase) in crate::layout::paint_order(layout) {
+        if layout_box.coordinate_space() != space {
+            space = layout_box.coordinate_space();
+            display_list.push(DisplayItem::CoordinateSpace(space));
+        }
+        append_box_items(
+            layout_box,
+            phase,
+            canvas.is_none_or(|b| !std::ptr::eq(b, layout_box)),
+            &mut display_list,
+        );
+    }
     if show_outlines {
+        display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
         append_box_outlines(layout.root(), &mut display_list);
     }
     display_list
 }
 
-fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
-    append_decoration_items(layout_box, display_list);
-    if let Some(image) = layout_box.decoded_image() {
+fn append_box_items(
+    layout_box: &LayoutBox,
+    phase: PaintPhase,
+    paint_background: bool,
+    display_list: &mut Vec<DisplayItem>,
+) {
+    if matches!(
+        phase,
+        PaintPhase::Decoration | PaintPhase::InlineDecoration(_)
+    ) {
+        let fragment = if let PaintPhase::InlineDecoration(index) = phase {
+            Some(index)
+        } else {
+            None
+        };
+        append_decoration_items(layout_box, paint_background, fragment, display_list);
+        return;
+    }
+    if phase == PaintPhase::Content
+        && let Some(image) = layout_box.decoded_image()
+    {
         let rect = layout_box.content_rect();
         if rect.width > 0.0 && rect.height > 0.0 {
             display_list.push(DisplayItem::Image {
@@ -108,7 +163,8 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
             });
         }
     }
-    if let Some(marker) = layout_box.list_marker()
+    if phase == PaintPhase::Content
+        && let Some(marker) = layout_box.list_marker()
         && marker.style.text_fill_color.alpha > 0.0
         && marker.style.font_size > 0.0
     {
@@ -125,7 +181,12 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
         }));
     }
 
-    for fragment in layout_box.text_fragments() {
+    let fragments = if let PaintPhase::Text(index) = phase {
+        &layout_box.text_fragments()[index..=index]
+    } else {
+        layout_box.text_fragments()
+    };
+    for fragment in fragments {
         if fragment.text_color.alpha == 0.0 {
             continue;
         }
@@ -145,9 +206,17 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
         }));
     }
 
-    fn append_decoration_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
+    fn append_decoration_items(
+        layout_box: &LayoutBox,
+        paint_background: bool,
+        selected: Option<usize>,
+        display_list: &mut Vec<DisplayItem>,
+    ) {
         if layout_box.kind() == BoxKind::Inline && !layout_box.is_replaced_image() {
-            for fragment in layout_box.inline_fragments() {
+            for (index, fragment) in layout_box.inline_fragments().iter().enumerate() {
+                if selected.is_some_and(|selected| selected != index) {
+                    continue;
+                }
                 let mut widths = layout_box.style().border_width;
                 if !fragment.first {
                     widths.left = 0.0;
@@ -155,13 +224,20 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
                 if !fragment.last {
                     widths.right = 0.0;
                 }
-                append_decoration_rect(layout_box, fragment.rect, widths, display_list);
+                append_decoration_rect(
+                    layout_box,
+                    fragment.rect,
+                    widths,
+                    paint_background,
+                    display_list,
+                );
             }
         } else {
             append_decoration_rect(
                 layout_box,
                 layout_box.rect(),
                 layout_box.inline_edges(layout_box.style().border_width),
+                paint_background,
                 display_list,
             );
         }
@@ -171,13 +247,14 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
         layout_box: &LayoutBox,
         rect: Rect,
         widths: Edges<f32>,
+        paint_background: bool,
         display_list: &mut Vec<DisplayItem>,
     ) {
         let style = layout_box.style();
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        if style.background.alpha > 0.0 {
+        if paint_background && style.background.alpha > 0.0 {
             display_list.push(rect_item(DisplayItem::ColorRect {
                 x: rect.x,
                 y: rect.y,
@@ -225,10 +302,6 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
                 append_border(display_list, (x, y, w, h), color, border_style, horizontal);
             }
         }
-    }
-
-    for child in layout_box.children() {
-        append_box_items(child, display_list);
     }
 }
 
@@ -332,6 +405,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
 }
 
 fn append_box_outlines(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
+    display_list.push(DisplayItem::CoordinateSpace(layout_box.coordinate_space()));
     let mut outline = |rect: Rect, color| {
         if rect.width > 0.0 && rect.height > 0.0 {
             display_list.push(DisplayItem::OutlineRect {
@@ -373,7 +447,7 @@ fn append_box_outlines(layout_box: &LayoutBox, display_list: &mut Vec<DisplayIte
 }
 
 pub(crate) fn max_scroll_offset(layout: &LayoutTree, viewport_height: f32) -> f32 {
-    (layout.root().rect().height - viewport_height).max(0.0)
+    (layout.document_bottom() - viewport_height).max(0.0)
 }
 
 #[cfg(test)]

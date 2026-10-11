@@ -34,8 +34,16 @@ pub(crate) fn rasterize_display_list(
         return;
     }
 
+    let mut item_scroll = scroll_offset;
     for item in display_list {
         match item {
+            DisplayItem::CoordinateSpace(space) => {
+                item_scroll = if *space == crate::layout::CoordinateSpace::Document {
+                    scroll_offset
+                } else {
+                    0.0
+                };
+            }
             DisplayItem::ViewportBackground { w, h, color } => {
                 draw_rect(
                     pixels,
@@ -59,7 +67,7 @@ pub(crate) fn rasterize_display_list(
                 };
                 let Some(actual) = (crate::layout::Rect {
                     x: *x,
-                    y: *y - scroll_offset,
+                    y: *y - item_scroll,
                     width: *w,
                     height: *h,
                 })
@@ -83,15 +91,15 @@ pub(crate) fn rasterize_display_list(
             DisplayItem::OutlineRect { x, y, w, h, color } => {
                 let rect = PixelRect {
                     left: (*x * scale).floor() as i32,
-                    top: ((*y - scroll_offset) * scale).floor() as i32,
+                    top: ((*y - item_scroll) * scale).floor() as i32,
                     right: ((*x + *w) * scale).ceil() as i32,
-                    bottom: ((*y - scroll_offset + *h) * scale).ceil() as i32,
+                    bottom: ((*y - item_scroll + *h) * scale).ceil() as i32,
                 };
                 draw_outline_rect(pixels, width, height, rect, scale, *color);
             }
             DisplayItem::Image { x, y, w, h, image } => {
                 let left = *x * scale;
-                let top = (*y - scroll_offset) * scale;
+                let top = (*y - item_scroll) * scale;
                 let image_width = *w * scale;
                 let image_height = *h * scale;
                 if image_width <= 0.0 || image_height <= 0.0 {
@@ -132,7 +140,7 @@ pub(crate) fn rasterize_display_list(
                 glyphs,
                 ..
             } => {
-                let baseline = *baseline - scroll_offset;
+                let baseline = *baseline - item_scroll;
                 let (color, alpha) = match item {
                     DisplayItem::Text { color, .. } => (*color, 255),
                     DisplayItem::ColorText { color, .. } => color.to_srgb8(),

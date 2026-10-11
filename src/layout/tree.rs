@@ -19,8 +19,17 @@ pub enum BoxKind {
     Text,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CoordinateSpace {
+    #[default]
+    Document,
+    Viewport,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextFragment {
+    /// Source line within its generating inline formatting context.
+    pub line_index: usize,
     /// Horizontal advance origin; `width` is advance, not ink width.
     pub x: f32,
     /// Font metric top, not line top. Painting uses `baseline` explicitly.
@@ -66,6 +75,7 @@ pub struct LineBox {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct InlineFragment {
+    pub line_index: usize,
     pub rect: Rect,
     pub content_rect: Rect,
     pub baseline: f32,
@@ -75,6 +85,14 @@ pub struct InlineFragment {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutBox {
+    // Construction identity survives inline splitting; it is not DOM identity.
+    pub(super) box_id: usize,
+    pub(super) parent_box: Option<usize>,
+    pub(super) position_parent: Option<usize>,
+    pub(super) coordinate_space: CoordinateSpace,
+    pub(super) flow_width: f32,
+    pub(super) definite_height: Option<f32>,
+    pub(super) inline_line: Option<usize>,
     pub(super) node_id: Option<NodeId>,
     pub(super) tag_name: String,
     pub(super) kind: BoxKind,
@@ -98,6 +116,9 @@ pub struct LayoutBox {
 }
 
 impl LayoutBox {
+    pub fn coordinate_space(&self) -> CoordinateSpace {
+        self.coordinate_space
+    }
     /// Used content width after layout (including `auto` and range clamping).
     pub fn used_width(&self) -> UsedLength {
         UsedLength(self.content_rect.width)
@@ -199,6 +220,10 @@ impl LayoutBox {
     }
 
     pub(super) fn reset(&mut self) {
+        self.coordinate_space = CoordinateSpace::Document;
+        self.flow_width = 0.0;
+        self.definite_height = None;
+        self.inline_line = None;
         self.rect = Rect::default();
         self.content_rect = Rect::default();
         self.margin = Edges::default();
@@ -225,53 +250,23 @@ impl LayoutTree {
         &self.root
     }
 
+    pub(crate) fn root_element(&self) -> Option<&LayoutBox> {
+        root_element(&self.root)
+    }
+
     /// Generated-content failures and used-value failures from the latest
     /// layout, also reported to stderr. Construction failures survive relayout.
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
 
-    /// CSS/document coordinates. Text is tested per fragment, not its multi-line bounds.
+    /// CSS/document coordinates at zero scroll. See `hit_test_viewport` for
+    /// input while scrolled, including viewport-anchored fixed descendants.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        fn hit(layout_box: &LayoutBox, x: f32, y: f32) -> Option<NodeId> {
-            for child in layout_box.children.iter().rev() {
-                if let Some(id) = hit(child, x, y) {
-                    return Some(id);
-                }
-            }
-            let node_id = layout_box.node_id?;
-            let glyph_hit = layout_box
-                .text_fragments
-                .iter()
-                .rev()
-                .any(|fragment| {
-                    contains(fragment.ink_rect, x, y)
-                        || fragment.text.chars().all(|c| matches!(c, ' ' | '\t'))
-                            && contains(
-                                Rect {
-                                    x: fragment.x,
-                                    y: fragment.y,
-                                    width: fragment.width,
-                                    height: fragment.height,
-                                },
-                                x,
-                                y,
-                            )
-                })
-                .then_some(node_id);
-            if glyph_hit.is_some() || layout_box.kind == BoxKind::Text {
-                return glyph_hit;
-            }
-            if layout_box.kind == BoxKind::Inline && layout_box.image.is_none() {
-                return layout_box
-                    .inline_fragments
-                    .iter()
-                    .rev()
-                    .any(|fragment| contains(fragment.rect, x, y))
-                    .then_some(node_id);
-            }
-            contains(layout_box.rect, x, y).then_some(node_id)
-        }
+        self.hit_test_viewport(x, y, 0.0)
+    }
+
+    pub fn hit_test_viewport(&self, x: f32, y: f32, scroll: f32) -> Option<NodeId> {
         fn contains(rect: Rect, x: f32, y: f32) -> bool {
             rect.width > 0.0
                 && rect.height > 0.0
@@ -280,7 +275,67 @@ impl LayoutTree {
                 && y >= rect.y
                 && y < rect.y + rect.height
         }
-        hit(&self.root, x, y)
+        for (layout_box, phase) in super::paint_order(self).into_iter().rev() {
+            let Some(node_id) = layout_box.node_id else {
+                continue;
+            };
+            let y = y + if layout_box.coordinate_space == CoordinateSpace::Document {
+                scroll
+            } else {
+                0.0
+            };
+            let text_hit = |fragment: &TextFragment| {
+                contains(fragment.ink_rect, x, y)
+                    || fragment.text.chars().all(|c| matches!(c, ' ' | '\t'))
+                        && contains(
+                            Rect {
+                                x: fragment.x,
+                                y: fragment.y,
+                                width: fragment.width,
+                                height: fragment.height,
+                            },
+                            x,
+                            y,
+                        )
+            };
+            let hit = match phase {
+                super::PaintPhase::InlineDecoration(index) => {
+                    contains(layout_box.inline_fragments[index].rect, x, y)
+                }
+                super::PaintPhase::Text(index) => text_hit(&layout_box.text_fragments[index]),
+                super::PaintPhase::Decoration if layout_box.kind == BoxKind::Text => false,
+                super::PaintPhase::Decoration
+                    if layout_box.kind == BoxKind::Inline && layout_box.image.is_none() =>
+                {
+                    layout_box
+                        .inline_fragments
+                        .iter()
+                        .rev()
+                        .any(|f| contains(f.rect, x, y))
+                }
+                super::PaintPhase::Decoration => contains(layout_box.rect, x, y),
+                super::PaintPhase::Content => {
+                    layout_box.image.is_some() && contains(layout_box.content_rect, x, y)
+                        || layout_box.text_fragments.iter().rev().any(text_hit)
+                        || layout_box.list_marker.as_ref().is_some_and(|marker| {
+                            contains(
+                                Rect {
+                                    x: marker.x,
+                                    y: marker.baseline - marker.glyphs.ascent,
+                                    width: marker.glyphs.width,
+                                    height: marker.glyphs.ascent + marker.glyphs.descent,
+                                },
+                                x,
+                                y,
+                            )
+                        })
+                }
+            };
+            if hit {
+                return Some(node_id);
+            }
+        }
+        None
     }
 
     /// Bounds of all real boxes for a node, including block-in-inline
@@ -301,6 +356,19 @@ impl LayoutTree {
     }
 
     pub fn layout(&mut self, viewport_width: f32, font: &crate::text::FontContext) {
+        self.layout_viewport(
+            viewport_width,
+            crate::css::media::DEFAULT_VIEWPORT_HEIGHT,
+            font,
+        );
+    }
+
+    pub fn layout_viewport(
+        &mut self,
+        viewport_width: f32,
+        viewport_height: f32,
+        font: &crate::text::FontContext,
+    ) {
         self.root.reset();
         self.diagnostics.clone_from(&self.construction_diagnostics);
         let viewport_width = finite_used(
@@ -310,8 +378,16 @@ impl LayoutTree {
             &mut self.diagnostics,
         )
         .max(0.0);
+        let viewport_height = finite_used(
+            viewport_height as f64,
+            None,
+            "viewport-height",
+            &mut self.diagnostics,
+        )
+        .max(0.0);
         let content_x = PAGE_PADDING.min(viewport_width);
         let content_width = (viewport_width - 2.0 * PAGE_PADDING).max(0.0);
+        self.root.definite_height = Some(viewport_height.max(0.0));
         let content_height = layout_children(
             &mut self.root,
             content_x,
@@ -338,13 +414,65 @@ impl LayoutTree {
             ),
         };
         absolutize_y(&mut self.root, 0.0, &mut self.diagnostics);
+        super::positioning::position_tree(
+            &mut self.root,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: viewport_width,
+                height: viewport_height,
+            },
+            font,
+            &mut self.diagnostics,
+        );
+    }
+
+    /// Root scrolling remains a single viewport offset. Include document ink
+    /// overflow, but never fixed boxes or their viewport-space descendants.
+    pub(crate) fn document_bottom(&self) -> f32 {
+        fn bottom(b: &LayoutBox) -> f32 {
+            let own = if b.coordinate_space == CoordinateSpace::Document {
+                b.rect.y + b.rect.height
+            } else {
+                0.0
+            };
+            let ink = if b.coordinate_space == CoordinateSpace::Document {
+                let marker = b.list_marker.as_ref().map_or(own, |marker| {
+                    let ink =
+                        marker
+                            .glyphs
+                            .ink_bounds(marker.style.font_size, marker.x, marker.baseline);
+                    own.max(ink.y + ink.height)
+                });
+                b.text_fragments
+                    .iter()
+                    .map(|f| f.ink_rect.y + f.ink_rect.height)
+                    .fold(marker, f32::max)
+            } else {
+                own
+            };
+            b.children.iter().map(bottom).fold(ink, f32::max)
+        }
+        bottom(&self.root)
+    }
+}
+
+pub(super) fn root_element(b: &LayoutBox) -> Option<&LayoutBox> {
+    if b.tag_name == "#document" || b.is_anonymous() {
+        b.children.iter().find_map(root_element)
+    } else {
+        b.tag_name.starts_with('<').then_some(b)
     }
 }
 
 /// Blocks were laid out around their own zero border origin; inline boxes
 /// share their containing block's coordinates. Convert each box exactly once,
 /// including paint fragments and markers, without rerunning used-value math.
-fn absolutize_y(layout_box: &mut LayoutBox, offset: f64, diagnostics: &mut Vec<Diagnostic>) {
+pub(super) fn absolutize_y(
+    layout_box: &mut LayoutBox,
+    offset: f64,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let child_offset = if layout_box.kind == BoxKind::Block {
         offset + layout_box.rect.y as f64
     } else {
@@ -461,18 +589,35 @@ pub fn build_layout_tree_with_resources(
     images: &ImageMap,
 ) -> LayoutTree {
     let mut diagnostics = Vec::new();
+    let mut identity = Construction::default();
     let root = build_box(
         document,
         document.root_id(),
         styles,
         images,
         &mut diagnostics,
+        &mut identity,
     )
     .expect("the document root must have a computed style and layout box");
     LayoutTree {
         root,
         construction_diagnostics: diagnostics.clone(),
         diagnostics,
+    }
+}
+
+#[derive(Default)]
+struct Construction {
+    next: usize,
+    parent: Option<usize>,
+    positioned: Option<usize>,
+}
+
+impl Construction {
+    fn allocate(&mut self) -> usize {
+        let id = self.next;
+        self.next += 1;
+        id
     }
 }
 
@@ -595,6 +740,7 @@ fn build_box(
     styles: &ComputedStyles,
     images: &ImageMap,
     diagnostics: &mut Vec<Diagnostic>,
+    identity: &mut Construction,
 ) -> Option<LayoutBox> {
     let node = document.node(node_id)?;
     let style = styles
@@ -621,10 +767,16 @@ fn build_box(
             return None;
         }
     };
+    let box_id = identity.allocate();
+    let parent_box = identity.parent.replace(box_id);
+    let position_parent = identity.positioned;
+    if style.position != style::Position::Static {
+        identity.positioned = Some(box_id);
+    }
     let mut children: Vec<_> = node
         .children()
         .iter()
-        .filter_map(|id| build_box(document, *id, styles, images, diagnostics))
+        .filter_map(|id| build_box(document, *id, styles, images, diagnostics, identity))
         .collect();
     let mut marker_text = None;
     let mut marker_style = None;
@@ -642,14 +794,24 @@ fn build_box(
                 | "object"
                 | "embed"
         ) {
-            if let Some(before) =
-                generated_box(node_id, element, styles, PseudoElement::Before, diagnostics)
-            {
+            if let Some(before) = generated_box(
+                node_id,
+                element,
+                styles,
+                PseudoElement::Before,
+                diagnostics,
+                identity,
+            ) {
                 children.insert(0, before);
             }
-            if let Some(after) =
-                generated_box(node_id, element, styles, PseudoElement::After, diagnostics)
-            {
+            if let Some(after) = generated_box(
+                node_id,
+                element,
+                styles,
+                PseudoElement::After,
+                diagnostics,
+                identity,
+            ) {
                 children.push(after);
             }
         }
@@ -669,7 +831,33 @@ fn build_box(
             };
         }
     }
+    if style.display == Display::ListItem
+        && marker_text.is_none()
+        && let Some(parent) = node.parent().and_then(|id| document.node(id))
+        && parent
+            .as_element()
+            .is_some_and(|e| e.tag_name().eq_ignore_ascii_case("ol"))
+    {
+        let ordinal = 1 + parent
+            .children()
+            .iter()
+            .take_while(|&&id| id != node_id)
+            .filter(|&&id| {
+                styles
+                    .get(id)
+                    .is_some_and(|s| s.display == Display::ListItem)
+            })
+            .count();
+        marker_text = Some(format!("{ordinal}."));
+    }
     let mut layout_box = LayoutBox {
+        box_id,
+        parent_box,
+        position_parent,
+        coordinate_space: CoordinateSpace::Document,
+        flow_width: 0.0,
+        definite_height: None,
+        inline_line: None,
         node_id: Some(node_id),
         tag_name,
         kind,
@@ -695,33 +883,38 @@ fn build_box(
         inline_end: true,
     };
     if kind == BoxKind::Block && layout_box.image.is_none() {
-        normalize_block_children(&mut layout_box);
+        normalize_block_children(&mut layout_box, identity);
     }
+    identity.parent = parent_box;
+    identity.positioned = position_parent;
     Some(layout_box)
 }
 
-fn normalize_block_children(parent: &mut LayoutBox) {
+fn normalize_block_children(parent: &mut LayoutBox, identity: &mut Construction) {
     let children: Vec<_> = std::mem::take(&mut parent.children)
         .into_iter()
         .flat_map(split_inline)
         .collect();
-    if !children.iter().any(|child| child.kind == BoxKind::Block) {
+    if !children
+        .iter()
+        .any(|child| child.kind == BoxKind::Block && !child.style.position.out_of_flow())
+    {
         parent.children = children;
         return;
     }
     let mut run = Vec::new();
     for child in children {
-        if child.kind == BoxKind::Block {
-            flush_inline_run(parent, &mut run);
+        if child.kind == BoxKind::Block && !child.style.position.out_of_flow() {
+            flush_inline_run(parent, &mut run, identity);
             parent.children.push(child);
         } else {
             run.push(child);
         }
     }
-    flush_inline_run(parent, &mut run);
+    flush_inline_run(parent, &mut run, identity);
 }
 
-fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>) {
+fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: &mut Construction) {
     // Discard only collapsible text, not empty real inline/pseudo boxes,
     // decorated inline elements, replaced content, or non-CSS spaces (NBSP).
     if run.iter().all(|child| {
@@ -740,6 +933,17 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>) {
     let mut style = ComputedStyle::inherit(&parent.style);
     style.display = Display::Block;
     parent.children.push(LayoutBox {
+        box_id: identity.allocate(),
+        parent_box: Some(parent.box_id),
+        position_parent: if parent.style.position == style::Position::Static {
+            parent.position_parent
+        } else {
+            Some(parent.box_id)
+        },
+        coordinate_space: CoordinateSpace::Document,
+        flow_width: 0.0,
+        definite_height: None,
+        inline_line: None,
         node_id: None,
         tag_name: "#anonymous-block".into(),
         kind: BoxKind::Block,
@@ -767,21 +971,27 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>) {
 /// block. Real inline continuations retain identity and their computed style;
 /// the lifted blocks retain DOM inheritance rather than inheriting wrappers.
 fn split_inline(mut inline: LayoutBox) -> Vec<LayoutBox> {
-    if inline.kind != BoxKind::Inline || inline.image.is_some() {
+    if inline.kind != BoxKind::Inline
+        || inline.image.is_some()
+        || inline.style.position.out_of_flow()
+    {
         return vec![inline];
     }
     let children: Vec<_> = std::mem::take(&mut inline.children)
         .into_iter()
         .flat_map(split_inline)
         .collect();
-    if !children.iter().any(|child| child.kind == BoxKind::Block) {
+    if !children
+        .iter()
+        .any(|child| child.kind == BoxKind::Block && !child.style.position.out_of_flow())
+    {
         inline.children = children;
         return vec![inline];
     }
     let mut result = Vec::new();
     let mut run = Vec::new();
     for child in children {
-        if child.kind == BoxKind::Block {
+        if child.kind == BoxKind::Block && !child.style.position.out_of_flow() {
             // Keep the first and last continuations even when empty, but do
             // not insert empty continuations between consecutive blocks.
             if result.is_empty() || !run.is_empty() {
@@ -812,13 +1022,26 @@ fn generated_box(
     styles: &ComputedStyles,
     pseudo: PseudoElement,
     diagnostics: &mut Vec<Diagnostic>,
+    identity: &mut Construction,
 ) -> Option<LayoutBox> {
     let style = styles.pseudo(node_id, pseudo)?.clone();
     if style.display == Display::None {
         return None;
     }
     let text = generated_text(&style.content, element, node_id, pseudo, diagnostics)?;
+    let box_id = identity.allocate();
     let text_box = LayoutBox {
+        box_id: identity.allocate(),
+        parent_box: Some(box_id),
+        position_parent: if style.position == style::Position::Static {
+            identity.positioned
+        } else {
+            Some(box_id)
+        },
+        coordinate_space: CoordinateSpace::Document,
+        flow_width: 0.0,
+        definite_height: None,
+        inline_line: None,
         node_id: Some(node_id),
         tag_name: "#generated-text".into(),
         kind: BoxKind::Text,
@@ -841,6 +1064,13 @@ fn generated_box(
         inline_end: true,
     };
     Some(LayoutBox {
+        box_id,
+        parent_box: identity.parent,
+        position_parent: identity.positioned,
+        coordinate_space: CoordinateSpace::Document,
+        flow_width: 0.0,
+        definite_height: None,
+        inline_line: None,
         node_id: Some(node_id),
         tag_name: format!("::{}", pseudo.name()),
         kind: if matches!(style.display, Display::Block | Display::ListItem) {

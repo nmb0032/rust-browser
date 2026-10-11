@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Positioning and CSS2 stacking</title>
+  <style>
+    html, body { margin: 0; background: #faf8f4; color: #18212c; }
+    body { font: 16px/24px sans-serif; }
+    header {
+      position: fixed; inset: 0 0 auto; height: 48px; padding: 12px 24px;
+      box-sizing: border-box; background: #18212c; color: white; z-index: 10;
+    }
+    header span { position: absolute; right: 24px; top: 12px; }
+    main { margin: 64px auto 0; width: 640px; }
+    h1 { font-size: 28px; line-height: 36px; }
+    section { margin: 24px 0; padding: 16px; border: 1px solid #c7c0b5; }
+    .stage { position: relative; height: 190px; background: white; z-index: 0; }
+    .stage div { position: absolute; width: 160px; height: 96px; padding: 12px; }
+    .negative { top: 12px; left: 12px; background: #d67a46; z-index: -1; }
+    .auto { top: 36px; left: 100px; background: #65a9ad; }
+    .zero { top: 64px; left: 200px; background: #d9b445; z-index: 0; }
+    .positive { top: 92px; right: 12px; background: #8b70ae; z-index: 2; }
+    .stage .escape {
+      width: 72px; height: 32px; left: 72px; top: 12px;
+      background: #18212c; color: white; z-index: 3;
+    }
+    .relative { position: relative; left: 24px; top: -8px; background: #e1ece1; }
+    .inline { position: relative; background: #efe3ce; padding: 2px; }
+    .badge { position: absolute; bottom: 100%; left: 0; background: #18212c; color: white; padding: 2px 8px; }
+    .spacer { height: 700px; }
+  </style>
+</head>
+<body>
+  <header>Fixed header <span>Viewport anchored</span></header>
+  <main>
+    <h1>Positioning and stacking</h1>
+    <p>Scroll: the header stays still while the document moves beneath it.</p>
+    <section class="stage">
+      <div class="negative">Negative, above context background</div>
+      <div class="auto">Auto group<div class="escape">Escapes</div></div>
+      <div class="zero">Integer zero context</div>
+      <div class="positive">Positive context</div>
+    </section>
+    <section>
+      <p class="relative">Relative: visually moved, with its original flow allocation preserved.</p>
+      <p>Following content stays in normal flow.</p>
+    </section>
+    <section>
+      <p>An <span class="inline">inline containing block<span class="badge">Overlay</span></span> anchors an absolute badge without adding line width.</p>
+    </section>
+    <div class="spacer">Document scrolling, not nested scroll containers (8.9).</div>
+    <p>End of the positioning fixture.</p>
+  </main>
+</body>
+</html>

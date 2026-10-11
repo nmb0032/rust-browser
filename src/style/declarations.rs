@@ -12,8 +12,8 @@ use crate::css::{
 };
 
 use super::{
-    BaselineShift, BaselineSource, BoxSizing, Content, ContentItem, Direction, Display, TextAlign,
-    TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
+    BaselineShift, BaselineSource, BoxSizing, Content, ContentItem, Direction, Display, Position,
+    TextAlign, TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -27,6 +27,9 @@ pub(super) enum Property {
     BackgroundColor,
     BackgroundImage,
     Display,
+    Position,
+    Inset(Side),
+    ZIndex,
     Direction,
     TextAlignAll,
     TextAlignLast,
@@ -71,6 +74,8 @@ pub(super) enum Value {
     BackgroundImage(BackgroundImage),
     BorderStyle(BorderStyle),
     Display(Display),
+    Position(Position),
+    ZIndex(ZIndex),
     Direction(Direction),
     TextAlign(TextAlign),
     TextAlignLast(TextAlignLast),
@@ -377,6 +382,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::BackgroundImage
         | P::BorderStyle(_)
         | P::Display
+        | P::Position
         | P::Direction
         | P::TextAlignAll
         | P::TextAlignLast
@@ -391,9 +397,21 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
             (token.number()? == 0.0).then_some(Value::BaselineShift(BaselineShift::Zero))
         }
 
-        P::Width | P::Height | P::Margin(_) if lower == "auto" => Some(Value::Auto),
+        P::ZIndex => {
+            if lower == "auto" {
+                Some(Value::ZIndex(ZIndex::Auto))
+            } else {
+                let Component::Token(TokenKind::Number(number)) = token else {
+                    return None;
+                };
+                // CSS <integer> is lexical: 1.0 and 1e0 are not integers.
+                let integer = number.representation.parse::<i32>().ok()?;
+                Some(Value::ZIndex(ZIndex::Integer(integer)))
+            }
+        }
+        P::Width | P::Height | P::Margin(_) | P::Inset(_) if lower == "auto" => Some(Value::Auto),
         P::FontSize => font_size(token),
-        P::Width | P::Height | P::Margin(_) | P::Padding(_) | P::BorderWidth(_) => {
+        P::Width | P::Height | P::Margin(_) | P::Inset(_) | P::Padding(_) | P::BorderWidth(_) => {
             let length = if matches!(property, P::BorderWidth(_)) {
                 match lower.as_str() {
                     "thin" => Length::Px(1.0),
@@ -404,7 +422,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
             } else {
                 token.length()?
             };
-            if !matches!(property, P::Margin(_)) && !length.is_nonnegative() {
+            if !matches!(property, P::Margin(_) | P::Inset(_)) && !length.is_nonnegative() {
                 return None;
             }
             if matches!(property, P::BorderWidth(_)) && length.has_percentage() {

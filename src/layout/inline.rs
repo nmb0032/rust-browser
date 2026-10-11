@@ -74,6 +74,8 @@ struct BoxData {
     content: Rect,
     text: Vec<TextFragment>,
     fragments: Vec<InlineFragment>,
+    static_after_line: bool,
+    inline_line: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -87,6 +89,7 @@ enum Token {
     Omitted,
     Image(usize),
     Break(usize),
+    Positioned(usize),
 }
 
 impl Token {
@@ -106,7 +109,7 @@ impl Token {
                 let b = &boxes[*id];
                 b.margin.left as f64 + b.rect.width as f64 + b.margin.right as f64
             }
-            Self::Break(_) | Self::Control(..) | Self::Omitted => 0.0,
+            Self::Break(_) | Self::Control(..) | Self::Omitted | Self::Positioned(_) => 0.0,
         }
     }
 
@@ -129,7 +132,7 @@ impl Token {
                 b.padding.right != 0.0 || b.border.right != 0.0 || b.margin.right != 0.0
             }
             Self::Space(_, _, _, preserved) => *preserved,
-            Self::Control(..) | Self::Omitted => false,
+            Self::Control(..) | Self::Omitted | Self::Positioned(_) => false,
         }
     }
 }
@@ -137,7 +140,7 @@ impl Token {
 fn collect(
     layout: &LayoutBox,
     parent: Option<usize>,
-    width: f32,
+    (width, reference_height): (f32, Option<f32>),
     font: &crate::text::FontContext,
     boxes: &mut Vec<BoxData>,
     tokens: &mut Vec<Token>,
@@ -190,6 +193,8 @@ fn collect(
         content: Rect::default(),
         text: Vec::new(),
         fragments: Vec::new(),
+        static_after_line: false,
+        inline_line: None,
     };
     if let Some(image) = &layout.image {
         let horizontal = finite_used(
@@ -220,13 +225,13 @@ fn collect(
         let explicit_height = style
             .height
             .as_ref()
-            .filter(|length| !length.has_percentage())
+            .filter(|length| !length.has_percentage() || reference_height.is_some())
             .map(|length| {
                 style.box_sizing.content_size(
                     resolve_length(
                         length,
                         style.font_size,
-                        0.0,
+                        reference_height.unwrap_or(0.0),
                         layout.node_id,
                         "height",
                         diagnostics,
@@ -255,10 +260,18 @@ fn collect(
             diagnostics,
         );
         boxes.push(data);
+        if layout.style.position.out_of_flow() {
+            tokens.push(Token::Positioned(id));
+            return;
+        }
         tokens.push(Token::Image(id));
         return;
     }
     boxes.push(data);
+    if layout.style.position.out_of_flow() {
+        tokens.push(Token::Positioned(id));
+        return;
+    }
     if layout.tag_name == "<br>" {
         tokens.push(Token::Break(id));
     } else if layout.tag_name == "<wbr>" {
@@ -280,7 +293,15 @@ fn collect(
     } else {
         tokens.push(Token::Begin(id));
         for child in &layout.children {
-            collect(child, Some(id), width, font, boxes, tokens, diagnostics);
+            collect(
+                child,
+                Some(id),
+                (width, reference_height),
+                font,
+                boxes,
+                tokens,
+                diagnostics,
+            );
         }
         tokens.push(Token::End(id));
     }
@@ -339,6 +360,17 @@ impl Assembly<'_> {
             }
         }
         match token {
+            Token::Positioned(id) => {
+                self.boxes[id].static_after_line = self.real;
+                self.boxes[id].rect.x = if self.boxes[id].style.positioned_inline {
+                    self.x
+                } else {
+                    self.origin
+                };
+                self.boxes[id].rect.y = self.y;
+                self.boxes[id].content = self.boxes[id].rect;
+                self.items.push((Token::Positioned(id), self.x));
+            }
             Token::Begin(id) => {
                 let b = &self.boxes[id];
                 let node = b.node;
@@ -584,6 +616,7 @@ impl Assembly<'_> {
             b.content = finite_rect(b.content.union(content), b.node, self.diagnostics);
             b.rect = finite_rect(b.rect.union(rect), b.node, self.diagnostics);
             b.fragments.push(InlineFragment {
+                line_index: self.lines.len() - 1,
                 rect,
                 content_rect: content,
                 baseline,
@@ -642,6 +675,7 @@ impl Assembly<'_> {
                     );
                     b.content = b.rect;
                     b.text.push(TextFragment {
+                        line_index: self.lines.len() - 1,
                         x,
                         y,
                         baseline,
@@ -659,6 +693,7 @@ impl Assembly<'_> {
                 }
                 Token::Image(id) => {
                     let b = &mut self.boxes[id];
+                    b.inline_line = Some(self.lines.len() - 1);
                     b.rect.x = finite_used(
                         x as f64 + shift as f64 + b.margin.left as f64,
                         b.node,
@@ -704,6 +739,25 @@ impl Assembly<'_> {
                     };
                     b.content = b.rect;
                 }
+                Token::Positioned(id) => {
+                    let b = &mut self.boxes[id];
+                    b.rect.x = if b.style.positioned_inline {
+                        finite_used(
+                            x as f64 + shift as f64,
+                            b.node,
+                            "static position x",
+                            self.diagnostics,
+                        )
+                    } else {
+                        self.origin
+                    };
+                    b.rect.y = if !b.style.positioned_inline && b.static_after_line {
+                        self.y + height
+                    } else {
+                        self.y
+                    };
+                    b.content = b.rect;
+                }
                 _ => unreachable!(),
             }
         }
@@ -735,7 +789,7 @@ pub(super) fn layout_inline_run(
     children: &mut [LayoutBox],
     style: &ComputedStyle,
     node: Option<NodeId>,
-    (x, y, width): (f32, f32, f32),
+    (x, y, width, reference_height): (f32, f32, f32, Option<f32>),
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<LineBox>, f64) {
@@ -746,7 +800,7 @@ pub(super) fn layout_inline_run(
         collect(
             child,
             None,
-            width,
+            (width, reference_height),
             font,
             &mut boxes,
             &mut tokens,
@@ -778,9 +832,53 @@ pub(super) fn layout_inline_run(
     drop(assembly);
     let mut data = boxes.into_iter();
     for child in children {
+        child.flow_width = width;
         install(child, &mut data, font, diagnostics);
     }
     (lines, height)
+}
+
+pub(super) fn intrinsic_inline(
+    children: &[LayoutBox],
+    style: &ComputedStyle,
+    width: f32,
+    font: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (f32, f32) {
+    let strut = font_metrics(font, style, None, diagnostics);
+    let mut boxes = Vec::new();
+    let mut tokens = Vec::new();
+    for child in children {
+        collect(
+            child,
+            None,
+            (width, None),
+            font,
+            &mut boxes,
+            &mut tokens,
+            diagnostics,
+        );
+    }
+    let mut assembly = Assembly {
+        boxes: &mut boxes,
+        font,
+        diagnostics,
+        origin: 0.0,
+        y: 0.0,
+        x: 0.0,
+        width,
+        align: style.text_align,
+        direction: style.direction,
+        strut,
+        above: strut.above,
+        below: strut.below,
+        real: false,
+        active: Vec::new(),
+        segments: Vec::new(),
+        items: Vec::new(),
+        lines: Vec::new(),
+    };
+    breaking::intrinsic(tokens, style, &mut assembly)
 }
 
 fn install(
@@ -796,19 +894,25 @@ fn install(
     layout.margin = data.margin;
     layout.text_fragments = data.text;
     layout.inline_fragments = data.fragments;
+    layout.inline_line = data.inline_line;
+    if layout.style.position.out_of_flow() {
+        return;
+    }
     if let Some(image) = &layout.image {
-        if let Some(fragment) = image.alt_fragment(
+        if let Some(mut fragment) = image.alt_fragment(
             layout.content_rect,
             &layout.style,
             font,
             layout.node_id,
             diagnostics,
         ) {
+            fragment.line_index = layout.inline_line.unwrap_or(0);
             layout.text_fragments.push(fragment);
         }
         return;
     }
     for child in &mut layout.children {
+        child.flow_width = layout.flow_width;
         install(child, boxes, font, diagnostics);
     }
 }
