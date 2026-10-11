@@ -21,7 +21,7 @@ SOURCE = ROOT / "tools/css-spec"
 RUST = ROOT / "src/style/generated_properties.rs"
 REPORT = ROOT / "docs/css-coverage.md"
 SIDES = ("top", "right", "bottom", "left")
-ANIMATION_GAP = "No animation engine (including discrete animation)."
+ANIMATION_GAP = "Native replace/add timing; numeric/length/color/compatible transform/filter interpolation and diagnosed discrete fallback. See docs/animations.md for finite boundaries."
 UNIMPLEMENTED = "No executable property parser, cascade, computed or used-value handler."
 
 
@@ -183,9 +183,11 @@ def engine_registry(data, engine):
         if "order" in details:
             if set(details["order"]) != set(targets) or len(details["order"]) != len(targets):
                 raise ValueError(f"engine shorthand ordering differs from spec: {name}")
-            targets = details["order"]
+            targets = list(details["order"])
         reset = [child for target in properties[name].get("resetLonghands", [])
                  for child in flatten(target, properties)]
+        if details.get("reset_supported"):
+            targets += [child for child in reset if child in longhands and child not in targets]
         if not targets:
             raise ValueError(f"shorthand has no implemented targets: {name}")
         if details["parser"] == "Four" and len(targets) != 4:
@@ -262,7 +264,7 @@ def generate(data, engine, provenance):
         lines.append(syntax_record(entry) + ",")
     lines.extend([
         "];", "#[derive(Clone, Copy)]",
-        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place, Typography, Mask }",
+        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place, Typography, Mask, Animation }",
         "pub(super) fn parser(name: &str) -> Option<Parser> { Some(match name {",
     ])
     for name, details in sorted(supported.items()):
@@ -341,7 +343,8 @@ def report(properties, supported, engine, provenance):
         "Partial means an executable finite engine handler exists, not that an AST accepts "
         "the name or that its spec grammar/computation/layout is complete. Implemented would "
         "require all stages and a verified applicable external conformance gate. No property "
-        "currently meets that gate. All property animation remains absent. No WPT or "
+        "currently meets that gate. Native animation has finite interpolation/timeline boundaries "
+        "(docs/animations.md); metadata is not animation conformance. No WPT or "
         "Chrome/Firefox parity result is asserted.", "",
         "Full syntax, initial, inheritance, computed-value and animation strings are generated "
         "as metadata (missing source fields remain None). Only the color/keyword subsets and "

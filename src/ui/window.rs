@@ -55,6 +55,8 @@ pub fn run(
         fragment_scroll_pending: true,
         is_loading: true,
         reconciling_interaction: false,
+        animation_origin: Instant::now(),
+        animation_deadline: None,
     };
 
     event_loop.run_app(&mut app)?;
@@ -80,6 +82,8 @@ struct BrowserWindow {
     fragment_scroll_pending: bool,
     is_loading: bool,
     reconciling_interaction: bool,
+    animation_origin: Instant,
+    animation_deadline: Option<Instant>,
 }
 
 impl BrowserWindow {
@@ -108,6 +112,10 @@ impl BrowserWindow {
         let scale_factor = window.scale_factor();
         let size = window.inner_size();
         let frame = Arc::make_mut(&mut self.frame);
+        if let Err(error) = frame.set_animation_time(self.animation_origin.elapsed().as_secs_f64())
+        {
+            eprintln!("Animation clock: {error}");
+        }
         frame.set_media_environment(MediaEnvironment {
             color_scheme: window.theme().map(|theme| match theme {
                 winit::window::Theme::Light => crate::css::media::ColorScheme::Light,
@@ -151,6 +159,11 @@ impl BrowserWindow {
             self.fragment_scroll_pending = false;
             self.scroll_offset = self.layout_tree.viewport_scroll().y;
             Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+            if self.frame.animations().has_scroll_effects() {
+                self.rebuild_display_list();
+                self.request_redraw();
+                return;
+            }
             let logical = window.inner_size().to_logical::<f32>(scale_factor);
             self.display_list = paint::build_display_list(
                 &self.layout_tree,
@@ -184,6 +197,10 @@ impl BrowserWindow {
             match self.navigation.try_recv() {
                 Ok(LoadEvent::Progress(frame)) => {
                     let mut frame = frame;
+                    if !frame.same_animation_document(&self.frame) {
+                        self.animation_origin = Instant::now();
+                        self.animation_deadline = None;
+                    }
                     Arc::make_mut(&mut frame).copy_scroll_state_from(&self.frame);
                     if self.navigation.is_font_loading() {
                         let state = self.frame.interaction_state().clone();
@@ -334,6 +351,9 @@ impl BrowserWindow {
             });
         self.scroll_offset = self.layout_tree.viewport_scroll().y;
         Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+        if self.frame.animations().has_scroll_effects() {
+            self.rebuild_display_list();
+        }
         self.update_cursor();
         self.update_interaction(InteractionEvent::Pointer);
         self.request_redraw();
@@ -559,6 +579,7 @@ fn render_for_window_size(
     });
     let scroll = tree.viewport_scroll().y;
     frame.retain_scroll_state(&tree);
+    tree = frame.sample_scroll_animations(tree, font);
     let list = paint::build_display_list(&tree, logical.width, logical.height, outlines);
     (tree, list, scroll)
 }
@@ -758,6 +779,24 @@ impl ApplicationHandler for BrowserWindow {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.receive_load_events();
+        if self.frame.animations().needs_tick() && self.window.is_some() {
+            let now = Instant::now();
+            if self
+                .animation_deadline
+                .is_none_or(|deadline| now >= deadline)
+            {
+                let seconds = now.duration_since(self.animation_origin).as_secs_f64();
+                if let Err(error) = Arc::make_mut(&mut self.frame).set_animation_time(seconds) {
+                    eprintln!("Animation clock: {error}");
+                } else {
+                    self.rebuild_display_list();
+                    self.request_redraw();
+                }
+                self.animation_deadline = Some(now + Duration::from_millis(16));
+            }
+        } else {
+            self.animation_deadline = None;
+        }
         if !self.is_loading
             && !self.navigation.is_font_loading()
             && (self.frame.has_pending_web_fonts() || self.frame.has_pending_effect_images())
@@ -765,7 +804,11 @@ impl ApplicationHandler for BrowserWindow {
         {
             eprintln!("Could not start font loader: {error}");
         }
-        if self.is_loading || self.navigation.is_font_loading() {
+        if self.frame.animations().needs_tick() && self.window.is_some() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                self.animation_deadline.unwrap_or_else(Instant::now),
+            ));
+        } else if self.is_loading || self.navigation.is_font_loading() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(16),
             ));

@@ -74,8 +74,8 @@ referenced productions and animation descriptors are **not executable**
 grammar/computation/animation implementations. No unsupported metadata entry
 enters a catch-all property parser or makes `@supports` succeed.
 
-Coverage is 0 fully implemented, 225 partial canonical properties (176 longhands
-and 49 shorthands), 532 unimplemented canonical properties and 64 legacy
+Coverage is 0 fully implemented, 253 partial canonical properties (198 longhands
+and 55 shorthands), 504 unimplemented canonical properties and 64 legacy
 aliases (1 accepted for a partial target, 63 unsupported). Partial requires
 an executable engine handler, but every
 partial row records parser, cascade, computed, used/layout/paint and animation
@@ -87,6 +87,10 @@ The effects family uses a dedicated typed dispatcher; the generator validates
 that mapping. Its mask shorthand has eight executable layer longhands and
 explicit missing mask-border resets. Projected finite 3D, device-space filter
 kernels and finite raster masks do not imply full Transforms/Filters/SVG support.
+The motion family has typed atomic lists/shorthands and a retained native timing
+engine, not metadata-only animation acceptance. Supported animation reset
+targets are generated without inventing unsupported `animation-trigger`.
+See `docs/animations.md` for interpolation, scroll timing and native API limits.
 Declaration-local quirks are selected from HTML document mode, not from the
 tokenizer or Webref metadata. Eligible declarations and `@supports` use the
 same context, including pending `var()` shorthands and imports; registered

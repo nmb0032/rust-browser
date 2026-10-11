@@ -3126,7 +3126,7 @@ and the CSSOM parts covered here meet the conformance gate.
   Arabic, Hebrew and Japanese faces, with no render diagnostics.
   This checkbox records the bounded implemented step; **the milestone exit
   criteria and external/full-WPT typography conformance gate remain unmet**.
-  **8.18 and later work remain untouched.**
+  At the 8.16 checkpoint, **8.18 and later work remained untouched**.
 - [x] **8.17 Add transforms, effects, and compositing.** Implement 2D and 3D
   transforms, `opacity`, filters, `backdrop-filter`, Compositing and Blending,
   masking, `clip-path`, and the stacking contexts they create.
@@ -3240,11 +3240,76 @@ and the CSSOM parts covered here meet the conformance gate.
   Native CLI evidence and demonstration PNGs are retained in
   `target/reftests/m817-scale1` and `target/reftests/m817-scale2`.
   This checkbox records the **bounded implemented step**, not external/full-WPT
-  effects conformance. **Milestone 8 is not complete; 8.18 is not started.**
-- [ ] **8.18 Add animations.** Implement CSS Transitions, CSS Animations, the
+  effects conformance. **Milestone 8 is not complete.**
+- [x] **8.18 Add animations.** Implement CSS Transitions, CSS Animations, the
   Web Animations model, and scroll-driven animations. Integrate their timing
   with the HTML rendering update steps in 10.11.
   *You'll see:* animated pages move at the same times as in browsers.
+
+  **Native update pipeline:** `Frame` owns an explicit document clock, retained
+  effect IDs/lifecycle and separate author/sampled snapshots. The native window
+  supplies monotonic `Instant` offsets and approximately 16 ms `WaitUntil`
+  redraws only for running document-timed effects; paused/finished/scroll-only
+  pages idle. Sampling enters the existing cascade before selected-font
+  computation, contextual units, shaping, layout and real display-list paint.
+  Same-document progressive resource snapshots retain animation state;
+  navigation/reload gets fresh identity. Future HTML rendering-update 10.11
+  can call this boundary, but **JavaScript, DOM bindings, promises and event
+  dispatch are not implemented or claimed**.
+
+  **CSS/timing:** Generated dispatch adds 22 motion longhands and six atomic
+  shorthands (198 longhands/55 shorthands total), with normal variables, wide
+  keywords, resets and list ambiguity handling. Conditional/import/layer
+  collection compiles ordered `@keyframes`, combined duplicate offsets,
+  multiple selectors, missing underlying endpoints and per-segment easing;
+  keyframe important declarations are ignored. Animations override author
+  normal but not important; transitions override even important. Native
+  validated timing supports negative delay, fractional/infinite iterations,
+  alternate/reverse/fill, zero-duration bounds, cubic Bézier/steps jump
+  variants, pause/resume/seek/rate/finish/cancel and elapsed-second Rust
+  observation records. Matching names retain creation time across restyles.
+  Transitions use actual prior rendered values, last matching property lists,
+  continuous interruption and reversal shortening; initial load does not
+  transition, and hidden/removed targets/pseudos cancel.
+
+  **Visible samples and scroll timing:** Numeric/computed math/percentages,
+  fonts/layout dimensions, premultiplied Oklab color, opacity and compatible
+  component transform/basic filter lists affect real layout/glyphs/pixels.
+  A finite add subset is executable; unsupported accumulate/value pairs
+  diagnose replace/discrete fallback rather than pretend matrix decomposition
+  or full accumulation. Root/self/nearest ancestor and named ancestor
+  scroll/view sources use completed layout scrollports/ranges, logical/
+  physical axes, negative origins, view subject entry/exit/cover/contain
+  ranges and computed insets. Inactive sources preserve underlying styles.
+  One additional sampled layout provides bounded scroll feedback, never an
+  unbounded convergence loop. Input/resource/container style changes share
+  the same retained production path.
+
+  **Deterministic evidence and limits:** Headless `--animation-time` accepts
+  bare milliseconds or `ms`/`s`, defaults to frozen zero, settles resources
+  before establishing effects, and samples without sleeping. Readiness
+  scripts remain unsupported and diagnostics remain failures. Six independent
+  nonzero-time reference pairs at scales 1/2 supplement all 29 preserved
+  time-zero pairs; `tests/pages/animations.html` is the native demonstration.
+  Native Rust tests cover exact timing/lifecycle, real interpolated layout/
+  font/paint, cascade/variables/pseudos/keyframes, interruption/reversal,
+  resources/container updates and nested/logical/named/view scroll timing.
+  Finite lists/effects/keyframes/events/math/resource/raster budgets and
+  unsupported linear(), timeline-scope, custom-keyframe properties, matrix/
+  shadow/discrete-transition interpolation and full Web Animations task/
+  event/promise behavior are detailed in [animations.md](animations.md).
+  `cargo test --all-features` passes **887 tests** (783 library plus 104
+  integration tests), including the unchanged original line-break tests.
+  Formatting, strict all-target/all-feature Clippy, benchmark compilation,
+  seven offline CSS-generator tests, deterministic CSS/replaced-fixture
+  checks and `git diff --check` pass. Native CLI comparisons pass all 29
+  time-zero pages and six one-second pages at both scales, without fuzzy
+  tolerance. Logs, manifests, comparison PNGs and demo screenshots are in
+  `target/reftests/m818-time0-scale1`, `m818-time0-scale2`,
+  `m818-time1-scale1` and `m818-time1-scale2`.
+  This checkbox records the **bounded working implementation**, not external/
+  full-WPT conformance. **Milestone 8 remains incomplete; 8.19 and later work
+  are untouched.**
 - [ ] **8.19 Complete scrolling.** Implement `position: sticky`, scroll
   snapping, `scroll-behavior`, overscroll behavior, scrollbar styling, and
   scrolling to fragments.

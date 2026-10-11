@@ -26,6 +26,8 @@ pub struct Options {
     pub scale: f64,
     pub scroll: ScrollOffset,
     pub panels: Vec<PanelScroll>,
+    /// Frozen document timeline in seconds (default zero).
+    pub animation_time: f64,
 }
 
 impl Default for Options {
@@ -36,6 +38,7 @@ impl Default for Options {
             scale: 1.0,
             scroll: ScrollOffset::default(),
             panels: Vec::new(),
+            animation_time: 0.0,
         }
     }
 }
@@ -51,15 +54,17 @@ impl Options {
             || !(1.0..=f64::from(MAX_DIMENSION)).contains(&width)
             || !(1.0..=f64::from(MAX_DIMENSION)).contains(&height)
             || self.panels.len() > 128
+            || !crate::style::animation::valid_time(self.animation_time)
+            || self.animation_time < 0.0
         {
             return Err(io::Error::other(
-                "invalid screenshot size/scale: integral device dimensions 1..4096, scale 0.125..8, at most 128 panels required",
+                "invalid screenshot options: integral device dimensions 1..4096, scale 0.125..8, at most 128 panels, finite animation time 0..1000000000 seconds required",
             ).into());
         }
         for offset in std::iter::once(&self.scroll).chain(self.panels.iter().map(|p| &p.offset)) {
             if [offset.x, offset.y]
                 .iter()
-                .any(|v| !v.is_finite() || !(0.0..=1_000_000.0).contains(v))
+                .any(|v| !v.is_finite() || v.abs() > 1_000_000.0)
             {
                 return Err(io::Error::other("invalid screenshot scroll offset").into());
             }
@@ -212,6 +217,11 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
     if frame.has_pending_web_fonts() {
         return Err(io::Error::other("headless web fonts did not settle").into());
     }
+    if !frame.animations().initialized() {
+        frame.set_animation_time(0.0)?;
+        frame.layout_with_container_queries(&fonts);
+    }
+    frame.set_animation_time(options.animation_time)?;
     let mut tree = frame.layout_with_container_queries(&fonts);
     frame.load_pending_effect_images(|_| Ok(()), || false)?;
     tree.effect_images = frame.effect_images.clone();
@@ -237,6 +247,8 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
         }
         tree.set_scroll_offset(ids[0], panel.offset);
     }
+    frame.retain_scroll_state(&tree);
+    tree = frame.sample_scroll_animations(tree, &fonts);
     if !frame.stylesheets.diagnostics.is_empty() || !tree.diagnostics().is_empty() {
         return Err(io::Error::other(format!(
             "headless render diagnostics: CSS/resources {:?}; layout {:?}",

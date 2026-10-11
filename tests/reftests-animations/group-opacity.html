@@ -1,0 +1,10 @@
+<!doctype html>
+<link rel="match" href="support/group-opacity-ref.html">
+<style>
+html,body{margin:0}
+@keyframes fade{from{opacity:1}to{opacity:0}}
+.group{position:absolute;width:100px;height:60px;animation:fade 2s linear both}
+.red{position:absolute;width:60px;height:60px;background:red}
+.blue{position:absolute;left:40px;width:60px;height:60px;background:blue}
+</style>
+<div class="group"><div class="red"></div><div class="blue"></div></div>

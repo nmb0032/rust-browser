@@ -42,6 +42,7 @@ fn style(source: &str) -> ComputedStyle {
 fn projection(style: &ComputedStyle, property: Property) -> String {
     use Property as P;
     match property {
+        P::Animation(p) => format!("{:?}", style.motion.get(p)),
         P::Effect(p) => format!("{:?}", style.effects.get(p)),
         P::Typography(p) => format!("{:?}", style.typography.get(p)),
         P::Logical(_) => projection(style, property.physical(style)),
@@ -234,18 +235,18 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 226, 532, 63]);
-    assert_eq!(longhands.len(), 176);
+    assert_eq!(counts, [0, 254, 504, 63]);
+    assert_eq!(longhands.len(), 198);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 174);
+    assert_eq!(all.len(), 196);
     longhands.remove(&Property::Direction);
     longhands.remove(&Property::UnicodeBidi);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **225 partial**, **532 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **253 partial**, **504 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**176 longhands**, **49 shorthands**"));
+    assert!(report.contains("**198 longhands**, **55 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -567,7 +568,13 @@ fn every_shorthand_wide_rule_matches_its_actual_supported_spec_longhands() {
                 .map(|property| property.name())
                 .collect::<Vec<_>>()
         } else {
-            spec_targets(name)
+            let mut targets = spec_targets(name);
+            if name == "animation" {
+                for reset in metadata::property(name).unwrap().reset_longhands {
+                    targets.extend(spec_targets(reset));
+                }
+            }
+            targets
                 .into_iter()
                 .filter(|name| {
                     declarations::properties(name).is_some_and(|properties| {

@@ -3,6 +3,7 @@ pub(crate) mod components;
 mod keywords;
 pub(crate) mod math;
 
+pub(crate) use color::color_mix;
 pub use color::{Color, ColorSpace, HueMethod, ResolvedColor, parse_color};
 pub use keywords::{
     BackgroundImage, BorderStyle, FamilyName, FontFamily, FontSizeKeyword, FontStyle, FontWeight,

@@ -23,6 +23,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum Property {
+    Animation(super::animation::Property),
     Effect(super::effects::Property),
     Typography(super::typography::Property),
     Content,
@@ -264,6 +265,7 @@ pub(super) enum WideKeyword {
 
 #[derive(Clone, Debug)]
 pub(super) enum Value {
+    Animation(super::animation::Value),
     Effect(super::effects::Value),
     Typography(super::typography::Value),
     Content(Content),
@@ -429,6 +431,7 @@ pub(super) fn parse_tokens_with_context(
         return Some(vec![Value::Wide(wide); properties.len()]);
     }
     match parser {
+        Parser::Animation => super::animation::shorthand(name, &properties, &tokens),
         Parser::Typography => {
             let mut values = properties
                 .iter()
@@ -753,6 +756,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     }
     use Property as P;
     match property {
+        P::Animation(p) => return super::animation::parse(p, tokens).map(Value::Animation),
         P::Effect(p) => return super::effects::parse(p, tokens).map(Value::Effect),
         P::Typography(p) => return super::typography::parse(p, tokens).map(Value::Typography),
         P::Display => return super::box_values::display(tokens).map(Value::Display),
@@ -817,7 +821,8 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     };
     let lower = token.ident().unwrap_or("").to_ascii_lowercase();
     match property {
-        P::Effect(_)
+        P::Animation(_)
+        | P::Effect(_)
         | P::Typography(_)
         | P::Content
         | P::Color

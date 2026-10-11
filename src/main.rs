@@ -50,6 +50,25 @@ struct Args {
     /// Programmatic panel offset, element-id:X:Y (repeatable).
     #[arg(long, value_parser = panel)]
     panel_scroll: Vec<rust_browser::screenshot::PanelScroll>,
+
+    /// Freeze declarative animations for native screenshots/reftests: 500ms,
+    /// 0.5s, or bare milliseconds. Default zero; no scripts are executed.
+    #[arg(long, default_value="0", value_parser=animation_time)]
+    animation_time: f64,
+}
+
+fn animation_time(value: &str) -> Result<f64, String> {
+    let (value, divisor) = if let Some(v) = value.strip_suffix("ms") {
+        (v, 1000.0)
+    } else if let Some(v) = value.strip_suffix('s') {
+        (v, 1.0)
+    } else {
+        (value, 1000.0)
+    };
+    let seconds = value.parse::<f64>().map_err(|_| "invalid animation time")? / divisor;
+    (rust_browser::style::animation::valid_time(seconds) && seconds >= 0.0)
+        .then_some(seconds)
+        .ok_or("animation time must be finite, nonnegative and bounded".into())
 }
 
 fn viewport(value: &str) -> Result<(u32, u32), String> {
@@ -82,12 +101,18 @@ fn panel(value: &str) -> Result<rust_browser::screenshot::PanelScroll, String> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    if args.animation_time != 0.0 && args.screenshot.is_none() && args.reftests.is_none() {
+        return Err(
+            io::Error::other("--animation-time requires --screenshot or --reftests").into(),
+        );
+    }
     let options = rust_browser::screenshot::Options {
         width: args.viewport.0,
         height: args.viewport.1,
         scale: args.device_scale,
         scroll: args.scroll,
         panels: args.panel_scroll,
+        animation_time: args.animation_time,
     };
     if let Some(suite) = args.reftests {
         let report =

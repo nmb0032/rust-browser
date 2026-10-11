@@ -336,6 +336,71 @@ pub(crate) fn tokenize(source: &str) -> Option<Vec<TokenKind>> {
 }
 
 impl MathExpression {
+    /// Blend already-computed length expressions without serializing CSS or
+    /// discarding their percentage basis. Repeated transition interruptions
+    /// must obey the same depth/node budget as authored math.
+    pub(crate) fn interpolate_lengths(
+        a: &super::Length,
+        b: &super::Length,
+        t: f64,
+    ) -> Option<Arc<Self>> {
+        let expression = |l: &super::Length| match l {
+            super::Length::Math(v) => Some(v.clone()),
+            super::Length::Px(v) => Some(Arc::new(Self {
+                dimension: Dimension::LENGTH,
+                node: Node::Value(f64::from(*v), Unit::Number),
+                height: 1,
+            })),
+            super::Length::Percent(v) => Some(Arc::new(Self {
+                dimension: Dimension::LENGTH,
+                node: Node::Value(f64::from(*v), Unit::Percent),
+                height: 1,
+            })),
+            _ => None,
+        };
+        let (a, b) = (expression(a)?, expression(b)?);
+        let height = a.height.max(b.height) + 2;
+        if height > MAX_MATH_DEPTH {
+            return None;
+        }
+        let mut pending = vec![a.as_ref(), b.as_ref()];
+        let mut count = 0;
+        while let Some(v) = pending.pop() {
+            count += 1;
+            if count + 5 > MAX_MATH_TOKENS {
+                return None;
+            }
+            match &v.node {
+                Node::Binary(_, a, b) => {
+                    pending.push(a);
+                    pending.push(b);
+                }
+                Node::Function(_, v) => pending.extend(v.iter().map(AsRef::as_ref)),
+                Node::Value(..) => {}
+            }
+        }
+        let weighted = |v: Arc<Self>, weight: f64| {
+            Arc::new(Self {
+                dimension: Dimension::LENGTH,
+                height: v.height + 1,
+                node: Node::Binary(
+                    '*',
+                    v,
+                    Arc::new(Self {
+                        dimension: Dimension::NUMBER,
+                        height: 1,
+                        node: Node::Value(weight, Unit::Number),
+                    }),
+                ),
+            })
+        };
+        Some(Arc::new(Self {
+            dimension: Dimension::LENGTH,
+            height,
+            node: Node::Binary('+', weighted(a, 1.0 - t), weighted(b, t)),
+        }))
+    }
+
     pub fn parse(source: &str, percentage_hint: Option<Dimension>) -> Option<Arc<Self>> {
         Self::from_tokens(&tokenize(source)?, percentage_hint)
     }

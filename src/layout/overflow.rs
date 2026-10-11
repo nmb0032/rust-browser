@@ -941,11 +941,15 @@ impl LayoutTree {
                 for ancestor in path.into_iter().rev() {
                     if ancestor.box_id != b.box_id {
                         rect = rect.and_then(|r| {
-                            ancestor
+                            let perspective = ancestor
                                 .style
                                 .effects
-                                .perspective(ancestor.rect, ancestor.style.font_size)
-                                .bounds(r)
+                                .perspective(ancestor.rect, ancestor.style.font_size);
+                            if perspective == super::Mat4::IDENTITY {
+                                Some(r)
+                            } else {
+                                perspective.bounds(r)
+                            }
                         });
                     }
                     if let Some(container) = self.overflow.get(&ancestor.box_id)

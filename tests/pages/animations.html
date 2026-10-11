@@ -1,0 +1,25 @@
+<!doctype html>
+<title>Native CSS animation clock</title>
+<style>
+body{margin:32px;background:#f6f7fb;color:#243047;font:18px/1.5 sans-serif}
+h1{font-size:32px}
+.track{width:420px;padding:16px;border:2px solid #c6ccda;background:white}
+@keyframes travel{
+  from{transform:translateX(0px);background-color:#3270dc}
+  to{transform:translateX(340px);background-color:#ac42b8}
+}
+@keyframes breathe{from{opacity:.25}to{opacity:1}}
+.runner{width:48px;height:48px;background:#3270dc;animation:travel 3s ease-in-out infinite alternate both}
+.indicator{margin-top:16px;width:120px;height:16px;background:#3270dc;animation:breathe 2s linear infinite alternate}
+.track:hover .runner{animation-play-state:paused}
+.button{display:block;width:160px;padding:12px;background:#3270dc;color:white;transition:width 600ms ease,background-color 600ms linear}
+.button:hover{width:260px;background:#ac42b8}
+@media(prefers-reduced-motion:reduce){.runner,.indicator{animation:none}.button{transition:none}}
+</style>
+<h1>Time, in the native pipeline</h1>
+<p>The box moves continuously. Hover the track to pause it; leave to resume.</p>
+<div class="track"><div class="runner"></div></div>
+<div class="indicator"></div>
+<p>Hover this block to interrupt and reverse a layout transition:</p>
+<div class="button">Native transition</div>
+<p>No JavaScript, timers, or wall-clock sleeps are involved in deterministic screenshots.</p>

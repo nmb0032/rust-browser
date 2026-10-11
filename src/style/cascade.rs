@@ -61,6 +61,7 @@ struct StyledSheet {
     registrations: Vec<RegisteredRule>,
     fonts: Vec<FontRule>,
     counters: Vec<(css::counter_style::CounterStyle, usize, usize)>,
+    keyframes: Vec<super::animation::Keyframes>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,9 +134,11 @@ enum CascadeLevel {
     User,
     Presentational,
     Author,
+    Animation,
     AuthorImportant,
     UserImportant,
     UserAgentImportant,
+    Transition,
 }
 
 impl Origin {
@@ -425,6 +428,7 @@ fn resolve_internal_container_state<const MODE: u8>(
         state,
         containers,
         &crate::text::FontContext::bundled(),
+        None,
     )
 }
 
@@ -446,6 +450,29 @@ pub fn resolve_with_fonts(
         state,
         containers,
         fonts,
+        None,
+    )
+}
+
+pub(crate) fn resolve_animated(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    environment: MediaEnvironment,
+    state: &InteractionState,
+    containers: &ContainerSnapshot,
+    fonts: &crate::text::FontContext,
+    animations: &mut super::animation::Engine,
+) -> StyleResolution {
+    resolve_internal_fonts::<2>(
+        document,
+        stylesheets,
+        &[],
+        user_agent_rules(),
+        environment,
+        state,
+        containers,
+        fonts,
+        Some(animations),
     )
 }
 
@@ -459,6 +486,7 @@ fn resolve_internal_fonts<const MODE: u8>(
     state: &InteractionState,
     containers: &ContainerSnapshot,
     fonts: &crate::text::FontContext,
+    mut animations: Option<&mut super::animation::Engine>,
 ) -> StyleResolution {
     let mut environment = environment;
     let initial_size = if environment.initial_font_size.is_finite() {
@@ -546,6 +574,27 @@ fn resolve_internal_fonts<const MODE: u8>(
         })
         .collect::<Vec<_>>();
     let author_rules = rank_layers(author_rules, &author_layers);
+    let mut keyframe_candidates = BTreeMap::new();
+    for (origin, sheets) in [(Origin::User, &user_rules), (Origin::Author, &author_rules)] {
+        for (sheet_order, sheet) in sheets.iter().enumerate() {
+            for (order, k) in sheet.keyframes.iter().enumerate() {
+                let priority = (origin.level(false), k.rank, sheet_order, order);
+                if keyframe_candidates
+                    .get(&k.name)
+                    .is_none_or(|(old, _)| priority >= *old)
+                {
+                    keyframe_candidates.insert(k.name.clone(), (priority, k.clone()));
+                }
+            }
+        }
+    }
+    let keyframes = keyframe_candidates
+        .into_iter()
+        .map(|(name, (_, k))| (name, k))
+        .collect();
+    if let Some(a) = animations.as_deref_mut() {
+        a.begin();
+    }
     let has_pseudos = std::iter::once(user_agent)
         .chain(user_rules.iter())
         .chain(author_rules.iter())
@@ -793,7 +842,7 @@ fn resolve_internal_fonts<const MODE: u8>(
                     length_context(&parent.style, environment, root_metrics),
                 );
                 let is_root = root_metrics.is_none();
-                let result = compute_with_context(
+                let result = compute_animated(
                     parent,
                     &winners,
                     node_id,
@@ -805,6 +854,9 @@ fn resolve_internal_fonts<const MODE: u8>(
                         registrations: &registrations,
                         fonts,
                     },
+                    None,
+                    animations.as_deref_mut(),
+                    &keyframes,
                 );
                 let mut result = result;
                 if parent.style.display == Display::Contents && !result.style.position.out_of_flow()
@@ -892,7 +944,7 @@ fn resolve_internal_fonts<const MODE: u8>(
                     if !pseudo_winners.candidates.is_empty()
                         || !pseudo_winners.custom_candidates.is_empty()
                     {
-                        let computed = compute_with_context(
+                        let computed = compute_animated(
                             &result,
                             &pseudo_winners,
                             node_id,
@@ -909,6 +961,9 @@ fn resolve_internal_fonts<const MODE: u8>(
                                 registrations: &registrations,
                                 fonts,
                             },
+                            Some(pseudo),
+                            animations.as_deref_mut(),
+                            &keyframes,
                         );
                         pseudos.insert((node_id, pseudo), computed.style);
                     }
@@ -928,6 +983,9 @@ fn resolve_internal_fonts<const MODE: u8>(
         pending.extend(node.children().iter().rev().map(|&id| (id, false)));
     }
     stylesheets.diagnostics.extend(matching.diagnostics.entries);
+    if let Some(a) = animations {
+        a.end();
+    }
     let mut counter_styles = css::counter_style::CounterStyles::default();
     for sheets in [&user_rules, &author_rules] {
         let mut candidates = sheets
@@ -1014,6 +1072,9 @@ fn rank_layers(mut sheets: Vec<StyledSheet>, layers: &Layers) -> Vec<StyledSheet
         }
         for (_, layer, rank) in &mut sheet.counters {
             *rank = ranks[*layer];
+        }
+        for k in &mut sheet.keyframes {
+            k.rank = ranks[k.layer];
         }
     }
     sheets
@@ -1212,6 +1273,36 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
                 let mut next_scopes = scopes.to_vec();
                 let mut next_active = active;
                 match name.as_str() {
+                    "keyframes" => {
+                        if parent.is_some() || !scopes.is_empty() || !self.containers.is_empty() {
+                            self.diagnostic("@keyframes in style/scope/container rules is outside the finite implementation");
+                            return;
+                        }
+                        let mut messages = Vec::new();
+                        let parsed = super::animation::effects::parse_keyframes(
+                            rule,
+                            self.declaration_context,
+                            self.url.as_ref(),
+                            &mut messages,
+                        );
+                        for message in messages {
+                            self.diagnostic(message);
+                        }
+                        match parsed {
+                            Ok(mut k)
+                                if active
+                                    && self.result.keyframes.len()
+                                        < super::animation::MAX_KEYFRAMES =>
+                            {
+                                k.layer = layer;
+                                self.result.keyframes.push(k);
+                            }
+                            Ok(_) if active => self.diagnostic("keyframes rule limit exceeded"),
+                            Ok(_) => {}
+                            Err(message) => self.diagnostic(message),
+                        }
+                        return;
+                    }
                     "counter-style" => {
                         if parent.is_some() || !self.containers.is_empty() || !scopes.is_empty() {
                             self.diagnostic(
@@ -1563,7 +1654,7 @@ fn append_sheet_diagnostics(
 
 type LonghandWinners = HashMap<Property, (Priority, Value)>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Winners {
     longhands: LonghandWinners,
     custom: BTreeMap<String, (Priority, Value)>,
@@ -1745,7 +1836,11 @@ fn cascade_origin(level: CascadeLevel) -> u8 {
     match level {
         CascadeLevel::UserAgent | CascadeLevel::UserAgentImportant => 0,
         CascadeLevel::User | CascadeLevel::UserImportant => 1,
-        CascadeLevel::Presentational | CascadeLevel::Author | CascadeLevel::AuthorImportant => 2,
+        CascadeLevel::Presentational
+        | CascadeLevel::Author
+        | CascadeLevel::AuthorImportant
+        | CascadeLevel::Animation
+        | CascadeLevel::Transition => 2,
     }
 }
 
@@ -1909,6 +2004,7 @@ fn substitute_winners(
 struct ComputedNode {
     style: ComputedStyle,
     colors: ComputedColors,
+    hidden: bool,
 }
 
 struct ComputedColors {
@@ -2020,12 +2116,220 @@ fn set_selected_metrics(context: &mut LengthContext, style: &ComputedStyle) {
     context.ideographic_advance = units.ic;
 }
 
+#[derive(Clone)]
 struct ComputationContext<'a> {
     lengths: LengthContext,
     is_root: bool,
     initial_font_size: f32,
     registrations: &'a Registrations,
     fonts: &'a crate::text::FontContext,
+}
+
+pub(super) fn animation_value(style: &ComputedStyle, p: Property) -> Value {
+    let parent = ComputedNode {
+        style: style.clone(),
+        hidden: false,
+        colors: ComputedColors {
+            background: Color::Absolute(style.background),
+            fill: Color::Absolute(style.text_fill_color),
+            border: Edges {
+                top: Color::Absolute(style.borders.top),
+                right: Color::Absolute(style.borders.right),
+                bottom: Color::Absolute(style.borders.bottom),
+                left: Color::Absolute(style.borders.left),
+            },
+        },
+    };
+    computed_value(&Value::Wide(WideKeyword::Inherit), p, &parent, style)
+}
+
+fn animation_priority(transition: bool) -> Priority {
+    Priority {
+        level: if transition {
+            CascadeLevel::Transition
+        } else {
+            CascadeLevel::Animation
+        },
+        inline: false,
+        layer_rank: 0,
+        specificity: Specificity::default(),
+        proximity: std::cmp::Reverse(0),
+        sheet: 0,
+        rule: 0,
+        declaration: 0,
+        layer: 0,
+        normal_rank: 0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_animated(
+    parent: &ComputedNode,
+    winners: &Winners,
+    node: NodeId,
+    diagnostics: &mut Vec<Diagnostic>,
+    context: ComputationContext<'_>,
+    pseudo: Option<PseudoElement>,
+    animations: Option<&mut super::animation::Engine>,
+    keyframes: &BTreeMap<String, super::animation::Keyframes>,
+) -> ComputedNode {
+    let mut base = compute_with_context(parent, winners, node, diagnostics, context.clone());
+    base.hidden = parent.hidden || base.style.display == Display::None;
+    let Some(animations) = animations else {
+        return base;
+    };
+    let mut effect_base = base.style.clone();
+    if base.hidden {
+        effect_base.display = Display::None;
+    }
+    let values = animations.sample(
+        (node, pseudo),
+        &effect_base,
+        keyframes,
+        |keyframes, sampled| {
+            let prime = |target: &mut Winners| {
+                for (&p, v) in sampled
+                    .iter()
+                    .filter(|(p, _)| super::animation::effects::font_dependency(**p))
+                {
+                    insert(
+                        target,
+                        &StyledDeclaration {
+                            property: DeclarationProperty::Longhand(p),
+                            value: v.clone(),
+                            important: false,
+                            order: 0,
+                        },
+                        animation_priority(false),
+                    );
+                }
+            };
+            let mut underlying = winners.clone();
+            prime(&mut underlying);
+            let underlying =
+                compute_with_context(parent, &underlying, node, &mut Vec::new(), context.clone())
+                    .style;
+            let frames = keyframes
+                .frames
+                .iter()
+                .map(|frame| {
+                    let mut endpoints = winners.clone();
+                    let mut props = std::collections::BTreeSet::new();
+                    let mut segment_easing = false;
+                    for d in &frame.declarations {
+                        let DeclarationProperty::Longhand(p) = d.property else {
+                            continue;
+                        };
+                        if p == Property::Animation(super::animation::Property::Easing) {
+                            segment_easing = true;
+                        } else if matches!(p, Property::Animation(_)) {
+                            continue;
+                        }
+                        props.insert(p.physical(&base.style));
+                        insert(&mut endpoints, d, animation_priority(true));
+                    }
+                    let computed = compute_with_context(
+                        parent,
+                        &endpoints,
+                        node,
+                        &mut Vec::new(),
+                        context.clone(),
+                    );
+                    // Keyframe font values are sampled first. Other keyframe values
+                    // resolve relative units against the target's sampled font, not
+                    // the font-size written at that individual keyframe offset.
+                    let mut dependent = endpoints.clone();
+                    for p in [
+                        Property::FontSize,
+                        Property::FontFamily,
+                        Property::FontWeight,
+                        Property::FontStyle,
+                        Property::Typography(typography::Property::FontWidth),
+                        Property::Typography(typography::Property::FontFeatures),
+                        Property::Typography(typography::Property::FontVariations),
+                        Property::Typography(typography::Property::FontOpticalSizing),
+                        Property::Typography(typography::Property::FontKerning),
+                        Property::Typography(typography::Property::FontLigatures),
+                    ] {
+                        insert(
+                            &mut dependent,
+                            &StyledDeclaration {
+                                property: DeclarationProperty::Longhand(p),
+                                value: animation_value(&underlying, p),
+                                important: false,
+                                order: 0,
+                            },
+                            animation_priority(true),
+                        );
+                    }
+                    let dependent = compute_with_context(
+                        parent,
+                        &dependent,
+                        node,
+                        &mut Vec::new(),
+                        context.clone(),
+                    );
+                    let easing = if segment_easing {
+                        if let super::animation::Value::Easings(v) = computed
+                            .style
+                            .motion
+                            .get(super::animation::Property::Easing)
+                        {
+                            v.first().cloned()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    super::animation::effects::SampleKeyframe {
+                        offset: frame.offset,
+                        values: props
+                            .into_iter()
+                            .filter(|p| !matches!(p, Property::Animation(_)))
+                            .map(|p| {
+                                (
+                                    p,
+                                    animation_value(
+                                        if super::animation::effects::font_dependency(p) {
+                                            &computed.style
+                                        } else {
+                                            &dependent.style
+                                        },
+                                        p,
+                                    ),
+                                )
+                            })
+                            .collect(),
+                        easing,
+                    }
+                })
+                .collect();
+            super::animation::effects::KeyframeSamples { frames, underlying }
+        },
+        diagnostics,
+    );
+    if values.is_empty() {
+        animations.rendered((node, pseudo), &base.style);
+        return base;
+    }
+    let mut animated = winners.clone();
+    for (p, value, transition) in values {
+        insert(
+            &mut animated,
+            &StyledDeclaration {
+                property: DeclarationProperty::Longhand(p),
+                value,
+                important: false,
+                order: 0,
+            },
+            animation_priority(transition),
+        );
+    }
+    let mut result = compute_with_context(parent, &animated, node, diagnostics, context);
+    result.hidden = base.hidden;
+    animations.rendered((node, pseudo), &result.style);
+    result
 }
 
 fn compute_with_context(
@@ -2413,7 +2717,11 @@ fn compute_with_context(
             });
         }
     }
-    ComputedNode { style, colors }
+    ComputedNode {
+        style,
+        colors,
+        hidden: false,
+    }
 }
 
 fn compute_color_value(
@@ -2466,6 +2774,7 @@ fn absolutize(
     reference: f32,
 ) -> Option<Value> {
     match value {
+        Value::Animation(v) => super::animation::compute(v, context).map(Value::Animation),
         Value::Typography(typography::Value::Length(length)) => Some(Value::Typography(
             typography::Value::Length(length.computed(context)?.0),
         )),
@@ -2570,6 +2879,7 @@ fn computed_value(
     let style = &parent.style;
     use Property as P;
     match property {
+        P::Animation(p) => Value::Animation(style.motion.get(p)),
         P::Logical(_) => computed_value(value, property.physical(style), parent, initial),
         P::Effect(p) => Value::Effect(style.effects.get(p)),
         P::Typography(p) => Value::Typography(style.typography.get(p)),
@@ -2699,6 +3009,7 @@ fn computed_value(
 fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, value: Value) {
     use Property as P;
     match (property, value) {
+        (P::Animation(p), Value::Animation(v)) => style.motion.set(p, v),
         (P::Effect(p), Value::Effect(v)) => style.effects.set(p, v),
         (P::Typography(p), Value::Typography(v)) => {
             style
@@ -2905,7 +3216,10 @@ mod tests {
                 CascadeLevel::AuthorImportant => (Origin::Author, true),
                 CascadeLevel::UserImportant => (Origin::User, true),
                 CascadeLevel::UserAgentImportant => (Origin::UserAgent, true),
-                CascadeLevel::UserAgent | CascadeLevel::Presentational => unreachable!(),
+                CascadeLevel::UserAgent
+                | CascadeLevel::Presentational
+                | CascadeLevel::Animation
+                | CascadeLevel::Transition => unreachable!(),
             };
             let source = if important {
                 "p {color:blue !important}"

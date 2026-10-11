@@ -26,6 +26,7 @@
 //! sheets on each viewport change; [`crate::engine::Frame`] retains that input
 //! separately to avoid accumulating resolution diagnostics during resize.
 
+pub mod animation;
 mod box_values;
 mod cascade;
 mod compat;
@@ -46,6 +47,7 @@ pub use grid::{GridAutoFlow, GridLine, GridRepeat, GridTrack, TrackBreadth, Trac
 mod property;
 mod stylesheets;
 mod variables;
+pub(crate) use cascade::resolve_animated;
 pub(crate) use cascade::{FontRule, font_rules};
 
 pub use crate::css::selectors::{InteractionState, PseudoElement};

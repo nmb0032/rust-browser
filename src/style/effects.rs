@@ -1185,6 +1185,12 @@ pub(crate) fn compute(mut v: Value, ctx: &LengthContext) -> Option<Value> {
         l(&mut v.2, ctx)
     }
     match &mut v {
+        Value::Number(value) => {
+            if !value.is_finite() {
+                return None;
+            }
+            *value = value.clamp(0.0, 1.0);
+        }
         Value::Length(v) => l(v, ctx)?,
         Value::Origin(v) => o(v, ctx)?,
         Value::Transforms(v) => {
@@ -1196,6 +1202,15 @@ pub(crate) fn compute(mut v: Value, ctx: &LengthContext) -> Option<Value> {
                         }
                     }
                     Transform::Perspective(v) => l(v, ctx)?,
+                    Transform::Scale(values) if !values.iter().all(|v| v.is_finite()) => {
+                        return None;
+                    }
+                    Transform::Rotate(axis, angle)
+                        if !angle.is_finite() || !axis.iter().all(|v| v.is_finite()) =>
+                    {
+                        return None;
+                    }
+                    Transform::Skew(x, y) if !x.is_finite() || !y.is_finite() => return None,
                     _ => {}
                 }
             }
@@ -1209,6 +1224,22 @@ pub(crate) fn compute(mut v: Value, ctx: &LengthContext) -> Option<Value> {
                         l(y, ctx)?;
                         l(blur, ctx)?
                     }
+                    Filter::Brightness(n) | Filter::Contrast(n) | Filter::Saturate(n) => {
+                        if !n.is_finite() {
+                            return None;
+                        }
+                        *n = n.max(0.0);
+                    }
+                    Filter::Grayscale(n)
+                    | Filter::Sepia(n)
+                    | Filter::Invert(n)
+                    | Filter::Opacity(n) => {
+                        if !n.is_finite() {
+                            return None;
+                        }
+                        *n = n.clamp(0.0, 1.0);
+                    }
+                    Filter::HueRotate(angle) if !angle.is_finite() => return None,
                     _ => {}
                 }
             }

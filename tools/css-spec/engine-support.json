@@ -1,5 +1,27 @@
 {
   "longhands": {
+    "animation-name": {"rust": "Animation(super::animation::Property::Name)", "policy": "animation", "sample": "move, fade"},
+    "animation-duration": {"rust": "Animation(super::animation::Property::Duration)", "policy": "animation", "sample": "2s, 100ms"},
+    "animation-delay-start": {"rust": "Animation(super::animation::Property::Delay)", "policy": "animation", "sample": "-200ms"},
+    "animation-delay-end": {"rust": "Animation(super::animation::Property::EndDelay)", "policy": "animation", "sample": "200ms"},
+    "animation-iteration-count": {"rust": "Animation(super::animation::Property::Iterations)", "policy": "animation", "sample": "2.5, infinite"},
+    "animation-direction": {"rust": "Animation(super::animation::Property::Direction)", "policy": "animation", "sample": "alternate-reverse"},
+    "animation-fill-mode": {"rust": "Animation(super::animation::Property::Fill)", "policy": "animation", "sample": "both"},
+    "animation-play-state": {"rust": "Animation(super::animation::Property::Play)", "policy": "animation", "sample": "paused"},
+    "animation-timing-function": {"rust": "Animation(super::animation::Property::Easing)", "policy": "animation", "sample": "steps(4, jump-both)"},
+    "animation-composition": {"rust": "Animation(super::animation::Property::Composition)", "policy": "animation", "sample": "add"},
+    "animation-timeline": {"rust": "Animation(super::animation::Property::Timeline)", "policy": "animation", "sample": "scroll(root block)"},
+    "animation-range-start": {"rust": "Animation(super::animation::Property::RangeStart)", "policy": "animation", "sample": "entry 20%"},
+    "animation-range-end": {"rust": "Animation(super::animation::Property::RangeEnd)", "policy": "animation", "sample": "exit 80%"},
+    "transition-property": {"rust": "Animation(super::animation::Property::TransitionProperty)", "policy": "animation", "sample": "width, opacity"},
+    "transition-duration": {"rust": "Animation(super::animation::Property::TransitionDuration)", "policy": "animation", "sample": "1s"},
+    "transition-delay": {"rust": "Animation(super::animation::Property::TransitionDelay)", "policy": "animation", "sample": "-50ms"},
+    "transition-timing-function": {"rust": "Animation(super::animation::Property::TransitionEasing)", "policy": "animation", "sample": "linear"},
+    "scroll-timeline-name": {"rust": "Animation(super::animation::Property::ScrollName)", "policy": "animation", "sample": "--progress"},
+    "scroll-timeline-axis": {"rust": "Animation(super::animation::Property::ScrollAxis)", "policy": "animation", "sample": "inline"},
+    "view-timeline-name": {"rust": "Animation(super::animation::Property::ViewName)", "policy": "animation", "sample": "--reveal"},
+    "view-timeline-axis": {"rust": "Animation(super::animation::Property::ViewAxis)", "policy": "animation", "sample": "block"},
+    "view-timeline-inset": {"rust": "Animation(super::animation::Property::ViewInset)", "policy": "animation", "sample": "10% 20px"},
     "transform": {"rust": "Effect(super::effects::Property::Transform)", "policy": "effects", "sample": "translate(10%, 2px) rotate(90deg)"},
     "transform-origin": {"rust": "Effect(super::effects::Property::TransformOrigin)", "policy": "effects", "sample": "left top 2px"},
     "transform-box": {"rust": "Effect(super::effects::Property::TransformBox)", "policy": "effects", "sample": "content-box"},
@@ -168,6 +190,12 @@
     "border-*-color": {"rust": "BorderColor", "policy": "border-color", "sample": "purple"}
   },
   "shorthands": {
+    "animation": {"parser": "Animation", "policy": "animation", "sample": "2s linear -1s infinite alternate both running move", "reset_supported": true, "order": ["animation-duration", "animation-timing-function", "animation-delay-start", "animation-delay-end", "animation-iteration-count", "animation-direction", "animation-fill-mode", "animation-play-state", "animation-name", "animation-timeline"]},
+    "animation-delay": {"parser": "Animation", "policy": "animation", "sample": "-200ms 100ms", "order": ["animation-delay-start", "animation-delay-end"]},
+    "transition": {"parser": "Animation", "policy": "animation", "sample": "width 1s ease-in -100ms, opacity 2s linear", "order": ["transition-duration", "transition-timing-function", "transition-delay", "transition-property"]},
+    "animation-range": {"parser": "Animation", "policy": "animation", "sample": "entry 10% exit 90%", "order": ["animation-range-start", "animation-range-end"]},
+    "scroll-timeline": {"parser": "Animation", "policy": "animation", "sample": "--progress inline", "order": ["scroll-timeline-axis", "scroll-timeline-name"]},
+    "view-timeline": {"parser": "Animation", "policy": "animation", "sample": "--reveal block", "order": ["view-timeline-axis", "view-timeline-name"]},
     "mask": {"parser": "Mask", "policy": "effects", "sample": "linear-gradient(black, transparent) center / 50% auto no-repeat border-box alpha"},
     "text-decoration": {"parser": "Typography", "policy": "typography", "sample": "underline double red", "order": ["text-decoration-line", "text-decoration-style", "text-decoration-color", "text-decoration-thickness"]},
     "list-style": {"parser": "Typography", "policy": "typography", "sample": "lower-roman inside", "order": ["list-style-type", "list-style-position", "list-style-image"]},
@@ -249,6 +277,7 @@
     "container-type": {"keywords": {"normal": "Value::ContainerType(ContainerType::Normal)", "inline-size": "Value::ContainerType(ContainerType::InlineSize)", "size": "Value::ContainerType(ContainerType::Size)"}}
   },
   "policies": {
+    "animation": {"parser": "Bounded typed timing/effect lists, atomic shorthands; linear() and timeline-scope excluded.", "cascade": "Normal typed/variable shorthand machinery; animations below important, transitions above important.", "computed": "Native document timing; no JS bindings.", "used": "Frame samples before fonts/layout/paint; scroll/view timing from completed geometry."},
     "effects": {"parser": "Bounded typed 2D/3D functions, CSS box origins, numeric/filter lists, basic shapes, mask image/gradient and layer lists. SVG references/path()/rounded inset and extended gradients are rejected.", "cascade": "Generated longhands, CSS-wide rollback, all and pending variables use the normal cascade; effect-created stacking contexts stop z-index escape.", "computed": "Selected-font, viewport and container units computed with finite math; box percentages retained. Independent translate/rotate/scale precede transform.", "used": "Post-layout finite plane projection/inverse input; transparent RGBA effect groups, projected device-space filters/backdrop, W3C blend modes, local-policy masks and center-tested shapes with nearest source sampling. No intersecting preserve-3d surfaces, full backdrop-root/kernel-space/SVG masking or GPU/color-management claim."},
     "typography": {"parser": "Typed finite Text/Decoration/Fonts/Lists grammars; no text-wrap balance/pretty, reversed() counter-reset, speak-as or SVG font execution.", "cascade": "CSS-wide, variables and rollback through generated property dispatch; decorations establish independent non-inherited sources; counters are document-order scoped.", "computed": "Typed keywords, lengths, canonical sorted OpenType settings, counter operations and generated text; transformed text retains source mapping.", "used": "Grapheme-safe Text wrapping and justification, English-US licensed hyphenation, Unicode language casing, native decoration strokes, real variable/color font masks and scoped list markers/counter formats. Finite limits and unsupported formats diagnosed; no full spec/WPT claim."},
     "aspect-ratio": {"parser": "Finite nonnegative ratios, auto and auto ratio in either order; negative/duplicate/interleaved tokens rejected. Degenerate zero ratios behave as auto; ratio math and unrepresentable ratios are rejected.", "cascade": "Non-inherited typed preferred ratio; CSS-wide/var/rollback.", "computed": "Auto flag and finite preferred ratio.", "used": "Content/border-box auto-axis transfer, content-box auto-ratio transfer, replaced natural ratio precedence and non-scrollable ratio-dependent automatic content minimums; two explicit axes remain independent. Replaced fallback dimensions do not invent a natural ratio. Min/max clamps may break an impossible ratio; full bidirectional constraint transfer and advanced cyclic/fragmented sizing remain partial; no animation."},

@@ -1,4 +1,5 @@
 mod modern;
+pub(crate) use modern::animation_mix as color_mix;
 pub use modern::{ColorSpace, HueMethod, ResolvedColor};
 
 #[derive(Clone, Debug, PartialEq)]

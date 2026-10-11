@@ -16,8 +16,8 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 176)
-        self.assertEqual(len(supported), 226)
+        self.assertEqual(len(longhands), 198)
+        self.assertEqual(len(supported), 254)
         for name in ("aspect-ratio", "object-fit", "object-position"):
             self.assertIn(name, supported)
         self.assertNotIn("display", self.engine["simple_values"])

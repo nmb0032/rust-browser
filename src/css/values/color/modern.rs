@@ -507,6 +507,17 @@ pub struct Mix {
     alpha_multiplier: f64,
 }
 
+pub(crate) fn animation_mix(left: ResolvedColor, right: ResolvedColor, progress: f64) -> Mix {
+    Mix {
+        space: ColorSpace::Oklab,
+        hue: HueMethod::Shorter,
+        left: Color::Absolute(left),
+        right: Color::Absolute(right),
+        weight: 1.0 - progress,
+        alpha_multiplier: 1.0,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Channel {
     None,

@@ -23,6 +23,9 @@ pub struct Frame {
     pub stylesheets: StylesheetCollection,
     pub external_stylesheet_sources: HashMap<NodeId, StylesheetSource>,
     pub styles: ComputedStyles,
+    /// Immutable cascade snapshot for this update, never sampled effects.
+    pub author_styles: ComputedStyles,
+    animations: style::animation::Engine,
     pub images: ImageMap,
     pub marker_images: ImageMap,
     pub effect_images: HashMap<String, Arc<crate::media::DecodedImage>>,
@@ -72,7 +75,9 @@ impl Frame {
             document,
             stylesheets: resolution.stylesheets,
             external_stylesheet_sources: HashMap::new(),
+            author_styles: resolution.styles.clone(),
             styles: resolution.styles,
+            animations: style::animation::Engine::default(),
             images: ImageMap::new(),
             marker_images: ImageMap::new(),
             effect_images: HashMap::new(),
@@ -223,7 +228,68 @@ impl Frame {
     pub(crate) fn copy_scroll_state_from(&mut self, frame: &Frame) {
         if self.scroll_state.same_document(&frame.scroll_state) {
             self.scroll_state = frame.scroll_state.clone();
+            self.animations = frame.animations.clone();
         }
+    }
+
+    pub fn animations(&self) -> &style::animation::Engine {
+        &self.animations
+    }
+    pub fn animations_mut(&mut self) -> &mut style::animation::Engine {
+        &mut self.animations
+    }
+    pub(crate) fn same_animation_document(&self, other: &Self) -> bool {
+        self.scroll_state.same_document(&other.scroll_state)
+    }
+    pub(super) fn set_document_scroll_identity(&mut self, state: layout::ScrollState) {
+        self.scroll_state = state;
+    }
+
+    /// Explicit document clock. Native UI supplies a monotonic Instant offset;
+    /// headless callers supply deterministic seconds, never sleep.
+    pub fn set_animation_time(&mut self, seconds: f64) -> Result<(), &'static str> {
+        self.animations.set_time(seconds)
+    }
+
+    /// One bounded scroll/layout feedback sample from completed geometry. The
+    /// resulting tree owns the same scroll identity and sampled paint styles.
+    pub fn sample_scroll_animations(
+        &mut self,
+        tree: LayoutTree,
+        _font: &crate::text::FontContext,
+    ) -> LayoutTree {
+        if !self.animations.has_scroll_effects() {
+            return tree;
+        }
+        self.retain_scroll_state(&tree);
+        let containers = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
+        self.animations.timelines =
+            style::animation::timelines::Snapshot::from_layout(&self.document, &self.styles, &tree);
+        let resolution = style::resolve_animated(
+            &self.document,
+            self.collected_stylesheets.clone(),
+            self.media_environment,
+            &self.interaction_state,
+            &containers,
+            &self.fonts,
+            &mut self.animations,
+        );
+        self.styles = resolution.styles;
+        self.stylesheets = resolution.stylesheets;
+        for d in self.animations.diagnostics() {
+            if !self.stylesheets.diagnostics.contains(d) {
+                self.stylesheets.diagnostics.push(d.clone());
+            }
+        }
+        let mut sampled = self.layout_tree();
+        let font = self.fonts.clone();
+        sampled.layout_viewport(
+            self.media_environment.viewport_width,
+            self.media_environment.viewport_height,
+            &font,
+        );
+        self.retain_scroll_state(&sampled);
+        sampled
     }
 
     /// Resolve and lay out a fresh snapshot to bounded container-query
@@ -243,6 +309,7 @@ impl Frame {
         let font = self.fonts.clone();
         let mut snapshot = style::ContainerSnapshot::default();
         let mut last = None;
+        let animation_base = self.animations.clone();
         for _ in 0..limit.max(1) {
             let mut sheets = self.collected_stylesheets.clone();
             sheets
@@ -256,8 +323,33 @@ impl Frame {
                 &snapshot,
                 &font,
             );
+            self.author_styles = resolution.styles.clone();
             self.stylesheets = resolution.stylesheets;
             self.styles = resolution.styles;
+            self.animations = animation_base.clone();
+            {
+                let resolution = style::resolve_animated(
+                    &self.document,
+                    self.collected_stylesheets.clone(),
+                    self.media_environment,
+                    &self.interaction_state,
+                    &snapshot,
+                    &font,
+                    &mut self.animations,
+                );
+                self.styles = resolution.styles;
+                self.stylesheets = resolution.stylesheets;
+                for d in self.web_fonts.diagnostics() {
+                    if !self.stylesheets.diagnostics.contains(d) {
+                        self.stylesheets.diagnostics.push(d.clone());
+                    }
+                }
+                for d in self.animations.diagnostics() {
+                    if !self.stylesheets.diagnostics.contains(d) {
+                        self.stylesheets.diagnostics.push(d.clone());
+                    }
+                }
+            }
             let mut tree = self.layout_tree();
             tree.layout_viewport(
                 self.media_environment.viewport_width,
@@ -267,7 +359,7 @@ impl Frame {
             let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
             if next == snapshot {
                 self.retain_scroll_state(&tree);
-                return tree;
+                return self.sample_scroll_animations(tree, &font);
             }
             snapshot = next;
             last = Some(tree);
@@ -283,13 +375,19 @@ impl Frame {
         });
         let tree = last.expect("at least one feedback layout pass");
         self.retain_scroll_state(&tree);
-        tree
+        self.sample_scroll_animations(tree, &font)
     }
 
     pub(super) fn set_stylesheets(&mut self, stylesheets: StylesheetCollection) {
         self.collected_stylesheets = stylesheets.clone();
         self.stylesheets = stylesheets;
         self.refresh_fonts();
+    }
+
+    /// Native CSSOM/resource-update boundary. Effects retain their creation
+    /// times; the next layout performs normal cascade and transition matching.
+    pub fn replace_author_stylesheets(&mut self, stylesheets: StylesheetCollection) {
+        self.set_stylesheets(stylesheets);
     }
 
     /// Selected document overlay, including downloaded sources. No resource I/O.
@@ -328,6 +426,7 @@ impl Frame {
             &self.fonts,
         );
         self.stylesheets = resolution.stylesheets;
+        self.author_styles = resolution.styles.clone();
         self.styles = resolution.styles;
     }
 

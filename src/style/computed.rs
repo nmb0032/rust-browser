@@ -584,6 +584,7 @@ impl BoxSizing {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComputedStyle {
+    pub motion: super::animation::Motion,
     pub container_type: crate::css::container::ContainerType,
     pub container_names: Vec<String>,
     pub content: Content,
@@ -692,6 +693,7 @@ pub struct ComputedStyle {
 impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
+            motion: super::animation::Motion::default(),
             container_type: crate::css::container::ContainerType::Normal,
             container_names: Vec::new(),
             content: Content::Normal,

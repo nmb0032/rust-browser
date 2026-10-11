@@ -52,8 +52,10 @@ fn load(
     policy: super::resource_policy::ResourcePolicy,
 ) -> Result<Frame, Box<dyn Error>> {
     policy.check(url)?;
+    let document_identity = crate::layout::ScrollState::default();
     let new_frame = |url, document| {
         let mut frame = Frame::new_with_environment(url, document, environment);
+        frame.set_document_scroll_identity(document_identity.clone());
         frame.resource_policy = policy.clone();
         frame
     };

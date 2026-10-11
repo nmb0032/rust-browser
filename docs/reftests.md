@@ -1,4 +1,4 @@
-# Native headless reftests (milestones 8.13–8.17)
+# Native headless reftests (milestones 8.13–8.18)
 
 Run from the repository root:
 
@@ -39,8 +39,13 @@ layout engine, or UI capture path. Normal interactive loading remains unchanged.
   equivalent script/testdriver setup.
 - Device dimensions must be integral, positive and at most **4096×4096**; scales
   are finite **0.125–8**. Fractional device dimensions are rejected, not rounded.
-  Scroll inputs must be finite, nonnegative and at most 1,000,000 CSS pixels;
+  Scroll inputs must be finite with magnitude at most 1,000,000 CSS pixels;
   at most 128 panel requests are accepted.
+- `--animation-time N` freezes the document animation clock. Bare values are
+  milliseconds; `ms`/`s` suffixes are accepted. Default **zero** preserves
+  ordinary tests. Time must be finite, nonnegative and at most 1,000,000,000
+  seconds. Resources settle before effects are established at zero and sampled
+  at the requested time; no wall clock or sleep enters comparisons.
 - Output and comparison are **unpremultiplied RGBA8 sRGB**. Native rasterization
   composites onto white (alpha 255). PNG references are interpreted as sRGB
   channel values, decoded to RGBA8 and alpha-composited onto white with the same
@@ -141,6 +146,18 @@ The demonstration is `tests/pages/effects.html`. Render diagnostics, missing/
 restricted mask resources and oversize layer budgets fail through the same
 headless error contract. Conditional masks can refresh after viewport/font/
 container style convergence, retaining shared decoded-image Arcs in Frame clones.
+
+Milestone 8.18 adds **six** pairs in `tests/reftests-animations`:
+moving boxes, Oklab colors, group opacity, font/layout size, steps/negative delay
+and important cascade. Their references use independent static geometry and
+colors, not the tested animations. Run this separate suite with
+`--animation-time 1s` at scales 1/2; the existing 29-page suite retains time zero.
+Together there are 35 native assertion pages, with different explicit timing
+configuration rather than guessed capture delays. `tests/animations.rs` also
+checks actual CLI pixels and sequential retained `Frame` snapshots.
+See [animations.md](animations.md) for the native API and finite boundaries.
+Declarative CSS freezing does not enable scripts, event-based readiness or
+testdriver. The headless diagnostics/failure contract is unchanged.
 
 `--resource-root` defaults to the current directory. Every document, reference,
 CSS import, image and non-data font URL must resolve to an existing regular file
