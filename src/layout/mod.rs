@@ -10,7 +10,6 @@ mod geometry;
 mod inline;
 mod replaced;
 mod tree;
-pub(crate) use inline::nonprinting;
 
 pub use geometry::{ActualRect, Rect};
 pub use tree::{

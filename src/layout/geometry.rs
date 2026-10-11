@@ -39,7 +39,7 @@ impl Rect {
         })
     }
 
-    pub(super) fn union(self, other: Self) -> Self {
+    pub(crate) fn union(self, other: Self) -> Self {
         if self.width == 0.0 && self.height == 0.0 {
             return other;
         }

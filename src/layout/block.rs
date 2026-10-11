@@ -5,7 +5,7 @@ use crate::{
 
 use super::{
     BoxKind, LayoutBox, ListMarker, Rect,
-    inline::{font_metrics, layout_inline_run, measure_text},
+    inline::{font_metrics, layout_inline_run},
     tree::{finite_used, resolve_edges, resolve_length, resolve_margins},
 };
 
@@ -57,7 +57,7 @@ fn layout_block(
     available_width: f32,
     containing_direction: Direction,
     is_root: bool,
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> BlockFlow {
     let style = &layout_box.style;
@@ -311,7 +311,7 @@ pub(super) fn layout_children(
     x: f32,
     y: f32,
     width: f32,
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> f32 {
     let result = flow_children(layout_box, (x, y, width), (false, false), font, diagnostics);
@@ -327,7 +327,7 @@ fn flow_children(
     layout_box: &mut LayoutBox,
     (x, y, width): (f32, f32, f32),
     (collapse_top, collapse_bottom): (bool, bool),
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ChildrenFlow {
     let mut cursor_y = y as f64;
@@ -409,18 +409,18 @@ fn flow_children(
                 });
                 let style = child.marker_style.as_ref().unwrap_or(&child.style).clone();
                 let metrics = font_metrics(font, &style, child.node_id, diagnostics);
+                let glyphs = font.shape(&style, &text);
                 let baseline = child
                     .first_local_baseline()
                     .map_or(child.content_rect.y + metrics.above, |baseline| {
                         child.rect.y + baseline
                     });
                 child.list_marker = Some(ListMarker {
-                    x: child.content_rect.x
-                        - measure_text(font, &text, style.font_size)
-                        - style.font_size * 0.5,
+                    x: child.content_rect.x - glyphs.width - style.font_size * 0.5,
                     y: baseline - metrics.ascent,
                     baseline,
                     text,
+                    glyphs,
                     style,
                 });
             }

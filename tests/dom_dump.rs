@@ -37,6 +37,7 @@ fn dumps_the_layout_tree_with_geometry() {
         .join("pages")
         .join("basic.html");
     let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+        .arg("--bundled-fonts")
         .arg(page_path)
         .arg("--dump=layout")
         .output()
@@ -57,6 +58,7 @@ fn dumps_the_layout_tree_with_geometry() {
 #[test]
 fn dumps_anonymous_blocks_and_split_inline_ancestors() {
     let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+        .arg("--bundled-fonts")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/anonymous_boxes.html"))
         .arg("--dump=layout")
         .output()
@@ -89,6 +91,7 @@ fn dumps_centered_page_with_distinct_computed_auto_and_used_margins() {
     let page = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/auto_margins.html");
     for mode in ["layout", "values", "style"] {
         let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+            .arg("--bundled-fonts")
             .arg(&page)
             .arg(format!("--dump={mode}"))
             .output()
@@ -120,6 +123,7 @@ fn dumps_collapsed_paragraph_empty_chain_parent_overlap_and_containment_geometry
     let page = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/collapsing_margins.html");
     for mode in ["layout", "values"] {
         let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+            .arg("--bundled-fonts")
             .arg(&page)
             .arg(format!("--dump={mode}"))
             .output()

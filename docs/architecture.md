@@ -318,8 +318,8 @@ can start after Milestone 5 and must provide Fetch before 12.1 needs CORS.
   the user-agent stylesheet in 4.4.
   *You'll see:* a page hierarchy that looks roughly like a real browser.
 - [x] **2.5 Support inline formatting.** Handle `b`, `strong`, `i`, and `em`
-  with bold and italic styling, and handle `br`. Styles are synthesized from
-  the bundled regular face until font-face selection is added.
+  with bold and italic styling, and handle `br`. Step 8.6 selects installed
+  bold/italic faces, synthesizing only when an appropriate face is unavailable.
   *You'll see:* emphasis and manual line breaks.
 - [x] **2.6 Add list markers.** Indent `ul` and `ol`, and draw bullets or
   numbers for `li`.
@@ -446,7 +446,8 @@ media-query semantics, advanced selectors, alpha colors, and font-face
 selection are still deferred at this initial pipeline stage. Steps 8.2–8.3
 add horizontal auto margins and normal-flow vertical margin collapsing.
 `font-family` is
-computed and inherited, but rasterization uses the bundled face. Nonzero
+computed and inherited; 8.6 adds installed-face selection and outline fallback.
+Nonzero
 border widths originally painted solid rectangular strips without a
 `border-style` model; 7.5 adds visible-style widths and basic border patterns.
 Wrapped inline backgrounds/borders use a single bounding rectangle
@@ -1069,10 +1070,9 @@ not comparisons of encoding throughput on equivalent trees.
   rejection, resets, inheritance, importance, and source order.
 
   This is a bounded property subset, not CSS conformance: auto margins,
-  additional units/math/custom properties, system fonts, font-variant/stretch,
-  oblique angles, font-face selection, 3D border styles, and background images
-  remain deferred. Font rasterization still uses the bundled face and
-  synthetic weight/slant; line layout lacks baseline/vertical-align fidelity.
+  font-variant/stretch, oblique angles, 3D border styles, and background images
+  remain deferred. Later 7.9 and 8.4–8.6 add contextual units, shared
+  alphabetic baselines, installed-face selection, and shaped glyph painting.
   Border patterns are naive rectangles (including square dots), with no
   rounded joins or per-line inline decorations and bounded pattern counts.
   Milestones 7.9/7.10 and the later font/layout umbrellas remain unchecked.
@@ -1239,13 +1239,14 @@ not comparisons of encoding throughput on equivalent trees.
     font-size/line-height `rlh` use initial metrics to break self-dependencies;
     `lh` in font-size/line-height uses the parent's completed line-height.
     Other lengths then use this element's completed font and line-height.
-    `ch` uses the bundled face's zero advance; `ex` uses its scaled,
-    unrounded x-outline height, not an invented 0.5em. If loading that face
-    fails, both explicitly fall back to 0.5em, with an actionable stderr
-    diagnostic emitted once by the cached loader (not per element).
-    This is not font-face or
-    cross-browser font parity: family selection is still deferred and
-    `normal` line-height remains the engine's 1.25 × font-size approximation.
+    Step 8.6 selects the face before completing metric-dependent lengths:
+    `ch`, `ex`, `cap`, and `ic`, and their root variants `rch`, `rex`, `rcap`,
+    and `ric`, use that face's metrics. Missing zero/x/H/water metrics use
+    the documented CSS metric fallback (0.5em for ch/ex, ascent for cap,
+    1em for ic); unsupported font loading reports a diagnostic and selects
+    a real outline fallback. `normal` uses the selected face's line metrics.
+    This is not cross-browser font parity or script-sensitive fallback
+    measurement for every typographic unit.
     `MediaEnvironment` has optional separate small/large/dynamic CSS-pixel
     viewport dimensions. Unspecified sizes coincide with the desktop
     viewport; there is no simulated dynamic browser chrome.
@@ -1848,7 +1849,7 @@ and the CSSOM parts covered here meet the conformance gate.
   and limited formatting model remain. Steps 8.3–8.5 supply adjoining
   margin sets, baseline-aligned lines, sliced inline decorations, Unicode
   line breaking, and the supported CSS whitespace modes.
-  Font selection and shaping remain for 8.6 and later steps;
+  Step 8.6 now supplies font selection, shaping, and outline fallback;
   Milestone 8 is not complete.
 - [x] **8.2 Compute widths and auto margins.** Implement the CSS 2 width
   equations, including `margin: auto` centering.
@@ -1982,11 +1983,12 @@ and the CSSOM parts covered here meet the conformance gate.
   Continued ancestor backgrounds and borders paint separately on each line,
   not over the empty space inside a union rectangle.
 
-  The selected bundled Noto Sans face supplies horizontal ascent, descent,
+  The selected primary face supplies horizontal ascent, descent,
   and normal line metrics. Each participant's extra leading is split equally
   above/below its baseline, including negative leading. The containing
   block's strut and active inline ancestors participate in each real line;
-  maximum above/below extents determine its baseline and height.
+  maximum above/below extents determine its baseline and height. Step 8.6
+  also includes the actual fallback faces' extents in shared lines.
   Non-replaced inline vertical padding/borders decorate font content boxes
   without increasing line height, and vertical margins do not affect lines.
   Replaced images contribute their full margin boxes and use their bottom
@@ -2029,13 +2031,13 @@ and the CSSOM parts covered here meet the conformance gate.
   equations, adjoining margin sets, and size-container feedback/containment
   remain in force.
 
-  **Visible check:** `cargo run -- tests/pages/inline_layout.html
-  --dump=layout` shows `Normal`, `Large`, and nested `Small` sharing
+  **Deterministic check:** `cargo run -- tests/pages/inline_layout.html
+  --bundled-fonts --dump=layout` shows `Normal`, `Large`, and nested `Small` sharing
   `baseline=150.416` despite their 16px/32px/10px font sizes.
   Their line is 40px high with ascent 32.416 and descent 7.584.
   The decorated link has two separate slices at baselines 200.208 and
-  240.208, with first/last edge flags. Centered content starts at x=254.752
-  and x=272.624; right-aligned content starts at x=323.232 and x=389.248.
+  240.208, with first/last edge flags. Centered content starts at x=255.072
+  and x=272.624; right-aligned content starts at x=323.552 and x=389.248.
   The RTL `start` example aligns right without reordering text.
   `--dump=values` exposes computed alignment and line/fragment geometry;
   `--dump=display-list` retains the same baseline through paint.
@@ -2045,10 +2047,10 @@ and the CSSOM parts covered here meet the conformance gate.
   inheritance/cascade, resize, pseudo/marker, diagnostic, container,
   width/collapse, and CLI regressions cover the supported model.
 
-  **Supported scope, not full browser/WPT parity:** Only the bundled face
-  and baseline vertical alignment are selected; synthetic bold/italic
-  remain. Step 8.5 adds UAX #14 and the documented CSS whitespace subset.
-  Bidi/writing modes, shaping/kerning/ligatures/font fallback,
+  **Supported scope, not full browser/WPT parity:** Baseline is the only
+  vertical alignment. Step 8.5 adds UAX #14 and the documented CSS whitespace
+  subset; 8.6 adds system fonts, kerning, ligatures, and script shaping.
+  Paragraph bidi/writing modes,
   justification/automatic hyphenation,
   advanced vertical alignment, independent last-line alignment,
   `box-decoration-break: clone`, and other formatting contexts remain
@@ -2070,7 +2072,7 @@ and the CSSOM parts covered here meet the conformance gate.
   zero-width spaces, URL slashes/hyphens, and CJK punctuation are respected.
   Replaced images retain the CSS atomic-inline opportunity exceptions.
   `<wbr>` is a zero-width opportunity; soft hyphen is invisible unless its
-  opportunity is selected, when a bundled-face `-` contributes advance,
+  opportunity is selected, when a shaped selected/fallback-face `-` contributes advance,
   ink, baseline metrics, and its owner's inline decorations.
 
   The pinned metadata treats `white-space` as an atomic shorthand for typed,
@@ -2083,7 +2085,7 @@ and the CSSOM parts covered here meet the conformance gate.
   and advanced wrapping/tailoring values are rejected rather than defaulted.
   `white-space-trim` and the larger CSS Text 3/4 property umbrella are not added.
   The UA gives `<pre>` preserving, nonwrapping whitespace and a computed
-  monospace family (actual font selection still belongs to 8.6).
+  monospace family (selected through the shared font context in 8.6).
 
   Normal/nowrap collapse spaces and tabs, transform segment breaks, and trim
   line-edge spaces. Pre-line collapses spaces/tabs but preserves LF breaks.
@@ -2121,16 +2123,19 @@ and the CSSOM parts covered here meet the conformance gate.
   inline boundaries; other contexts, including Hangul, get a space.
   Language-aware and font/script-dependent refinements are not claimed.
 
-  **Visible check:** `cargo run -- tests/pages/line_breaking.html --dump=layout`
+  **Deterministic check:** `cargo run -- tests/pages/line_breaking.html
+  --bundled-fonts --dump=layout`
   shows `https://` and `example.com/a-` on separate URL lines with sliced link
   decorations, and `你好，` occupying 28.800px in a 32px CJK line.
   The pre example has four 24px lines, a real tab stop, and a preserved blank
   line, without soft wrapping. All six modes and nonbreaking/discretionary
   examples are labeled. `--dump=values` exposes the typed whitespace longhands,
   lines, and inline slices. Open without a dump and use F12 for the overlay.
-  The bundled face lacks the CJK glyphs (verified glyph index zero): boxes may
-  appear instead of ideographs, but the Unicode line geometry is correct.
-  Font fallback remains 8.6, not part of this step.
+  Bundled-only mode intentionally uses missing-glyph boxes for CJK to pin
+  this older geometry snapshot. Production, without `--bundled-fonts`, uses
+  real installed CJK fallback and its actual advances. Step 8.6 has licensed
+  deterministic Arabic/CJK fixtures that verify nonzero glyph IDs and pixels,
+  independently of OS availability.
 
   Focused tests pin public crate/UAX opportunity indices and numeric geometry,
   style/pseudo boundaries, UTF-8/combining sequences, Unicode separators and
@@ -2140,17 +2145,102 @@ and the CSSOM parts covered here meet the conformance gate.
   long-content finite geometry, generated metadata, and CLI demonstrations.
 
   **Remaining limitations:** This is the supported horizontal block/inline
-  model, not full browser/WPT parity. Shaping, kerning, ligatures, font
-  fallback/selection, and full script-sensitive typographic units remain 8.6;
-  bidi/writing modes remain 8.14. Dictionary/orthographic segmentation,
+  model, not full browser/WPT parity. Step 8.6 supplies shaping, kerning,
+  ligatures, and font fallback/selection; full paragraph bidi/writing modes
+  remain 8.14. Dictionary/orthographic segmentation,
   word-break/line-break tailoring, automatic hyphenation, text transforms,
   and justification remain 8.16. Advanced whitespace trimming, additional
   collapsing modes, intrinsic sizing, and other formatting contexts are
   unimplemented and reported as partial coverage. Milestone 8 remains incomplete.
-  **Stop here for user review before 8.6.**
-- [ ] **8.6 Shape text.** Use `rustybuzz` or `swash` for shaping, discover
+- [x] **8.6 Shape text.** Use `rustybuzz` or `swash` for shaping, discover
   system fonts with `fontdb`, and add font fallback.
   *You'll see:* ligatures, kerning, and non-Latin scripts render correctly.
+
+  `src/text` is the shared font/shaping subsystem: `fontdb` discovers installed
+  fonts once per production context, `rustybuzz` performs OpenType shaping with
+  guessed script/direction and inherited DOM `lang`, and `fontdue` rasterizes
+  exact indexed glyphs from the same bytes and collection face index.
+  `FontContext` clones share bounded caches; selected faces and shaped runs
+  use immutable `Arc` data across tree clones, display lists, and relayout.
+  Painting never independently reshapes characters or substitutes a font.
+
+  CSS family lists, named/generic families, weight, and italic/oblique select
+  the primary face before metric-dependent style computation. Standard
+  serif/sans-serif/monospace/cursive/fantasy and UI aliases use fontdb mappings;
+  fangsong approximates serif, and specialized emoji/math generics currently
+  approximate sans-serif. Actual bold/italic faces suppress double synthesis.
+  Whole-word coverage is preferred, then grapheme fallback and contiguous
+  same-face/script shaping: joining/combining sequences are not blindly
+  scalar-swapped. Installed outline faces are searched before bundled Noto
+  Sans, which is the deterministic last resort. Missing/invalid/unsupported
+  sources report bounded, deduplicated diagnostics and use a real fallback;
+  unavailable glyphs are explicitly reported as missing-glyph boxes.
+
+  Shaped runs retain face identity/index, glyph IDs, shared UTF-8 source,
+  cluster ranges, advances, offsets, direction, and synthetic flags.
+  Positions are baseline-relative CSS pixels; device scaling and scrolling
+  happen once during indexed paint. Widths drive wrapping/alignment; ink
+  bounds drive overflow and hit geometry. The primary parent strut and actual
+  fallback runs contribute signed half-leading/ascent/descent. Primary-face
+  ch/ex/cap/ic, root variants, normal lh/rlh, initial media units, and bounded
+  container feedback all use the same context, without style depending on paint.
+
+  CSS normalization/UAX #14 still precede shaping. Opportunities inside
+  shaping clusters are blocked; explicit soft-hyphen and ZWSP/`<wbr>`
+  opportunities remeasure the candidate and reshape both sides when selected.
+  ZWJ/ZWNJ, variation selectors, and marks reach the shaper.
+  Tabs retain positional whitespace geometry rather than missing glyphs.
+  Adjacent same-font DOM/pseudo/anonymous text can kern/ligate across zero-width
+  inline boundaries while preserving link/owner hit surfaces. Optional
+  ligatures are disabled across fill-color changes. Mandatory cross-color
+  ligatures use complementary horizontal paint slices, an approximation of
+  component ink ownership, not separate duplicate glyphs. A grapheme crossing
+  font/size styles uses its starter's shaping font/size; separate mark paint
+  ownership is retained. Nonzero inline edges stop cross-boundary shaping.
+  Images' alt text and outside markers use their own selected styles.
+  Baseline-relative payloads are not shifted again during geometry finalization.
+
+  **Determinism and inspection:** CLI/window production defaults to installed
+  system fonts. `--bundled-fonts` disables discovery for reproducible older
+  geometric dumps; compatibility style APIs and existing tests also default
+  to bundled context. Explicit `FontContext::from_database` injects licensed
+  fonts/generic mappings for deterministic selection/fallback tests.
+  `assets/fonts/noto-sans/PROVENANCE.txt` records the SIL OFL Arabic face and
+  small CJK/bold/italic subsets; OS fonts are never copied into the repository.
+  `cargo run -- tests/pages/text_shaping.html --dump=layout` exposes selected
+  faces, collection indices, glyph IDs, UTF-8 clusters, advances and offsets;
+  `--dump=values` and `--dump=display-list` retain shaped data too.
+  `cargo run -- tests/pages/text_shaping.html` opens the system-font example;
+  F12 shows line/baseline/fragment geometry. For a deterministic dump use
+  `cargo run -- tests/pages/text_shaping.html --bundled-fonts --dump=layout`.
+  The fixture labels which cases require system fallback rather than claiming
+  bundled-only CJK/Arabic coverage.
+
+  **Bounds and remaining limitations:** Individual shaping contexts are capped
+  at 65,536 UTF-8 bytes (oversized runs omitted with diagnostics); font sources
+  at 32 MiB each/64 MiB retained, 16 parsed faces/200,000 cached glyphs.
+  Selection/run caches have 128 entries, shaped cache data 2 MiB, discovery
+  fallback considers at most 4096 faces per search/8192 coverage probes per
+  shaping operation, rather than exhausting discovery for later pages.
+  Truncated searches are not memoized as unavailable coverage. Glyph bitmaps
+  have bounded dimensions/area and a 2 MiB/1024-entry per-face cache;
+  discretionary reshaping has a bounded work budget. These limits bound
+  engine resource retention, not a claim of exhaustive malicious-font validation.
+  Outline variable fonts use matching default instances only, with a diagnostic;
+  variation-axis selection, color/bitmap-only and CFF2 raster formats are not
+  supported. Arabic and other individual RTL script runs shape in visual glyph
+  order, but mixed-direction paragraphs/style runs remain in logical run order:
+  no full UAX #9 or RTL inline-flow claim. Web fonts remain 8.7; paragraph bidi
+  and writing modes remain 8.14; color emoji, advanced font features, dictionary
+  hyphenation and the wider typography umbrella remain 8.16.
+
+  Deterministic tests compare ligatures/kerning with rustybuzz references,
+  exact mark offsets and indexed pixels at multiple scales/scroll positions,
+  real Arabic/CJK fallback, collection indices, family/weight/style selection,
+  wrapping/discretionary context/controls/tabs, split nodes and hit ownership,
+  selected/root/container metrics, relayout/clones and failure/resource caps.
+  CLI regressions cover deterministic and production-default selected glyph dumps.
+  Milestone 8 remains incomplete. **Stop here for user review before 8.7.**
 - [ ] **8.7 Load web fonts.** Support `@font-face`.
   *You'll see:* sites render in their chosen fonts.
 - [ ] **8.8 Implement positioned layout and stacking.** Support `relative`,

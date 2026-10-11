@@ -3,6 +3,7 @@
 //! style boundary. Fitting measures each interval at most twice (tabs depend
 //! on x); emission then installs the chosen line's whitespace geometry.
 use unicode_linebreak::{BreakClass, BreakOpportunity, break_property, linebreaks};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::style::{ComputedStyle, TextWrapMode, WhiteSpaceCollapse};
 
@@ -10,7 +11,7 @@ use super::{Assembly, BoxData, Token, finite_used};
 
 fn character(token: &Token) -> Option<(usize, char)> {
     match token {
-        Token::Text(id, text, _) => Some((*id, text.chars().next()?)),
+        Token::Text(id, text, _) | Token::Glyphs(id, text, _) => Some((*id, text.chars().next()?)),
         Token::Space(id, character, ..) | Token::Control(id, character) => Some((*id, *character)),
         Token::Image(id) => Some((*id, '\u{fffc}')),
         Token::Break(id) => Some((*id, '\n')),
@@ -50,22 +51,17 @@ fn normalize(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
                     if c == '\t' && mode.preserves_spaces() {
                         0.0
                     } else {
-                        assembly.font.metrics(' ', b.style.font_size).advance_width
+                        assembly
+                            .font
+                            .select(&b.style)
+                            .metrics(' ', b.style.font_size)
+                            .advance_width
                     },
                     mode.preserves_spaces(),
                 ),
                 '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}' => Token::Break(id),
                 c if super::nonprinting(c) => Token::Control(id, c),
-                _ => Token::Text(
-                    id,
-                    c.to_string(),
-                    finite_used(
-                        assembly.font.metrics(c, b.style.font_size).advance_width as f64,
-                        b.node,
-                        "text advance",
-                        assembly.diagnostics,
-                    ),
-                ),
+                _ => Token::Text(id, c.to_string(), 0.0),
             };
             result.push(token);
         }
@@ -132,6 +128,260 @@ fn normalize(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
     result
 }
 
+fn same_font(a: &ComputedStyle, b: &ComputedStyle) -> bool {
+    a.font_size == b.font_size
+        && a.font_family == b.font_family
+        && a.font_weight == b.font_weight
+        && a.font_style == b.font_style
+        && a.font_language == b.font_language
+}
+
+fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
+    let mut logical = String::new();
+    let mut offsets = Vec::with_capacity(tokens.len());
+    for token in tokens.iter() {
+        offsets.push(logical.len());
+        if logical.len() <= crate::text::MAX_TEXT_BYTES {
+            if let Some((_, c)) = character(token) {
+                logical.push(c);
+            } else if token.width(assembly.boxes) != 0.0 {
+                logical.push('\u{fffc}');
+            }
+        }
+    }
+    let context_bounded = logical.len() <= crate::text::MAX_TEXT_BYTES;
+    let graphemes: Vec<_> = logical
+        .grapheme_indices(true)
+        .map(|(i, g)| (i, i + g.len()))
+        .collect();
+    let mut index = 0;
+    while index < tokens.len() {
+        let Some((owner, _)) = character(&tokens[index]) else {
+            index += 1;
+            continue;
+        };
+        if !matches!(tokens[index], Token::Text(..) | Token::Control(..)) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let mut source = String::new();
+        let mut positions = Vec::new();
+        let mut paint_boundaries = Vec::new();
+        let mut paint_owner = owner;
+        let mut oversized = false;
+        while index < tokens.len() {
+            let offset = offsets[index];
+            let cluster = graphemes.get(graphemes.partition_point(|&(_, end)| end <= offset));
+            let continues_cluster = context_bounded
+                && cluster.is_some_and(|&(begin, _)| begin < offset && begin >= offsets[start]);
+            match &tokens[index] {
+                Token::Text(id, text, _)
+                    if continues_cluster
+                        || same_font(&assembly.boxes[owner].style, &assembly.boxes[*id].style) =>
+                {
+                    if assembly.boxes[paint_owner].style.text_fill_color
+                        != assembly.boxes[*id].style.text_fill_color
+                    {
+                        paint_boundaries.push(source.len());
+                    }
+                    paint_owner = *id;
+                    if source.len() + text.len() > crate::text::MAX_TEXT_BYTES {
+                        oversized = true;
+                    }
+                    if !oversized {
+                        positions.push((index, source.len(), *id));
+                        source.push_str(text);
+                    }
+                }
+                Token::Control(id, c)
+                    if continues_cluster
+                        || same_font(&assembly.boxes[owner].style, &assembly.boxes[*id].style) =>
+                {
+                    if source.len() + c.len_utf8() > crate::text::MAX_TEXT_BYTES {
+                        oversized = true;
+                    }
+                    if !oversized {
+                        positions.push((index, source.len(), *id));
+                        source.push(*c);
+                    }
+                }
+                Token::Begin(_) | Token::End(_) if tokens[index].width(assembly.boxes) == 0.0 => {}
+                _ => break,
+            }
+            index += 1;
+        }
+        if index == start {
+            index += 1;
+            continue;
+        }
+        if oversized {
+            assembly.diagnostics.push(crate::style::Diagnostic {
+                node_id: assembly.boxes[owner].node,
+                message: format!(
+                    "text exceeds {}-byte shaping context limit; run omitted",
+                    crate::text::MAX_TEXT_BYTES
+                ),
+            });
+            for token in &mut tokens[start..index] {
+                if matches!(token, Token::Text(..) | Token::Control(..)) {
+                    *token = Token::Omitted;
+                }
+            }
+            continue;
+        }
+        let (before, after) = if context_bounded {
+            (
+                &logical[..offsets[start]],
+                &logical[offsets.get(index).copied().unwrap_or(logical.len())..],
+            )
+        } else {
+            ("", "")
+        };
+        let run = assembly.font.shape_with_context(
+            &assembly.boxes[owner].style,
+            &source,
+            &paint_boundaries,
+            before,
+            after,
+        );
+        let mut widths = vec![0.0; positions.len()];
+        let mut glyphs = vec![Vec::new(); positions.len()];
+        let mut cluster_advance = vec![0.0; positions.len()];
+        let mut cluster_end = vec![0; positions.len()];
+        let mut unsafe_after = vec![false; positions.len()];
+        for glyph in &run.glyphs {
+            let first = positions.partition_point(|p| p.1 < glyph.cluster);
+            if first >= positions.len() {
+                continue;
+            }
+            cluster_advance[first] += glyph.advance;
+            cluster_end[first] = positions.partition_point(|p| p.1 < glyph.cluster_end);
+            glyphs[first].push(glyph.clone());
+        }
+        for first in 0..positions.len() {
+            if cluster_end[first] == 0 {
+                continue;
+            }
+            unsafe_after[first..cluster_end[first].saturating_sub(1)].fill(true);
+            // Distribute a cross-node ligature's advance to its DOM owners. Ink
+            // is emitted only once, by its cluster starter; hit surfaces retain
+            // the later owner's share. Marks in one owner keep zero advance.
+            let mut owners: Vec<usize> = Vec::new();
+            for member in first..cluster_end[first] {
+                let c = character(&tokens[positions[member].0]).map(|(_, c)| c);
+                let advancing = c.is_some_and(|c| {
+                    !super::nonprinting(c)
+                        && glyphs[first]
+                            .first()
+                            .is_some_and(|g| g.face.metrics(c, g.size).advance_width != 0.0)
+                });
+                if advancing
+                    && owners
+                        .last()
+                        .is_none_or(|&i| positions[i].2 != positions[member].2)
+                {
+                    owners.push(member);
+                }
+            }
+            let count = owners.len().max(1) as f32;
+            for &owner in &owners {
+                widths[owner] += cluster_advance[first] / count;
+            }
+            let multiple_colors = owners.windows(2).any(|pair| {
+                assembly.boxes[positions[pair[0]].2].style.text_fill_color
+                    != assembly.boxes[positions[pair[1]].2].style.text_fill_color
+            });
+            let original = std::mem::take(&mut glyphs[first]);
+            let cluster_pen = original
+                .iter()
+                .map(|g| g.x - g.x_offset)
+                .min_by(f32::total_cmp)
+                .unwrap_or(0.0);
+            let mut mark_owner = first + 1;
+            for glyph in original {
+                if glyph.advance == 0.0
+                    && glyph.face.metrics_indexed(glyph.id, glyph.size).width != 0
+                {
+                    while mark_owner < cluster_end[first]
+                        && character(&tokens[positions[mark_owner].0]).is_none_or(|(_, c)| {
+                            super::nonprinting(c)
+                                || glyph.face.metrics(c, glyph.size).advance_width != 0.0
+                        })
+                    {
+                        mark_owner += 1;
+                    }
+                    if mark_owner < cluster_end[first] {
+                        glyphs[mark_owner].push(glyph);
+                        mark_owner += 1;
+                        continue;
+                    }
+                }
+                if multiple_colors {
+                    let pen = cluster_pen;
+                    for (part, &owner) in owners.iter().enumerate() {
+                        let visual_part = if glyph.rtl {
+                            owners.len() - part - 1
+                        } else {
+                            part
+                        };
+                        let mut copy = glyph.clone();
+                        copy.clip = Some((
+                            if visual_part == 0 {
+                                f32::NEG_INFINITY
+                            } else {
+                                pen + cluster_advance[first] * visual_part as f32 / count - glyph.x
+                            },
+                            if visual_part + 1 == owners.len() {
+                                f32::INFINITY
+                            } else {
+                                pen + cluster_advance[first] * (visual_part + 1) as f32 / count
+                                    - glyph.x
+                            },
+                        ));
+                        glyphs[owner].push(copy);
+                    }
+                } else {
+                    glyphs[first].push(glyph);
+                }
+            }
+        }
+        let mut logical_x = 0.0;
+        for (position, &(token_index, offset, id)) in positions.iter().enumerate() {
+            let end = positions.get(position + 1).map_or(source.len(), |p| p.1);
+            let mut part = crate::text::ShapedText {
+                width: widths[position],
+                ascent: run.ascent,
+                descent: run.descent,
+                unsafe_after: unsafe_after[position],
+                line_extents: run.line_extents,
+                ..crate::text::ShapedText::default()
+            };
+            part.glyphs = std::mem::take(&mut glyphs[position])
+                .into_iter()
+                .map(|mut g| {
+                    g.x -= logical_x;
+                    g
+                })
+                .collect();
+            let text: String = source[offset..end]
+                .chars()
+                .filter(|&c| !matches!(c, '\u{00ad}' | '\u{200b}'))
+                .collect();
+            if matches!(
+                tokens[token_index],
+                Token::Control(_, '\u{00ad}' | '\u{200b}')
+            ) {
+                // Keep discretionary opportunities as controls, but their
+                // presence has already influenced the shaping buffer.
+            } else {
+                tokens[token_index] = Token::Glyphs(id, text, std::sync::Arc::new(part));
+            }
+            logical_x += widths[position];
+        }
+    }
+}
+
 fn wrap_at(left: usize, right: usize, boxes: &[BoxData], block: &ComputedStyle) -> bool {
     // A boundary opportunity is governed by the nearest common ancestor;
     // opportunities created by disappearing characters use their own style.
@@ -155,6 +405,7 @@ struct Opportunity {
     end: usize,
     forced: bool,
     hyphen: Option<usize>,
+    context_break: bool,
 }
 
 fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> Vec<Opportunity> {
@@ -217,6 +468,7 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
                 end,
                 forced,
                 hyphen: (c == '\u{00ad}' && !forced).then_some(id),
+                context_break: !forced && matches!(c, '\u{00ad}' | '\u{200b}'),
             });
         }
     }
@@ -225,11 +477,13 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
     {
         last.forced = true;
         last.hyphen = None;
+        last.context_break = false;
     } else {
         result.push(Opportunity {
             end: tokens.len(),
             forced: true,
             hyphen: None,
+            context_break: false,
         });
     }
     result
@@ -329,13 +583,18 @@ fn emit(
     half_ch: f64,
     assembly: &mut Assembly<'_>,
 ) {
+    let mut tokens = tokens.to_vec();
+    let hyphen_at = if soft {
+        boundary.hyphen.and_then(|id| {
+            tokens.iter().rposition(
+                |token| matches!(token, Token::Control(owner, '\u{00ad}') if *owner == id),
+            )
+        })
+    } else {
+        None
+    };
+    reshape(&mut tokens, hyphen_at, assembly);
     let mut measure = Measure::default();
-    let hyphen = if soft { boundary.hyphen } else { None };
-    let hyphen_at = hyphen.and_then(|id| {
-        tokens
-            .iter()
-            .rposition(|token| matches!(token, Token::Control(owner, '\u{00ad}') if *owner == id))
-    });
     // Collapsible trailing whitespace is removed before contributing metrics
     // or decorations. Preserved hanging whitespace retains its hit geometry.
     let mut trim_from = tokens.len();
@@ -373,40 +632,85 @@ fn emit(
             *width = finite_used(advance, None, "whitespace advance", assembly.diagnostics);
         }
         assembly.add(token);
-        if hyphen_at == Some(index) {
-            let id = hyphen.unwrap();
-            let width = assembly
-                .font
-                .metrics('-', assembly.boxes[id].style.font_size)
-                .advance_width;
-            assembly.add(Token::Text(id, "-".into(), width));
-            measure.x += width as f64;
-        }
     }
     assembly.finish(measure.aligned(!soft, assembly.width as f64));
 }
 
+fn reshape(tokens: &mut [Token], hyphen_at: Option<usize>, assembly: &mut Assembly<'_>) {
+    for (index, token) in tokens.iter_mut().enumerate() {
+        if let Token::Glyphs(id, text, _) = token {
+            *token = Token::Text(*id, text.clone(), 0.0);
+        } else if hyphen_at == Some(index)
+            && let Token::Control(id, _) = token
+        {
+            *token = Token::Text(*id, "-".into(), 0.0);
+        }
+    }
+    shape_tokens(tokens, assembly);
+}
+
 pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut Assembly<'_>) {
-    let tokens = normalize(tokens, assembly);
+    let mut tokens = normalize(tokens, assembly);
     let opportunities = opportunities(&tokens, assembly.boxes, block);
-    let tab = (assembly.font.metrics(' ', block.font_size).advance_width as f64 * 8.0).max(0.0001);
-    let half_ch = assembly.font.metrics('0', block.font_size).advance_width as f64 * 0.5;
+    shape_tokens(&mut tokens, assembly);
+    let face = assembly.font.select(block);
+    let tab = (face.metrics(' ', block.font_size).advance_width as f64 * 8.0).max(0.0001);
+    let half_ch = face.metrics('0', block.font_size).advance_width as f64 * 0.5;
     let mut start = 0;
     let mut measured_to = 0;
     let mut measure = Measure::default();
     let mut previous = None;
+    let mut discretionary_work = 0usize;
     for boundary in opportunities {
+        let left = tokens[..boundary.end]
+            .iter()
+            .rev()
+            .find(|t| character(t).is_some());
+        if !boundary.forced
+            && boundary.hyphen.is_none()
+            && matches!(left, Some(Token::Glyphs(_, _, run)) if run.unsafe_after)
+        {
+            continue;
+        }
+        if boundary.context_break {
+            discretionary_work += boundary.end - start;
+            if discretionary_work > 1_048_576 {
+                if !assembly
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message.starts_with("discretionary shaping work limit"))
+                {
+                    assembly.diagnostics.push(crate::style::Diagnostic {
+                        node_id: left.and_then(character).and_then(|(id, _)| assembly.boxes[id].node),
+                        message:
+                            "discretionary shaping work limit reached; further discretionary breaks ignored"
+                                .into(),
+                    });
+                }
+                continue;
+            }
+        }
         let before = measure;
         for token in &tokens[measured_to..boundary.end] {
             measure.add(token, assembly.boxes, tab, half_ch);
         }
-        let hyphen = boundary.hyphen.map_or(0.0, |id| {
-            assembly
-                .font
-                .metrics('-', assembly.boxes[id].style.font_size)
-                .advance_width as f64
-        });
-        if measure.fit() + hyphen > assembly.width as f64
+        let candidate_fit = if boundary.context_break {
+            let mut candidate = tokens[start..boundary.end].to_vec();
+            let hyphen_at = boundary.hyphen.and_then(|id| {
+                candidate
+                    .iter()
+                    .rposition(|t| matches!(t, Token::Control(owner, '\u{00ad}') if *owner == id))
+            });
+            reshape(&mut candidate, hyphen_at, assembly);
+            let mut fitted = Measure::default();
+            for token in &candidate {
+                fitted.add(token, assembly.boxes, tab, half_ch);
+            }
+            fitted.fit()
+        } else {
+            measure.fit()
+        };
+        if candidate_fit > assembly.width as f64
             && let Some(last) = previous
             && before.content
         {
@@ -419,6 +723,15 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
                 assembly,
             );
             start = measured_to;
+            // A selected discretionary break changes joining/ligature context
+            // on both sides; the remaining word must use its new initial form.
+            if last.context_break {
+                let end = tokens[start..]
+                    .iter()
+                    .position(|t| matches!(t, Token::Space(..) | Token::Break(_) | Token::Image(_)))
+                    .map_or(tokens.len(), |i| start + i);
+                reshape(&mut tokens[start..end], None, assembly);
+            }
             measure = Measure::default();
             for token in &tokens[start..boundary.end] {
                 measure.add(token, assembly.boxes, tab, half_ch);

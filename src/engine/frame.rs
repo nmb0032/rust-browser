@@ -32,6 +32,7 @@ pub struct Frame {
     // Keep collection/resource diagnostics separate from resolution diagnostics,
     // so repeated restyles do not append the same errors to previous results.
     collected_stylesheets: StylesheetCollection,
+    fonts: crate::text::FontContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +71,7 @@ impl Frame {
             media_environment,
             interaction_state: InteractionState::default(),
             collected_stylesheets,
+            fonts: crate::text::FontContext::bundled(),
         };
         frame.refresh_target();
         frame
@@ -164,25 +166,26 @@ impl Frame {
     /// convergence. Restarting the bootstrap on every render avoids reusing
     /// geometry from an earlier viewport, interaction state, or navigation.
     /// Retained sheets/images are reused; no external fetch occurs here.
-    pub fn layout_with_container_queries(&mut self, font: &fontdue::Font) -> LayoutTree {
+    pub fn layout_with_container_queries(&mut self, font: &crate::text::FontContext) -> LayoutTree {
         self.layout_with_container_query_limit(font, 16)
     }
 
     pub(crate) fn layout_with_container_query_limit(
         &mut self,
-        font: &fontdue::Font,
+        font: &crate::text::FontContext,
         limit: usize,
     ) -> LayoutTree {
+        self.fonts = font.clone();
         let mut snapshot = style::ContainerSnapshot::default();
         let mut last = None;
         for _ in 0..limit.max(1) {
-            let resolution = style::resolve_with_container_environment(
+            let resolution = style::resolve_with_fonts(
                 &self.document,
                 self.collected_stylesheets.clone(),
-                &[],
                 self.media_environment,
                 &self.interaction_state,
                 &snapshot,
+                font,
             );
             self.stylesheets = resolution.stylesheets;
             self.styles = resolution.styles;
@@ -209,12 +212,13 @@ impl Frame {
 
     pub(super) fn set_stylesheets(&mut self, stylesheets: StylesheetCollection) {
         self.collected_stylesheets = stylesheets.clone();
-        let resolution = style::resolve_with_style_environment(
+        let resolution = style::resolve_with_fonts(
             &self.document,
             stylesheets,
-            &[],
             self.media_environment,
             &self.interaction_state,
+            &style::ContainerSnapshot::default(),
+            &self.fonts,
         );
         self.stylesheets = resolution.stylesheets;
         self.styles = resolution.styles;

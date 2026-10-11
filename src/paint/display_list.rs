@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
 use crate::css::values::{BorderStyle, Edges, ResolvedColor};
 use crate::layout::{BoxKind, LayoutBox, LayoutTree, Rect};
@@ -25,6 +25,7 @@ pub enum DisplayItem {
         y: f32,
         baseline: f32,
         text: String,
+        glyphs: Arc<crate::text::ShapedText>,
         size: f32,
         color: ResolvedColor,
         bold: bool,
@@ -40,6 +41,7 @@ pub enum DisplayItem {
         y: f32,
         baseline: f32,
         text: String,
+        glyphs: Arc<crate::text::ShapedText>,
         size: f32,
         color: u32,
         bold: bool,
@@ -68,11 +70,9 @@ pub enum DisplayItem {
     },
 }
 
-pub(crate) fn load_bundled_font() -> Result<fontdue::Font, Box<dyn Error>> {
-    let font_data = include_bytes!("../../assets/fonts/noto-sans/NotoSans.ttf");
-    let font = fontdue::Font::from_bytes(font_data.as_slice(), fontdue::FontSettings::default())
-        .map_err(|error| std::io::Error::other(format!("failed to load bundled font: {error}")))?;
-    Ok(font)
+#[cfg(test)]
+pub(crate) fn load_bundled_font() -> Result<crate::text::FontContext, Box<dyn std::error::Error>> {
+    Ok(crate::text::FontContext::bundled())
 }
 
 pub(crate) fn build_display_list(
@@ -117,6 +117,7 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
             y: marker.y,
             baseline: marker.baseline,
             text: marker.text.clone(),
+            glyphs: marker.glyphs.clone(),
             size: marker.style.font_size,
             color: marker.style.text_fill_color,
             bold: marker.style.bold,
@@ -136,6 +137,7 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
             y: fragment.y,
             baseline: fragment.baseline,
             text: fragment.text.clone(),
+            glyphs: fragment.glyphs.clone(),
             size: fragment.font_size,
             color: fragment.text_color,
             bold: fragment.bold,
@@ -293,6 +295,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
             y,
             baseline,
             text,
+            glyphs,
             size,
             color,
             bold,
@@ -304,6 +307,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
                     y,
                     baseline,
                     text,
+                    glyphs,
                     size,
                     color: rgb,
                     bold,
@@ -315,6 +319,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
                     y,
                     baseline,
                     text,
+                    glyphs,
                     size,
                     color,
                     bold,

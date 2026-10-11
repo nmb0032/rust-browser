@@ -38,7 +38,7 @@ fn layout(
     mode: &str,
     content: &str,
     extra: &str,
-) -> (Document, LayoutTree, fontdue::Font) {
+) -> (Document, LayoutTree, crate::text::FontContext) {
     let document = parser::parse(&format!(
         "<!doctype html><style>body{{margin:0}}#host{{width:{width}px;font:16px/20px serif;\
          white-space:{mode}}}{extra}</style><div id='host'>{content}</div>"
@@ -83,7 +83,7 @@ fn close(actual: f32, expected: f32) {
     assert!((actual - expected).abs() < 0.001, "{actual} != {expected}");
 }
 
-fn advance(font: &fontdue::Font, text: &str) -> f32 {
+fn advance(font: &crate::text::FontContext, text: &str) -> f32 {
     super::inline::measure_text(font, text, 16.0)
 }
 
@@ -607,7 +607,7 @@ fn preserved_whitespace_prevents_margin_collapse_through_even_with_zero_line_hei
 
 #[test]
 fn nonprinting_controls_and_positional_tabs_never_rasterize_missing_glyph_boxes() {
-    let raster = |tree: &LayoutTree, font: &fontdue::Font| {
+    let raster = |tree: &LayoutTree, font: &crate::text::FontContext| {
         let display = paint::build_display_list(tree, 448.0, 100.0, false);
         let mut pixels = vec![0xffffff; 448 * 100];
         paint::rasterize_display_list(&display, font, &mut pixels, 448, 100, 1.0, 0.0);

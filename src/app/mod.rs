@@ -21,28 +21,46 @@ pub fn run(
     trace: bool,
     throttle_ms: Option<u64>,
 ) -> Result<(), Box<dyn Error>> {
+    run_with_fonts(location, dump, trace, throttle_ms, false)
+}
+
+pub fn run_with_fonts(
+    location: &str,
+    dump: Option<DumpFormat>,
+    trace: bool,
+    throttle_ms: Option<u64>,
+    bundled_fonts: bool,
+) -> Result<(), Box<dyn Error>> {
     if dump == Some(DumpFormat::CssCoverage) {
         print!("{}", crate::style::metadata::css_coverage());
         return Ok(());
     }
     let url = crate::net::location_url(location)?;
     let options = LoadOptions { trace, throttle_ms };
+    let fonts = if bundled_fonts {
+        crate::text::FontContext::bundled()
+    } else {
+        crate::text::FontContext::system()
+    };
     if let Some(format) = dump {
         let frame = load_page(&url, options, |_| Ok(()), || false)?;
-        return dump_frame(frame, format);
+        return dump_frame(frame, format, &fonts);
     }
-    let font = crate::paint::load_bundled_font()?;
     let mut navigation = Navigation::new(url, options);
     navigation.start_load()?;
-    crate::ui::window::run(navigation, font)
+    crate::ui::window::run(navigation, fonts)
 }
 
-fn dump_frame(mut frame: Frame, dump: DumpFormat) -> Result<(), Box<dyn Error>> {
+fn dump_frame(
+    mut frame: Frame,
+    dump: DumpFormat,
+    fonts: &crate::text::FontContext,
+) -> Result<(), Box<dyn Error>> {
     let tree = if matches!(
         dump,
         DumpFormat::Style | DumpFormat::Layout | DumpFormat::DisplayList | DumpFormat::Values
     ) {
-        Some(frame.layout_with_container_queries(&crate::paint::load_bundled_font()?))
+        Some(frame.layout_with_container_queries(fonts))
     } else {
         None
     };

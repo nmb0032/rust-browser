@@ -9,5 +9,6 @@ pub mod media;
 pub mod net;
 pub mod paint;
 pub mod style;
+pub mod text;
 pub mod ui;
 pub mod xml;

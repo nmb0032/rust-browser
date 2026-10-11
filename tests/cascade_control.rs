@@ -158,11 +158,7 @@ fn imported_container_queries_keep_media_layers_namespace_and_source_order_witho
     let mut frame = load_page(&server.url, LoadOptions::default(), |_| Ok(()), || false).unwrap();
     let target = id(&frame, "card");
     let retained = Arc::clone(&frame.stylesheets.stylesheets[0].stylesheet);
-    let font = fontdue::Font::from_bytes(
-        include_bytes!("../assets/fonts/noto-sans/NotoSans.ttf").as_slice(),
-        fontdue::FontSettings::default(),
-    )
-    .unwrap();
+    let font = rust_browser::text::FontContext::bundled();
     for (viewport, color, width) in [
         (800.0, 0x008000, Some(32.0)),
         (600.0, 0xff0000, Some(20.0)),
@@ -288,11 +284,7 @@ fn import_graph_retains_redirected_base_cache_conditions_layers_and_source_order
             }
         }
         let mut layout = frame.layout_tree();
-        let font = fontdue::Font::from_bytes(
-            include_bytes!("../assets/fonts/noto-sans/NotoSans.ttf").as_slice(),
-            fontdue::FontSettings::default(),
-        )
-        .unwrap();
+        let font = rust_browser::text::FontContext::bundled();
         layout.layout(width, &font);
         assert!(rust_browser::devtools::format_values(&layout, 1.0).contains("Width"));
     }
@@ -408,11 +400,7 @@ fn imported_registration_layer_and_nested_rules_reach_style_and_layout() {
     assert_eq!(target.width, Some(Length::Px(80.0)));
     let dump = rust_browser::devtools::format_style(&frame.document, &frame.styles);
     assert!(dump.contains("width: Px(80.0)"), "{dump}");
-    let font = fontdue::Font::from_bytes(
-        include_bytes!("../assets/fonts/noto-sans/NotoSans.ttf").as_slice(),
-        fontdue::FontSettings::default(),
-    )
-    .unwrap();
+    let font = rust_browser::text::FontContext::bundled();
     let mut layout = frame.layout_tree();
     layout.layout(200.0, &font);
     assert!(rust_browser::devtools::format_values(&layout, 1.0).contains("80"));

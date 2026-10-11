@@ -24,7 +24,10 @@ use crate::{
     layout::LayoutTree,
 };
 
-pub fn run(navigation: Navigation, font: fontdue::Font) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    navigation: Navigation,
+    font: crate::text::FontContext,
+) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
     let context = Context::new(event_loop.owned_display_handle())?;
     let frame = Arc::new(Frame::new(
@@ -61,7 +64,7 @@ struct BrowserWindow {
     context: Context<OwnedDisplayHandle>,
     window: Option<Rc<Window>>,
     surface: Option<Surface<OwnedDisplayHandle, Rc<Window>>>,
-    font: fontdue::Font,
+    font: crate::text::FontContext,
     layout_tree: LayoutTree,
     display_list: Vec<DisplayItem>,
     scroll_offset: f32,
@@ -482,7 +485,7 @@ fn render_for_window_size(
     frame: &mut Frame,
     size: PhysicalSize<u32>,
     scale_factor: f64,
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     outlines: bool,
     scroll: f32,
 ) -> (LayoutTree, Vec<DisplayItem>, f32) {

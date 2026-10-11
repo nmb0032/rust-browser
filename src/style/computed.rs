@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use crate::{
@@ -197,6 +197,10 @@ pub struct ComputedStyle {
     pub font_family: FontFamily,
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
+    /// Selected primary face; inherited by text, pseudos and anonymous boxes.
+    pub font_face: Arc<crate::text::FontFace>,
+    /// Inherited HTML language, used by the OpenType shaper.
+    pub font_language: Option<String>,
     pub line_height: LineHeight,
     /// Synthetic rendering flags; numeric weight and style remain typed above.
     pub bold: bool,
@@ -241,6 +245,8 @@ impl Default for ComputedStyle {
             font_family: FontFamily::default(),
             font_weight: FontWeight::default(),
             font_style: FontStyle::Normal,
+            font_face: crate::text::bundled_face(),
+            font_language: None,
             line_height: LineHeight::Normal,
             bold: false,
             italic: false,
@@ -279,6 +285,8 @@ impl ComputedStyle {
             font_family: parent.font_family.clone(),
             font_weight: parent.font_weight,
             font_style: parent.font_style,
+            font_face: parent.font_face.clone(),
+            font_language: parent.font_language.clone(),
             line_height: parent.line_height.clone(),
             bold: parent.bold,
             italic: parent.italic,
@@ -290,11 +298,9 @@ impl ComputedStyle {
 
     pub fn used_line_height(&self) -> f32 {
         if self.line_height == LineHeight::Normal {
-            static FONT: OnceLock<fontdue::Font> = OnceLock::new();
-            FONT.get_or_init(|| crate::paint::load_bundled_font().expect("bundled font"))
+            self.font_face
                 .horizontal_line_metrics(self.font_size)
-                .expect("horizontal face")
-                .new_line_size
+                .map_or(self.font_size * 1.2, |metrics| metrics.new_line_size)
         } else {
             self.line_height.used(self.font_size)
         }

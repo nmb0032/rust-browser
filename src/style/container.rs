@@ -111,13 +111,13 @@ impl ContainerSnapshot {
             .children()
             .iter()
             .find_map(first_real)
-            .map(|child| (child.style().font_size, child.style().used_line_height()));
+            .map(|child| super::cascade::RootFontMetrics::new(child.style()));
         let mut result = Self::default();
         fn visit(
             layout: &LayoutBox,
             result: &mut ContainerSnapshot,
             environment: MediaEnvironment,
-            root: Option<(f32, f32)>,
+            root: Option<super::cascade::RootFontMetrics>,
         ) {
             let style = layout.style();
             if let Some(node) = layout.dom_node_id()

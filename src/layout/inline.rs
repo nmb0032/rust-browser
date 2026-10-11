@@ -24,12 +24,13 @@ pub(super) struct FontMetrics {
 }
 
 pub(super) fn font_metrics(
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     style: &ComputedStyle,
     node: Option<NodeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> FontMetrics {
-    let metrics = font
+    let face = font.select(style);
+    let metrics = face
         .horizontal_line_metrics(style.font_size)
         .expect("bundled horizontal face");
     let height = if style.line_height == LineHeight::Normal {
@@ -80,6 +81,7 @@ enum Token {
     Begin(usize),
     End(usize),
     Text(usize, String, f32),
+    Glyphs(usize, String, std::sync::Arc<crate::text::ShapedText>),
     Space(usize, char, f32, bool),
     Control(usize, char),
     Omitted,
@@ -99,6 +101,7 @@ impl Token {
                 b.padding.right as f64 + b.border.right as f64 + b.margin.right as f64
             }
             Self::Text(_, _, width) | Self::Space(_, _, width, _) => *width as f64,
+            Self::Glyphs(_, _, run) => run.width as f64,
             Self::Image(id) => {
                 let b = &boxes[*id];
                 b.margin.left as f64 + b.rect.width as f64 + b.margin.right as f64
@@ -110,6 +113,7 @@ impl Token {
     fn real(&self, boxes: &[BoxData]) -> bool {
         match self {
             Self::Text(..) | Self::Image(_) | Self::Break(_) => true,
+            Self::Glyphs(_, text, _) => text.chars().any(|c| !nonprinting(c)),
             Self::Begin(id) => {
                 let b = &boxes[*id];
                 b.padding.left != 0.0
@@ -134,7 +138,7 @@ fn collect(
     layout: &LayoutBox,
     parent: Option<usize>,
     width: f32,
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     boxes: &mut Vec<BoxData>,
     tokens: &mut Vec<Token>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -260,11 +264,19 @@ fn collect(
     } else if layout.tag_name == "<wbr>" {
         tokens.push(Token::Control(id, '\u{200b}'));
     } else if layout.kind == BoxKind::Text {
-        tokens.push(Token::Text(
-            id,
-            layout.text.clone().unwrap_or_default(),
-            0.0,
-        ));
+        if let Some(text) = &layout.text {
+            if text.len() > crate::text::MAX_TEXT_BYTES {
+                diagnostics.push(Diagnostic {
+                    node_id: layout.node_id,
+                    message: format!(
+                        "text exceeds {}-byte shaping limit; omitted",
+                        crate::text::MAX_TEXT_BYTES
+                    ),
+                });
+            } else {
+                tokens.push(Token::Text(id, text.clone(), 0.0));
+            }
+        }
     } else {
         tokens.push(Token::Begin(id));
         for child in &layout.children {
@@ -286,7 +298,7 @@ struct Segment {
 
 struct Assembly<'a> {
     boxes: &'a mut [BoxData],
-    font: &'a fontdue::Font,
+    font: &'a crate::text::FontContext,
     diagnostics: &'a mut Vec<Diagnostic>,
     origin: f32,
     y: f32,
@@ -413,6 +425,27 @@ impl Assembly<'_> {
                     *previous_width += width;
                 } else {
                     self.items.push((Token::Text(id, text, width), self.x));
+                }
+                self.advance(width as f64, self.boxes[id].node);
+            }
+            Token::Glyphs(id, text, run) => {
+                let metrics = self.boxes[id].metrics;
+                let (above, below) = run.line_extents.unwrap_or((metrics.above, metrics.below));
+                self.contribute(FontMetrics {
+                    above,
+                    below,
+                    ..metrics
+                });
+                let width = run.width;
+                if let Some((Token::Glyphs(previous_id, previous_text, previous_run), previous_x)) =
+                    self.items.last_mut()
+                    && *previous_id == id
+                    && (*previous_x + previous_run.width - self.x).abs() < 0.001
+                {
+                    previous_text.push_str(&text);
+                    std::sync::Arc::make_mut(previous_run).append(&run);
+                } else {
+                    self.items.push((Token::Glyphs(id, text, run), self.x));
                 }
                 self.advance(width as f64, self.boxes[id].node);
             }
@@ -562,12 +595,21 @@ impl Assembly<'_> {
             let whitespace = matches!(token, Token::Space(..));
             let token = match token {
                 Token::Space(id, character, width, true) => {
-                    Token::Text(id, character.to_string(), width)
+                    let mut run = if character == '\t' {
+                        crate::text::ShapedText::default()
+                    } else {
+                        (*self
+                            .font
+                            .shape(&self.boxes[id].style, &character.to_string()))
+                        .clone()
+                    };
+                    run.width = width;
+                    Token::Glyphs(id, character.to_string(), std::sync::Arc::new(run))
                 }
                 token => token,
             };
             match token {
-                Token::Text(id, text, width) => {
+                Token::Glyphs(id, text, run) => {
                     let b = &mut self.boxes[id];
                     let x =
                         finite_used(x as f64 + shift as f64, b.node, "text x", self.diagnostics);
@@ -578,19 +620,23 @@ impl Assembly<'_> {
                         self.diagnostics,
                     );
                     let ink_rect = finite_rect(
-                        glyph_bounds(self.font, &text, &b.style, x, baseline),
+                        run.ink_bounds(b.style.font_size, x, baseline),
                         b.node,
                         self.diagnostics,
                     );
                     let advance_rect = Rect {
                         x,
                         y,
-                        width,
-                        height: b.metrics.ascent + b.metrics.descent,
+                        width: run.width,
+                        height: run.ascent.max(b.metrics.ascent)
+                            + run.descent.max(b.metrics.descent),
                     };
                     b.rect = finite_rect(
-                        b.rect
-                            .union(if whitespace { advance_rect } else { ink_rect }),
+                        b.rect.union(if whitespace || run.glyphs.is_empty() {
+                            advance_rect
+                        } else {
+                            ink_rect
+                        }),
                         b.node,
                         self.diagnostics,
                     );
@@ -600,8 +646,9 @@ impl Assembly<'_> {
                         y,
                         baseline,
                         ink_rect,
-                        width,
-                        height: b.metrics.ascent + b.metrics.descent,
+                        width: run.width,
+                        height: advance_rect.height,
+                        glyphs: run,
                         text,
                         font_size: b.style.font_size,
                         color: b.style.text_fill_color.legacy(),
@@ -689,7 +736,7 @@ pub(super) fn layout_inline_run(
     style: &ComputedStyle,
     node: Option<NodeId>,
     (x, y, width): (f32, f32, f32),
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<LineBox>, f64) {
     let strut = font_metrics(font, style, node, diagnostics);
@@ -739,7 +786,7 @@ pub(super) fn layout_inline_run(
 fn install(
     layout: &mut LayoutBox,
     boxes: &mut impl Iterator<Item = BoxData>,
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let data = boxes.next().expect("inline preorder geometry");
@@ -767,43 +814,26 @@ fn install(
 }
 
 pub(super) fn glyph_bounds(
-    font: &fontdue::Font,
+    font: &crate::text::FontContext,
     text: &str,
     style: &ComputedStyle,
     x: f32,
     baseline: f32,
 ) -> Rect {
-    let mut pen = x;
-    let mut bounds = Rect::default();
-    for character in text.chars() {
-        if nonprinting(character) || character == '\t' {
-            continue;
-        }
-        let metrics = font.metrics(character, style.font_size);
-        if metrics.width != 0 && metrics.height != 0 {
-            bounds = bounds.union(Rect {
-                x: pen + metrics.xmin as f32,
-                y: baseline - (metrics.ymin as f32 + metrics.height as f32),
-                width: metrics.width as f32
-                    + if style.bold { 1.0 } else { 0.0 }
-                    + if style.italic {
-                        (metrics.height as f32 * 0.2).round()
-                    } else {
-                        0.0
-                    },
-                height: metrics.height as f32,
-            });
-        }
-        pen += metrics.advance_width;
-    }
-    bounds
+    font.shape(style, text)
+        .ink_bounds(style.font_size, x, baseline)
 }
 
-pub(super) fn measure_text(font: &fontdue::Font, text: &str, font_size: f32) -> f32 {
-    text.chars()
-        .filter(|&character| !nonprinting(character))
-        .map(|character| font.metrics(character, font_size).advance_width as f64)
-        .sum::<f64>() as f32
+#[cfg(test)]
+pub(super) fn measure_text(font: &crate::text::FontContext, text: &str, font_size: f32) -> f32 {
+    font.shape(
+        &ComputedStyle {
+            font_size,
+            ..ComputedStyle::default()
+        },
+        text,
+    )
+    .width
 }
 
 pub(crate) fn nonprinting(c: char) -> bool {

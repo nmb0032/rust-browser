@@ -59,12 +59,8 @@ fn layout_box(root: &LayoutBox, id: NodeId) -> &LayoutBox {
         .unwrap()
 }
 
-fn font() -> fontdue::Font {
-    fontdue::Font::from_bytes(
-        include_bytes!("../assets/fonts/noto-sans/NotoSans.ttf").as_slice(),
-        fontdue::FontSettings::default(),
-    )
-    .unwrap()
+fn font() -> rust_browser::text::FontContext {
+    rust_browser::text::FontContext::bundled()
 }
 
 #[test]

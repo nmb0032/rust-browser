@@ -48,9 +48,10 @@ pub use cascade::{
     resolve_for_benchmark_with_environment, resolve_for_benchmark_with_stylesheets,
 };
 pub use cascade::{
-    StyleResolution, resolve, resolve_with_environment, resolve_with_style_environment,
-    resolve_with_stylesheets, resolve_with_stylesheets_and_environment,
-    resolve_with_user_stylesheets, resolve_with_user_stylesheets_and_environment,
+    StyleResolution, resolve, resolve_with_environment, resolve_with_fonts,
+    resolve_with_style_environment, resolve_with_stylesheets,
+    resolve_with_stylesheets_and_environment, resolve_with_user_stylesheets,
+    resolve_with_user_stylesheets_and_environment,
 };
 pub use computed::{
     BaselineShift, BaselineSource, BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem,

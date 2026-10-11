@@ -26,12 +26,13 @@ pub struct TextFragment {
     /// Font metric top, not line top. Painting uses `baseline` explicitly.
     pub y: f32,
     pub baseline: f32,
-    /// Bundled-face bitmap bounds at CSS size, including synthetic flags.
+    /// Exact shaped-face bitmap bounds at CSS size, including synthetic flags.
     /// Independent of line-height; contains glyph overflow.
     pub ink_rect: Rect,
     pub width: f32,
     pub height: f32,
     pub text: String,
+    pub glyphs: Arc<crate::text::ShapedText>,
     pub font_size: f32,
     pub color: Option<u32>,
     pub text_color: ResolvedColor,
@@ -46,6 +47,7 @@ pub struct ListMarker {
     pub y: f32,
     pub baseline: f32,
     pub text: String,
+    pub glyphs: Arc<crate::text::ShapedText>,
     pub style: ComputedStyle,
 }
 
@@ -298,7 +300,7 @@ impl LayoutTree {
         find(&self.root, node_id)
     }
 
-    pub fn layout(&mut self, viewport_width: f32, font: &fontdue::Font) {
+    pub fn layout(&mut self, viewport_width: f32, font: &crate::text::FontContext) {
         self.root.reset();
         self.diagnostics.clone_from(&self.construction_diagnostics);
         let viewport_width = finite_used(

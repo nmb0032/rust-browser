@@ -357,13 +357,74 @@ fn resolve_internal_state<const MODE: u8>(
 
 fn resolve_internal_container_state<const MODE: u8>(
     document: &Document,
-    mut stylesheets: StylesheetCollection,
+    stylesheets: StylesheetCollection,
     user_stylesheets: &[&str],
     user_agent: &StyledSheet,
     environment: MediaEnvironment,
     state: &InteractionState,
     containers: &ContainerSnapshot,
 ) -> StyleResolution {
+    resolve_internal_fonts::<MODE>(
+        document,
+        stylesheets,
+        user_stylesheets,
+        user_agent,
+        environment,
+        state,
+        containers,
+        &crate::text::FontContext::bundled(),
+    )
+}
+
+/// Explicit shared font environment for production browsing and injected tests.
+pub fn resolve_with_fonts(
+    document: &Document,
+    stylesheets: StylesheetCollection,
+    environment: MediaEnvironment,
+    state: &InteractionState,
+    containers: &ContainerSnapshot,
+    fonts: &crate::text::FontContext,
+) -> StyleResolution {
+    resolve_internal_fonts::<2>(
+        document,
+        stylesheets,
+        &[],
+        user_agent_rules(),
+        environment,
+        state,
+        containers,
+        fonts,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_internal_fonts<const MODE: u8>(
+    document: &Document,
+    mut stylesheets: StylesheetCollection,
+    user_stylesheets: &[&str],
+    user_agent: &StyledSheet,
+    environment: MediaEnvironment,
+    state: &InteractionState,
+    containers: &ContainerSnapshot,
+    fonts: &crate::text::FontContext,
+) -> StyleResolution {
+    let mut environment = environment;
+    let initial_size = if environment.initial_font_size.is_finite() {
+        environment.initial_font_size.clamp(1.0, MAX_FONT_SIZE)
+    } else {
+        16.0
+    };
+    let initial_face = fonts.select(&ComputedStyle::default());
+    let units = initial_face.units(initial_size);
+    environment.initial_font_metrics = Some([
+        units.ch,
+        units.ex,
+        units.cap,
+        units.ic,
+        initial_face
+            .horizontal_line_metrics(initial_size)
+            .map_or(initial_size * 1.2, |m| m.new_line_size),
+    ]);
     let declaration_context = DeclarationContext::for_document(document);
     let mut user_layers = Layers::default();
     let user_rules = user_stylesheets
@@ -472,6 +533,7 @@ fn resolve_internal_container_state<const MODE: u8>(
         ..MatchingContext::default()
     };
     let mut initial = ComputedNode::default();
+    initial.style.font_face = fonts.select(&initial.style);
     initial.style.font_size =
         if environment.initial_font_size.is_finite() && environment.initial_font_size > 0.0 {
             environment.initial_font_size.min(MAX_FONT_SIZE)
@@ -652,10 +714,15 @@ fn resolve_internal_container_state<const MODE: u8>(
                         is_root,
                         initial_font_size: initial.style.font_size,
                         registrations: &registrations,
+                        fonts,
                     },
                 );
+                let mut result = result;
+                if let Some(language) = element.attribute("lang").filter(|s| s.len() <= 64) {
+                    result.style.font_language = Some(language.to_owned());
+                }
                 if is_root {
-                    root_metrics = Some((result.style.font_size, result.style.used_line_height()));
+                    root_metrics = Some(RootFontMetrics::new(&result.style));
                 }
                 // Only visit targets actually present in candidate rules. Index
                 // keys still describe the originating element, not generated boxes.
@@ -736,6 +803,7 @@ fn resolve_internal_container_state<const MODE: u8>(
                                 is_root: false,
                                 initial_font_size: initial.style.font_size,
                                 registrations: &registrations,
+                                fonts,
                             },
                         );
                         pseudos.insert((node_id, pseudo), computed.style);
@@ -1632,73 +1700,70 @@ fn compute(
             is_root: true,
             initial_font_size: 16.0,
             registrations: &Registrations::new(),
+            fonts: &crate::text::FontContext::bundled(),
         },
     )
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RootFontMetrics {
+    font_size: f32,
+    line_height: f32,
+    units: crate::text::FontUnits,
+}
+
+impl RootFontMetrics {
+    pub(super) fn new(style: &ComputedStyle) -> Self {
+        Self {
+            font_size: style.font_size,
+            line_height: style.used_line_height(),
+            units: style.font_face.units(style.font_size),
+        }
+    }
 }
 
 pub(super) fn length_context(
     style: &ComputedStyle,
     environment: MediaEnvironment,
-    root: Option<(f32, f32)>,
+    root: Option<RootFontMetrics>,
 ) -> LengthContext {
     let viewport = (environment.viewport_width, environment.viewport_height);
-    let (root_font_size, root_line_height) = root.unwrap_or((
-        environment.initial_font_size,
-        ComputedStyle {
+    let root = root.unwrap_or_else(|| {
+        RootFontMetrics::new(&ComputedStyle {
             font_size: environment.initial_font_size,
+            font_face: style.font_face.clone(),
             ..ComputedStyle::default()
-        }
-        .used_line_height(),
-    ));
+        })
+    });
     let mut context = LengthContext {
         font_size: style.font_size,
-        root_font_size,
+        root_font_size: root.font_size,
         zero_advance: style.font_size * 0.5,
         x_height: style.font_size * 0.5,
+        cap_height: style.font_size,
+        ideographic_advance: style.font_size,
+        root_zero_advance: root.units.ch,
+        root_x_height: root.units.ex,
+        root_cap_height: root.units.cap,
+        root_ideographic_advance: root.units.ic,
         line_height: style.used_line_height(),
-        root_line_height,
+        root_line_height: root.line_height,
         small_viewport: environment.small_viewport.unwrap_or(viewport),
         large_viewport: environment.large_viewport.unwrap_or(viewport),
         dynamic_viewport: environment.dynamic_viewport.unwrap_or(viewport),
         container_width: None,
         container_height: None,
     };
-    set_font_metrics(&mut context);
+    set_selected_metrics(&mut context, style);
     context
 }
 
-fn set_font_metrics(context: &mut LengthContext) {
-    // Styling and rendering currently select the same bundled regular face.
-    static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
-    set_font_metrics_from(context, &FONT, crate::paint::load_bundled_font, |message| {
-        eprintln!("{message}")
-    });
-}
-
-fn set_font_metrics_from(
-    context: &mut LengthContext,
-    cache: &OnceLock<Option<fontdue::Font>>,
-    load: impl FnOnce() -> Result<fontdue::Font, Box<dyn std::error::Error>>,
-    report: impl FnOnce(String),
-) {
-    let font = cache.get_or_init(|| match load() {
-        Ok(font) => Some(font),
-        Err(error) => {
-            report(format!(
-                "CSS font metrics: could not load bundled assets/fonts/noto-sans/NotoSans.ttf: \
-                 {error}; ch/ex fall back to 0.5em; check the bundled font data and rebuild"
-            ));
-            None
-        }
-    });
-    if let Some(font) = font {
-        context.zero_advance = font.metrics('0', context.font_size).advance_width;
-        // fontdue's outline bounds are tighter than its pixel-rounded bitmap.
-        context.x_height = font.metrics('x', context.font_size).bounds.height;
-    } else {
-        context.zero_advance = context.font_size * 0.5;
-        context.x_height = context.font_size * 0.5;
-    }
+fn set_selected_metrics(context: &mut LengthContext, style: &ComputedStyle) {
+    let units = style.font_face.units(context.font_size);
+    context.zero_advance = units.ch;
+    context.x_height = units.ex;
+    context.cap_height = units.cap;
+    context.ideographic_advance = units.ic;
 }
 
 struct ComputationContext<'a> {
@@ -1706,6 +1771,7 @@ struct ComputationContext<'a> {
     is_root: bool,
     initial_font_size: f32,
     registrations: &'a Registrations,
+    fonts: &'a crate::text::FontContext,
 }
 
 fn compute_with_context(
@@ -1720,6 +1786,7 @@ fn compute_with_context(
         is_root,
         initial_font_size,
         registrations,
+        fonts,
     } = computation;
     let mut budget = Budget::default();
     let custom = winners
@@ -1803,9 +1870,28 @@ fn compute_with_context(
         }
     }
     context.font_size = style.font_size;
-    set_font_metrics(&mut context);
+    for property in [
+        Property::FontFamily,
+        Property::FontWeight,
+        Property::FontStyle,
+    ] {
+        if let Some((_, value)) = winners.get(&property) {
+            let value = computed_value(value, property, parent, &initial);
+            if let Some(value) = absolutize(value, property, &context, style.font_size) {
+                apply(&mut style, &parent.style, property, value);
+            } else {
+                invalid_math(diagnostics, node_id, property);
+            }
+        }
+    }
+    style.font_face = fonts.select(&style);
+    set_selected_metrics(&mut context, &style);
     if is_root {
         context.root_font_size = style.font_size;
+        context.root_zero_advance = context.zero_advance;
+        context.root_x_height = context.x_height;
+        context.root_cap_height = context.cap_height;
+        context.root_ideographic_advance = context.ideographic_advance;
     }
     // lh/rlh in line-height refer to the parent/initial line-height, avoiding
     // cycles; box properties then use this element's completed line-height.
@@ -1845,7 +1931,12 @@ fn compute_with_context(
         let (_, value) = &winners[&property];
         if matches!(
             property,
-            Property::FontSize | Property::Color | Property::LineHeight
+            Property::FontSize
+                | Property::FontFamily
+                | Property::FontWeight
+                | Property::FontStyle
+                | Property::Color
+                | Property::LineHeight
         ) {
             continue;
         }
@@ -2126,36 +2217,6 @@ mod matching_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn failed_font_metrics_load_is_reported_once_and_cached_across_elements() {
-        let cache = OnceLock::new();
-        let loads = std::cell::Cell::new(0);
-        let mut diagnostics = Vec::new();
-        for font_size in [16.0, 24.0, 32.0] {
-            let mut context = LengthContext {
-                font_size,
-                ..LengthContext::default()
-            };
-            set_font_metrics_from(
-                &mut context,
-                &cache,
-                || {
-                    loads.set(loads.get() + 1);
-                    Err(std::io::Error::other("invalid test font data").into())
-                },
-                |message| diagnostics.push(message),
-            );
-            assert_eq!(context.zero_advance, font_size * 0.5);
-            assert_eq!(context.x_height, font_size * 0.5);
-        }
-        assert_eq!(loads.get(), 1);
-        assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].contains("assets/fonts/noto-sans/NotoSans.ttf"));
-        assert!(diagnostics[0].contains("invalid test font data"));
-        assert!(diagnostics[0].contains("ch/ex fall back to 0.5em"));
-        assert!(diagnostics[0].contains("check the bundled font data and rebuild"));
-    }
 
     #[test]
     fn all_six_cascade_levels_dominate_specificity_inline_and_source_order() {

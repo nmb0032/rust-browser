@@ -63,6 +63,8 @@ pub struct MediaEnvironment {
     pub viewport_height: f32,
     pub media_type: MediaType,
     pub initial_font_size: f32,
+    /// Initial-face ch/ex/cap/ic/normal-lh metrics, supplied by the text context.
+    pub initial_font_metrics: Option<[f32; 5]>,
     /// None means the desktop viewport, where browser-chrome sizes coincide.
     pub small_viewport: Option<(f32, f32)>,
     pub large_viewport: Option<(f32, f32)>,
@@ -122,6 +124,7 @@ impl Default for MediaEnvironment {
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
             media_type: MediaType::Screen,
             initial_font_size: INITIAL_FONT_SIZE,
+            initial_font_metrics: None,
             small_viewport: None,
             large_viewport: None,
             dynamic_viewport: None,
@@ -440,16 +443,29 @@ struct Evaluation {
 
 fn media_context(environment: MediaEnvironment) -> Evaluation {
     let viewport = (environment.viewport_width, environment.viewport_height);
+    let [ch, ex, cap, ic, lh] = environment.initial_font_metrics.unwrap_or([
+        environment.initial_font_size * 0.5,
+        environment.initial_font_size * 0.5,
+        environment.initial_font_size * 0.7,
+        environment.initial_font_size,
+        environment.initial_font_size * 1.25,
+    ]);
     Evaluation {
         environment,
         size: viewport,
         lengths: LengthContext {
             font_size: environment.initial_font_size,
             root_font_size: environment.initial_font_size,
-            zero_advance: environment.initial_font_size * 0.5,
-            x_height: environment.initial_font_size * 0.5,
-            line_height: environment.initial_font_size * 1.25,
-            root_line_height: environment.initial_font_size * 1.25,
+            zero_advance: ch,
+            x_height: ex,
+            cap_height: cap,
+            ideographic_advance: ic,
+            root_zero_advance: ch,
+            root_x_height: ex,
+            root_cap_height: cap,
+            root_ideographic_advance: ic,
+            line_height: lh,
+            root_line_height: lh,
             small_viewport: environment.small_viewport.unwrap_or(viewport),
             large_viewport: environment.large_viewport.unwrap_or(viewport),
             dynamic_viewport: environment.dynamic_viewport.unwrap_or(viewport),

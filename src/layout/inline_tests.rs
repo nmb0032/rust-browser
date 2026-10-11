@@ -6,7 +6,7 @@ use crate::{
     style,
 };
 
-fn layout(css: &str, contents: &str) -> (Document, LayoutTree, fontdue::Font) {
+fn layout(css: &str, contents: &str) -> (Document, LayoutTree, crate::text::FontContext) {
     let document = parser::parse(&format!(
         "<!doctype html><style>body{{margin:0}}#host{{width:160px;font:16px/20px sans-serif}}{css}</style>\
          <div id='host'>{contents}</div>"

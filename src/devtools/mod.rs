@@ -104,6 +104,7 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
             writeln!(output, "  used inline-fragment: {fragment:?}").unwrap();
         }
         for fragment in layout_box.text_fragments() {
+            writeln!(output, "  used shaped-glyphs: {:?}", fragment.glyphs).unwrap();
             writeln!(
                 output,
                 "  used text: {:?} baseline={} ink={:?}",
@@ -622,6 +623,22 @@ fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
             "{indent}  text {:?} baseline={:.3} ink={:?}",
             fragment.text, fragment.baseline, fragment.ink_rect
         );
+        for glyph in &fragment.glyphs.glyphs {
+            println!(
+                "{indent}    face={:?}[{}] glyph={} cluster={}..{} advance={:.3} position=({:.3},{:.3}) offset=({:.3},{:.3}) rtl={}",
+                glyph.face.name,
+                glyph.face.index,
+                glyph.id,
+                glyph.cluster,
+                glyph.cluster_end,
+                glyph.advance,
+                glyph.x,
+                glyph.y,
+                glyph.x_offset,
+                glyph.y_offset,
+                glyph.rtl
+            );
+        }
     }
 
     for child in layout_box.children() {

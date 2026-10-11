@@ -10,11 +10,7 @@ use rust_browser::{css, html::parser, layout, style};
 const SAMPLES: usize = 9;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let font = fontdue::Font::from_bytes(
-        include_bytes!("../assets/fonts/noto-sans/NotoSans.ttf").as_slice(),
-        fontdue::FontSettings::default(),
-    )
-    .map_err(std::io::Error::other)?;
+    let font = rust_browser::text::FontContext::bundled();
     let profile = if cfg!(debug_assertions) {
         "Debug-mode"
     } else {

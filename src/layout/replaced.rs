@@ -8,7 +8,7 @@ use crate::{
 
 use super::{
     Rect, TextFragment,
-    inline::{glyph_bounds, measure_text},
+    inline::glyph_bounds,
     tree::{finite_rect, finite_used},
 };
 
@@ -34,10 +34,10 @@ impl ImageContent {
         width: Option<f32>,
         height: Option<f32>,
         line_height: f32,
-        font: &fontdue::Font,
+        font: &crate::text::FontContext,
     ) -> (f32, f32) {
         let natural_width = self.data.as_ref().map_or_else(
-            || measure_text(font, &self.alt, style.font_size).max(16.0),
+            || font.shape(style, &self.alt).width.max(16.0),
             |image| image.width() as f32,
         );
         let natural_height = self
@@ -61,14 +61,15 @@ impl ImageContent {
         &self,
         rect: Rect,
         style: &ComputedStyle,
-        font: &fontdue::Font,
+        font: &crate::text::FontContext,
         node: Option<NodeId>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Option<TextFragment> {
         if self.data.is_some() || self.alt.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return None;
         }
-        let metrics = font
+        let face = font.select(style);
+        let metrics = face
             .horizontal_line_metrics(style.font_size)
             .expect("bundled horizontal face");
         // The fallback is text inside a replaced box, not its intrinsic baseline.
@@ -96,6 +97,7 @@ impl ImageContent {
             width: rect.width,
             height: rect.height,
             text: self.alt.clone(),
+            glyphs: font.shape(style, &self.alt),
             font_size: style.font_size,
             color: style.text_fill_color.legacy(),
             text_color: style.text_fill_color,

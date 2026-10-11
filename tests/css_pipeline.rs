@@ -6,6 +6,7 @@ use support::{Reply, Server};
 
 fn dump(format: &str) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+        .arg("--bundled-fonts")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/styles.html"))
         .arg(format!("--dump={format}"))
         .output()
@@ -30,6 +31,7 @@ fn unicode_line_breaking_demo_exposes_url_cjk_pre_modes_and_geometry_in_cli() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/line_breaking.html");
     let run = |format: &str| {
         let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+            .arg("--bundled-fonts")
             .arg(&path)
             .arg(format!("--dump={format}"))
             .output()
@@ -82,6 +84,7 @@ fn inline_layout_demo_exposes_shared_baselines_sliced_fragments_and_alignment_in
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/inline_layout.html");
     let run = |format: &str| {
         let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+            .arg("--bundled-fonts")
             .arg(&path)
             .arg(format!("--dump={format}"))
             .output()
@@ -102,11 +105,11 @@ fn inline_layout_demo_exposes_shared_baselines_sliced_fragments_and_alignment_in
     assert!(layout.contains("text \"Small\" baseline=150.416"));
     for value in [
         "height=40.000 baseline=150.416 ascent=32.416 descent=7.584",
-        "width: 159.616, height: 31.792 } baseline=200.208 first=true last=false",
-        "width: 173.45602, height: 31.792 } baseline=240.208 first=false last=true",
-        "line x=156.000 y=276.000 width=300.000 height=24.000 baseline=294.208 ascent=18.208 descent=5.792 content-x=254.752 content-width=102.496",
+        "width: 158.81598, height: 31.792 } baseline=200.208 first=true last=false",
+        "width: 173.13602, height: 31.792 } baseline=240.208 first=false last=true",
+        "line x=156.000 y=276.000 width=300.000 height=24.000 baseline=294.208 ascent=18.208 descent=5.792 content-x=255.072 content-width=101.856",
         "line x=156.000 y=300.000 width=300.000 height=24.000 baseline=318.208 ascent=18.208 descent=5.792 content-x=272.624 content-width=66.752",
-        "line x=156.000 y=352.000 width=300.000 height=24.000 baseline=370.208 ascent=18.208 descent=5.792 content-x=323.232 content-width=132.768",
+        "line x=156.000 y=352.000 width=300.000 height=24.000 baseline=370.208 ascent=18.208 descent=5.792 content-x=323.552 content-width=132.448",
         "line x=156.000 y=376.000 width=300.000 height=24.000 baseline=394.208 ascent=18.208 descent=5.792 content-x=389.248 content-width=66.752",
         "line x=156.000 y=428.000 width=300.000 height=24.000 baseline=446.208 ascent=18.208 descent=5.792 content-x=202.368 content-width=253.632",
     ] {

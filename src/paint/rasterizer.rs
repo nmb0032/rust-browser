@@ -9,19 +9,17 @@ struct PixelRect {
 }
 
 struct TextRun<'a> {
-    text: &'a str,
-    start_x: i32,
-    baseline_y: i32,
-    px: f32,
+    glyphs: &'a crate::text::ShapedText,
+    start_x: f32,
+    baseline_y: f32,
+    scale: f32,
     color: u32,
     alpha: u32,
-    bold: bool,
-    italic: bool,
 }
 
 pub(crate) fn rasterize_display_list(
     display_list: &[DisplayItem],
-    font: &fontdue::Font,
+    _font: &crate::text::FontContext,
     pixels: &mut [u32],
     width: usize,
     height: usize,
@@ -29,7 +27,12 @@ pub(crate) fn rasterize_display_list(
     scroll_offset: f32,
 ) {
     let scale = scale_factor as f32;
-    let viewport_height = height as f32 / scale;
+    if !scale.is_finite()
+        || scale <= 0.0
+        || width.checked_mul(height).is_none_or(|n| n > pixels.len())
+    {
+        return;
+    }
 
     for item in display_list {
         match item {
@@ -120,50 +123,32 @@ pub(crate) fn rasterize_display_list(
             DisplayItem::Text {
                 x,
                 baseline,
-                text,
-                size,
-                bold,
-                italic,
+                glyphs,
                 ..
             }
             | DisplayItem::ColorText {
                 x,
                 baseline,
-                text,
-                size,
-                bold,
-                italic,
+                glyphs,
                 ..
             } => {
                 let baseline = *baseline - scroll_offset;
-                let metrics = font
-                    .horizontal_line_metrics(*size)
-                    .expect("horizontal face");
-                if baseline - metrics.descent <= 0.0 || baseline - metrics.ascent >= viewport_height
-                {
-                    continue;
-                }
-
-                let baseline = (baseline * scale).round() as i32;
                 let (color, alpha) = match item {
                     DisplayItem::Text { color, .. } => (*color, 255),
                     DisplayItem::ColorText { color, .. } => color.to_srgb8(),
                     _ => unreachable!(),
                 };
                 draw_text(
-                    font,
                     pixels,
                     width,
                     height,
                     TextRun {
-                        text,
-                        start_x: (*x * scale).round() as i32,
+                        glyphs,
+                        start_x: *x,
                         baseline_y: baseline,
-                        px: *size * scale,
+                        scale,
                         color,
                         alpha,
-                        bold: *bold,
-                        italic: *italic,
                     },
                 );
             }
@@ -268,30 +253,35 @@ fn draw_rect(
     }
 }
 
-fn draw_text(
-    font: &fontdue::Font,
-    pixels: &mut [u32],
-    width: usize,
-    height: usize,
-    run: TextRun<'_>,
-) {
-    let mut pen_x = run.start_x as f32;
-
-    for character in run.text.chars() {
-        if crate::layout::nonprinting(character) || character == '\t' {
+fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) {
+    for glyph in &run.glyphs.glyphs {
+        let pen_x = ((run.start_x + glyph.x) * run.scale).round();
+        let baseline = ((run.baseline_y - glyph.y) * run.scale).round();
+        // Cull in floating point before converting hostile coordinates to ints.
+        if !pen_x.is_finite()
+            || !baseline.is_finite()
+            || pen_x.abs() > i32::MAX as f32 / 2.0
+            || baseline.abs() > i32::MAX as f32 / 2.0
+        {
             continue;
         }
-        let (metrics, bitmap) = font.rasterize(character, run.px);
-        let top = run.baseline_y - (metrics.ymin + metrics.height as i32);
+        let Some(bitmap) = glyph.face.rasterized(glyph.id, glyph.size * run.scale) else {
+            continue;
+        };
+        let metrics = &bitmap.metrics;
+        let top = baseline as i32 - (metrics.ymin + metrics.height as i32);
         let left = pen_x + metrics.xmin as f32;
-        if left + metrics.width as f32 * 1.2 <= 0.0 || left >= width as f32 {
-            pen_x += metrics.advance_width;
+        if left + metrics.width as f32 * 1.2 <= 0.0
+            || left >= width as f32
+            || top + metrics.height as i32 <= 0
+            || top >= height as i32
+        {
             continue;
         }
 
         for glyph_y in 0..metrics.height {
             for glyph_x in 0..metrics.width {
-                let italic_offset = if run.italic {
+                let italic_offset = if glyph.italic {
                     ((metrics.height - glyph_y) as f32 * 0.2).round() as i32
                 } else {
                     0
@@ -299,21 +289,28 @@ fn draw_text(
                 let x = pen_x.round() as i32 + metrics.xmin + glyph_x as i32 + italic_offset;
                 let y = top + glyph_y as i32;
 
+                if let Some((left, right)) = glyph.clip {
+                    let origin = (run.start_x + glyph.x) * run.scale;
+                    if (x as f32) < (origin + left * run.scale).floor()
+                        || (x as f32) >= (origin + right * run.scale).floor()
+                    {
+                        continue;
+                    }
+                }
                 if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
                     continue;
                 }
 
-                let coverage = bitmap[glyph_y * metrics.width + glyph_x] as u32 * run.alpha / 255;
+                let coverage =
+                    bitmap.pixels[glyph_y * metrics.width + glyph_x] as u32 * run.alpha / 255;
                 let index = y as usize * width + x as usize;
                 pixels[index] = blend(pixels[index], run.color, coverage);
-                if run.bold && x + 1 >= 0 && ((x + 1) as usize) < width {
+                if glyph.bold && x + 1 >= 0 && ((x + 1) as usize) < width {
                     let bold_index = y as usize * width + (x + 1) as usize;
                     pixels[bold_index] = blend(pixels[bold_index], run.color, coverage);
                 }
             }
         }
-
-        pen_x += metrics.advance_width;
     }
 }
 
@@ -419,6 +416,7 @@ mod tests {
             y: 0.0,
             baseline: font.horizontal_line_metrics(16.0).unwrap().ascent,
             text: "M".into(),
+            glyphs: font.shape(&crate::style::ComputedStyle::default(), "M"),
             size: 16.0,
             color: 0,
             bold: false,
@@ -429,6 +427,7 @@ mod tests {
             y: 0.0,
             baseline: font.horizontal_line_metrics(16.0).unwrap().ascent,
             text: "M".into(),
+            glyphs: font.shape(&crate::style::ComputedStyle::default(), "M"),
             size: 16.0,
             color,
             bold: false,
@@ -577,6 +576,13 @@ mod tests {
                 y: 100.0,
                 baseline: 100.0 + font.horizontal_line_metrics(32.0).unwrap().ascent,
                 text: "visible after scrolling".to_string(),
+                glyphs: font.shape(
+                    &crate::style::ComputedStyle {
+                        font_size: 32.0,
+                        ..Default::default()
+                    },
+                    "visible after scrolling",
+                ),
                 size: 32.0,
                 color: TEXT_COLOR,
                 bold: false,
@@ -637,6 +643,15 @@ mod tests {
                     y: 0.0,
                     baseline: font.horizontal_line_metrics(24.0).unwrap().ascent,
                     text: "A".to_string(),
+                    glyphs: font.shape(
+                        &crate::style::ComputedStyle {
+                            font_size: 24.0,
+                            bold,
+                            italic,
+                            ..Default::default()
+                        },
+                        "A",
+                    ),
                     size: 24.0,
                     color: TEXT_COLOR,
                     bold,
@@ -723,6 +738,7 @@ mod tests {
                     y: 0.0,
                     baseline: font.horizontal_line_metrics(16.0).unwrap().ascent,
                     text: "A".into(),
+                    glyphs: font.shape(&crate::style::ComputedStyle::default(), "A"),
                     size: 16.0,
                     color: TEXT_COLOR,
                     bold: true,

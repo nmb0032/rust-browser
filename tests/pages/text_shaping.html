@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Text shaping — Milestone 8.6</title>
+<style>
+body { margin: 0; color: #18212b; font: 18px/1.5 sans-serif; }
+h1 { font-size: 32px; }
+h2 { margin-top: 28px; font-size: 24px; }
+p { width: 640px; }
+.sample { font-size: 32px; line-height: 1.6; }
+#latin, #split, #marks { font-family: "Noto Sans", sans-serif; }
+.serif { font-family: "Times New Roman", "Times", serif; }
+.mono { font-family: "Menlo", "DejaVu Sans Mono", monospace; }
+.arabic { font-family: "Noto Sans Arabic", "Geeza Pro", sans-serif; }
+.cjk { font-family: "Noto Sans SC", "PingFang SC", sans-serif; }
+.narrow { width: 92px; border: 1px solid #64748b; }
+.large { font-size: 42px; }
+</style>
+</head>
+<body>
+<h1>Text shaping</h1>
+<p>OpenType glyphs, advances, clusters and baseline offsets now drive both layout and painting.
+Use the layout or display-list dump to inspect the selected faces and glyph IDs.</p>
+<h2>Ligatures and kerning</h2>
+<p class="sample" id="latin">office ffi AV WA To</p>
+<p class="sample" id="split">of<span>fi</span>ce — AV</p>
+<p class="sample" id="marks">x́ ä — combining marks share a cluster</p>
+<h2>CSS family, weight and style</h2>
+<p class="sample serif">Serif: AV office <strong>bold</strong> <em>italic</em></p>
+<p class="sample mono">Monospace: AV office 012345</p>
+<h2>Non-Latin shaping and fallback</h2>
+<p class="sample arabic" lang="ar" id="arabic">سلام العربية</p>
+<p class="sample cjk" lang="zh" id="cjk">你好，世界 漢字水</p>
+<p>Arabic words shape right-to-left; mixed-direction paragraph ordering is not yet implemented.
+Installed outline fonts supply fallback. Web fonts, color emoji and variation-axis selection are later milestones.</p>
+<h2>Shared baselines and shaped wrapping</h2>
+<p class="sample">Latin <span class="large">ffi</span> <span class="arabic" lang="ar">سلام</span> <span class="cjk">水</span></p>
+<p class="sample narrow" id="wrap">ffi ffi AV AV</p>
+<p class="sample narrow">co&shy;operate</p>
+</body>
+</html>
