@@ -51,6 +51,8 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::Position => format!("{:?}", style.position),
         P::Inset(side) => format!("{:?}", style.inset.get(side)),
         P::ZIndex => format!("{:?}", style.z_index),
+        P::OverflowX => format!("{:?}", style.overflow_x),
+        P::OverflowY => format!("{:?}", style.overflow_y),
         P::Direction => format!("{:?}", style.direction),
         P::TextAlignAll => format!("{:?}", style.text_align),
         P::TextAlignLast => format!("{:?}", style.text_align_last),
@@ -188,17 +190,17 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 69, 689, 63]);
-    assert_eq!(longhands.len(), 50);
+    assert_eq!(counts, [0, 72, 686, 63]);
+    assert_eq!(longhands.len(), 52);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 49);
+    assert_eq!(all.len(), 51);
     longhands.remove(&Property::Direction);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **68 partial**, **689 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **71 partial**, **686 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**50 longhands**, **18 shorthands**"));
+    assert!(report.contains("**52 longhands**, **19 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));

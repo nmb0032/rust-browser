@@ -8,6 +8,21 @@ struct PixelRect {
     bottom: i32,
 }
 
+impl PixelRect {
+    fn intersect(self, other: Self) -> Self {
+        Self {
+            left: self.left.max(other.left),
+            right: self.right.min(other.right),
+            top: self.top.max(other.top),
+            bottom: self.bottom.min(other.bottom),
+        }
+    }
+
+    fn contains(self, x: i32, y: i32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
+}
+
 struct TextRun<'a> {
     glyphs: &'a crate::text::ShapedText,
     start_x: f32,
@@ -15,6 +30,7 @@ struct TextRun<'a> {
     scale: f32,
     color: u32,
     alpha: u32,
+    clip: PixelRect,
 }
 
 pub(crate) fn rasterize_display_list(
@@ -35,8 +51,29 @@ pub(crate) fn rasterize_display_list(
     }
 
     let mut item_scroll = scroll_offset;
+    let mut spatial = crate::layout::SpatialState::default();
+    let framebuffer = PixelRect {
+        left: 0,
+        top: 0,
+        right: width as i32,
+        bottom: height as i32,
+    };
     for item in display_list {
+        // Pixel centers decide coverage at fractional clip edges. Geometry is
+        // never trimmed before image sampling or indexed glyph rasterization.
+        let edge = |value: f32| (value * scale - 0.5).ceil() as i32;
+        let clip = PixelRect {
+            left: spatial.clip.x.map_or(0, |(a, _)| edge(a)),
+            right: spatial.clip.x.map_or(width as i32, |(_, b)| edge(b)),
+            top: spatial.clip.y.map_or(0, |(a, _)| edge(a - item_scroll)),
+            bottom: spatial
+                .clip
+                .y
+                .map_or(height as i32, |(_, b)| edge(b - item_scroll)),
+        }
+        .intersect(framebuffer);
         match item {
+            DisplayItem::Spatial(state) => spatial = *state,
             DisplayItem::CoordinateSpace(space) => {
                 item_scroll = if *space == crate::layout::CoordinateSpace::Document {
                     scroll_offset
@@ -66,8 +103,8 @@ pub(crate) fn rasterize_display_list(
                     _ => unreachable!(),
                 };
                 let Some(actual) = (crate::layout::Rect {
-                    x: *x,
-                    y: *y - item_scroll,
+                    x: *x + spatial.offset.x,
+                    y: *y + spatial.offset.y - item_scroll,
                     width: *w,
                     height: *h,
                 })
@@ -83,23 +120,24 @@ pub(crate) fn rasterize_display_list(
                         top: actual.top,
                         right: actual.right,
                         bottom: actual.bottom,
-                    },
+                    }
+                    .intersect(clip),
                     color,
                     alpha,
                 );
             }
             DisplayItem::OutlineRect { x, y, w, h, color } => {
                 let rect = PixelRect {
-                    left: (*x * scale).floor() as i32,
-                    top: ((*y - item_scroll) * scale).floor() as i32,
-                    right: ((*x + *w) * scale).ceil() as i32,
-                    bottom: ((*y - item_scroll + *h) * scale).ceil() as i32,
+                    left: ((*x + spatial.offset.x) * scale).floor() as i32,
+                    top: ((*y + spatial.offset.y - item_scroll) * scale).floor() as i32,
+                    right: ((*x + spatial.offset.x + *w) * scale).ceil() as i32,
+                    bottom: ((*y + spatial.offset.y - item_scroll + *h) * scale).ceil() as i32,
                 };
-                draw_outline_rect(pixels, width, height, rect, scale, *color);
+                draw_outline_rect(pixels, width, height, rect, clip, scale, *color);
             }
             DisplayItem::Image { x, y, w, h, image } => {
-                let left = *x * scale;
-                let top = (*y - item_scroll) * scale;
+                let left = (*x + spatial.offset.x) * scale;
+                let top = (*y + spatial.offset.y - item_scroll) * scale;
                 let image_width = *w * scale;
                 let image_height = *h * scale;
                 if image_width <= 0.0 || image_height <= 0.0 {
@@ -114,6 +152,9 @@ pub(crate) fn rasterize_display_list(
                         * image.height() as f32) as u32)
                         .min(image.height() - 1);
                     for target_x in start_x..end_x {
+                        if !clip.contains(target_x as i32, target_y as i32) {
+                            continue;
+                        }
                         let source_x = (((target_x as f32 + 0.5 - left) / image_width
                             * image.width() as f32) as u32)
                             .min(image.width() - 1);
@@ -140,7 +181,7 @@ pub(crate) fn rasterize_display_list(
                 glyphs,
                 ..
             } => {
-                let baseline = *baseline - item_scroll;
+                let baseline = *baseline + spatial.offset.y - item_scroll;
                 let (color, alpha) = match item {
                     DisplayItem::Text { color, .. } => (*color, 255),
                     DisplayItem::ColorText { color, .. } => color.to_srgb8(),
@@ -152,11 +193,12 @@ pub(crate) fn rasterize_display_list(
                     height,
                     TextRun {
                         glyphs,
-                        start_x: *x,
+                        start_x: *x + spatial.offset.x,
                         baseline_y: baseline,
                         scale,
                         color,
                         alpha,
+                        clip,
                     },
                 );
             }
@@ -169,14 +211,15 @@ fn draw_outline_rect(
     width: usize,
     height: usize,
     rect: PixelRect,
+    clip: PixelRect,
     scale: f32,
     color: u32,
 ) {
     let thickness = scale.round().max(1.0) as i32;
-    let inner_left = (rect.left + thickness).min(rect.right);
-    let inner_top = (rect.top + thickness).min(rect.bottom);
-    let inner_right = (rect.right - thickness).max(rect.left);
-    let inner_bottom = (rect.bottom - thickness).max(rect.top);
+    let inner_left = rect.left.saturating_add(thickness).min(rect.right);
+    let inner_top = rect.top.saturating_add(thickness).min(rect.bottom);
+    let inner_right = rect.right.saturating_sub(thickness).max(rect.left);
+    let inner_bottom = rect.bottom.saturating_sub(thickness).max(rect.top);
 
     draw_rect(
         pixels,
@@ -187,7 +230,8 @@ fn draw_outline_rect(
             top: rect.top,
             right: rect.right,
             bottom: inner_top,
-        },
+        }
+        .intersect(clip),
         color,
         255,
     );
@@ -200,7 +244,8 @@ fn draw_outline_rect(
             top: inner_bottom,
             right: rect.right,
             bottom: rect.bottom,
-        },
+        }
+        .intersect(clip),
         color,
         255,
     );
@@ -213,7 +258,8 @@ fn draw_outline_rect(
             top: inner_top,
             right: inner_left,
             bottom: inner_bottom,
-        },
+        }
+        .intersect(clip),
         color,
         255,
     );
@@ -226,7 +272,8 @@ fn draw_outline_rect(
             top: inner_top,
             right: rect.right,
             bottom: inner_bottom,
-        },
+        }
+        .intersect(clip),
         color,
         255,
     );
@@ -305,7 +352,12 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
                         continue;
                     }
                 }
-                if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
+                if x < 0
+                    || y < 0
+                    || x as usize >= width
+                    || y as usize >= height
+                    || !run.clip.contains(x, y)
+                {
                     continue;
                 }
 
@@ -313,7 +365,11 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
                     bitmap.pixels[glyph_y * metrics.width + glyph_x] as u32 * run.alpha / 255;
                 let index = y as usize * width + x as usize;
                 pixels[index] = blend(pixels[index], run.color, coverage);
-                if glyph.bold && x + 1 >= 0 && ((x + 1) as usize) < width {
+                if glyph.bold
+                    && x + 1 >= 0
+                    && ((x + 1) as usize) < width
+                    && run.clip.contains(x + 1, y)
+                {
                     let bold_index = y as usize * width + (x + 1) as usize;
                     pixels[bold_index] = blend(pixels[bold_index], run.color, coverage);
                 }

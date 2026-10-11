@@ -206,7 +206,9 @@ fn layout_block(
     layout_box.definite_height = explicit_height;
     let collapse_children = matches!(mode, BlockMode::Flow(_))
         && layout_box.image.is_none()
-        && layout_box.style.container_type == ContainerType::Normal;
+        && layout_box.style.container_type == ContainerType::Normal
+        && !layout_box.style.overflow_x.scroll_container()
+        && !layout_box.style.overflow_y.scroll_container();
     let collapse_top = collapse_children && border.top == 0.0 && padding.top == 0.0;
     let collapse_bottom = collapse_children
         && explicit_height.is_none()

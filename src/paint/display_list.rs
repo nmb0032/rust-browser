@@ -14,6 +14,8 @@ const OUTLINE_COLOR: u32 = 0x00FF_0000;
 pub enum DisplayItem {
     /// Subsequent drawing commands use this coordinate space until changed.
     CoordinateSpace(CoordinateSpace),
+    /// Complete state for the next flattened paint phase, never a DFS stack.
+    Spatial(crate::layout::SpatialState),
     ColorRect {
         x: f32,
         y: f32,
@@ -111,22 +113,72 @@ pub(crate) fn build_display_list(
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
     }
 
+    let decoration = layout.spatial_states(false);
+    let content = layout.spatial_states(true);
+    let scrollbars = layout.scrollbars();
     let mut space = CoordinateSpace::Document;
+    let mut spatial = crate::layout::SpatialState::default();
     for (layout_box, phase) in crate::layout::paint_order(layout) {
         if layout_box.coordinate_space() != space {
             space = layout_box.coordinate_space();
             display_list.push(DisplayItem::CoordinateSpace(space));
         }
-        append_box_items(
-            layout_box,
-            phase,
-            canvas.is_none_or(|b| !std::ptr::eq(b, layout_box)),
-            &mut display_list,
-        );
+        let next = if matches!(phase, PaintPhase::Content | PaintPhase::Text(_)) {
+            content[&layout_box.box_id]
+        } else {
+            decoration[&layout_box.box_id]
+        };
+        if spatial != next {
+            spatial = next;
+            display_list.push(DisplayItem::Spatial(spatial));
+        }
+        if phase != PaintPhase::Scrollbars {
+            append_box_items(
+                layout_box,
+                phase,
+                canvas.is_none_or(|b| !std::ptr::eq(b, layout_box)),
+                &mut display_list,
+            );
+        }
+        if phase == PaintPhase::Scrollbars {
+            for bar in scrollbars
+                .iter()
+                .filter(|bar| bar.owner == layout_box.box_id)
+            {
+                display_list.push(DisplayItem::Spatial(bar.spatial));
+                spatial = bar.spatial;
+                for (rect, color) in [(bar.track, 0xd8d8d8), (bar.thumb, 0x737373)] {
+                    display_list.push(DisplayItem::Rect {
+                        x: rect.x,
+                        y: rect.y,
+                        w: rect.width,
+                        h: rect.height,
+                        color,
+                    });
+                }
+            }
+        }
     }
     if show_outlines {
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
-        append_box_outlines(layout.root(), &mut display_list);
+        fn outlines(
+            b: &LayoutBox,
+            decoration: &std::collections::HashMap<usize, crate::layout::SpatialState>,
+            content: &std::collections::HashMap<usize, crate::layout::SpatialState>,
+            list: &mut Vec<DisplayItem>,
+        ) {
+            list.push(DisplayItem::CoordinateSpace(b.coordinate_space()));
+            list.push(DisplayItem::Spatial(if b.kind() == BoxKind::Text {
+                content[&b.box_id]
+            } else {
+                decoration[&b.box_id]
+            }));
+            append_own_outline(b, content[&b.box_id], list);
+            for child in b.children() {
+                outlines(child, decoration, content, list);
+            }
+        }
+        outlines(layout.root(), &decoration, &content, &mut display_list);
     }
     display_list
 }
@@ -404,8 +456,11 @@ fn text_item(item: DisplayItem) -> DisplayItem {
     }
 }
 
-fn append_box_outlines(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
-    display_list.push(DisplayItem::CoordinateSpace(layout_box.coordinate_space()));
+fn append_own_outline(
+    layout_box: &LayoutBox,
+    content: crate::layout::SpatialState,
+    display_list: &mut Vec<DisplayItem>,
+) {
     let mut outline = |rect: Rect, color| {
         if rect.width > 0.0 && rect.height > 0.0 {
             display_list.push(DisplayItem::OutlineRect {
@@ -428,10 +483,18 @@ fn append_box_outlines(layout_box: &LayoutBox, display_list: &mut Vec<DisplayIte
     } else {
         outline(layout_box.rect(), OUTLINE_COLOR);
     }
+    display_list.push(DisplayItem::Spatial(content));
     for line in layout_box.line_boxes() {
-        outline(line.rect, 0x008080);
-    }
-    for line in layout_box.line_boxes() {
+        let rect = line.rect;
+        if rect.width > 0.0 && rect.height > 0.0 {
+            display_list.push(DisplayItem::OutlineRect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                color: 0x008080,
+            });
+        }
         display_list.push(DisplayItem::Rect {
             x: line.rect.x,
             y: line.baseline,
@@ -440,14 +503,20 @@ fn append_box_outlines(layout_box: &LayoutBox, display_list: &mut Vec<DisplayIte
             color: 0x0000ff,
         });
     }
-
-    for child in layout_box.children() {
-        append_box_outlines(child, display_list);
-    }
 }
 
 pub(crate) fn max_scroll_offset(layout: &LayoutTree, viewport_height: f32) -> f32 {
-    (layout.document_bottom() - viewport_height).max(0.0)
+    if viewport_height.is_finite()
+        && viewport_height > 0.0
+        && layout
+            .viewport_scroll_container()
+            .overflow_y
+            .scroll_container()
+    {
+        (layout.document_bottom() - viewport_height).max(0.0)
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
@@ -659,6 +728,8 @@ mod tests {
 
         assert_eq!(max_scroll_offset(&short, 600.0), 0.0);
         assert!(max_scroll_offset(&long, 600.0) > 0.0);
+        assert_eq!(max_scroll_offset(&long, 0.0), 0.0);
+        assert_eq!(max_scroll_offset(&long, f32::NAN), 0.0);
     }
 
     #[test]

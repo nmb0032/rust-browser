@@ -29,6 +29,7 @@ pub struct Frame {
     pub dropped_parse_errors: usize,
     media_environment: MediaEnvironment,
     interaction_state: InteractionState,
+    scroll_state: layout::ScrollState,
     // Keep collection/resource diagnostics separate from resolution diagnostics,
     // so repeated restyles do not append the same errors to previous results.
     collected_stylesheets: StylesheetCollection,
@@ -71,6 +72,7 @@ impl Frame {
             dropped_parse_errors: 0,
             media_environment,
             interaction_state: InteractionState::default(),
+            scroll_state: layout::ScrollState::default(),
             collected_stylesheets,
             fonts: crate::text::FontContext::bundled(),
             web_fonts: super::web_fonts::WebFonts::default(),
@@ -161,7 +163,27 @@ impl Frame {
     /// Low-level box construction from current styles. For converged container
     /// conditions/units use `layout_with_container_queries` instead.
     pub fn layout_tree(&self) -> LayoutTree {
-        layout::build_layout_tree_with_resources(&self.document, &self.styles, &self.images)
+        let mut tree =
+            layout::build_layout_tree_with_resources(&self.document, &self.styles, &self.images);
+        tree.restore_scroll_state(self.scroll_state.clone());
+        tree
+    }
+
+    pub fn scroll_state(&self) -> &layout::ScrollState {
+        &self.scroll_state
+    }
+
+    /// Adopt input state from this document's latest laid-out snapshot.
+    pub fn retain_scroll_state(&mut self, tree: &LayoutTree) {
+        if self.scroll_state.same_document(tree.scroll_state()) {
+            self.scroll_state = tree.scroll_state().clone();
+        }
+    }
+
+    pub(crate) fn copy_scroll_state_from(&mut self, frame: &Frame) {
+        if self.scroll_state.same_document(&frame.scroll_state) {
+            self.scroll_state = frame.scroll_state.clone();
+        }
     }
 
     /// Resolve and lay out a fresh snapshot to bounded container-query
@@ -204,6 +226,7 @@ impl Frame {
             );
             let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
             if next == snapshot {
+                self.retain_scroll_state(&tree);
                 return tree;
             }
             snapshot = next;
@@ -218,7 +241,9 @@ impl Frame {
             node_id: None,
             message,
         });
-        last.expect("at least one feedback layout pass")
+        let tree = last.expect("at least one feedback layout pass");
+        self.retain_scroll_state(&tree);
+        tree
     }
 
     pub(super) fn set_stylesheets(&mut self, stylesheets: StylesheetCollection) {

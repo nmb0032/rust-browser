@@ -2053,6 +2053,9 @@ fn compute_with_context(
             *style.border_width.get_mut(side) = 0.0;
         }
     }
+    let (x, y) = (style.overflow_x, style.overflow_y);
+    style.overflow_x = x.coupled(y);
+    style.overflow_y = y.coupled(x);
     style.positioned_inline = style.position.out_of_flow() && style.display == Display::Inline;
     if style.positioned_inline {
         style.display = Display::Block;
@@ -2182,6 +2185,8 @@ fn computed_value(
         P::Display => Value::Display(style.display),
         P::Position => Value::Position(style.position),
         P::ZIndex => Value::ZIndex(style.z_index),
+        P::OverflowX => Value::Overflow(style.overflow_x),
+        P::OverflowY => Value::Overflow(style.overflow_y),
         P::Inset(side) => match style.inset.get(side) {
             crate::css::values::LengthOrAuto::Length(length) => Value::Length(length.clone()),
             crate::css::values::LengthOrAuto::Auto => Value::Auto,
@@ -2228,6 +2233,8 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
     match (property, value) {
         (P::Position, Value::Position(position)) => style.position = position,
         (P::ZIndex, Value::ZIndex(index)) => style.z_index = index,
+        (P::OverflowX, Value::Overflow(value)) => style.overflow_x = value,
+        (P::OverflowY, Value::Overflow(value)) => style.overflow_y = value,
         (P::Inset(side), Value::Length(length)) => {
             *style.inset.get_mut(side) = length.into();
         }

@@ -86,7 +86,7 @@ pub struct InlineFragment {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutBox {
     // Construction identity survives inline splitting; it is not DOM identity.
-    pub(super) box_id: usize,
+    pub(crate) box_id: usize,
     pub(super) parent_box: Option<usize>,
     pub(super) position_parent: Option<usize>,
     pub(super) coordinate_space: CoordinateSpace,
@@ -240,9 +240,12 @@ impl LayoutBox {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutTree {
-    root: LayoutBox,
+    pub(super) root: LayoutBox,
     construction_diagnostics: Vec<Diagnostic>,
-    diagnostics: Vec<Diagnostic>,
+    pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) scroll_state: super::ScrollState,
+    pub(super) overflow: std::collections::HashMap<usize, super::ScrollContainer>,
+    pub(super) viewport_overflow: super::ScrollContainer,
 }
 
 impl LayoutTree {
@@ -263,10 +266,56 @@ impl LayoutTree {
     /// CSS/document coordinates at zero scroll. See `hit_test_viewport` for
     /// input while scrolled, including viewport-anchored fixed descendants.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        self.hit_test_viewport(x, y, 0.0)
+        self.hit_test_point(x, y, 0.0, true)
     }
 
     pub fn hit_test_viewport(&self, x: f32, y: f32, scroll: f32) -> Option<NodeId> {
+        let viewport = self.viewport_overflow.port;
+        if x < 0.0 || y < 0.0 || x >= viewport.width || y >= viewport.height {
+            return None;
+        }
+        self.hit_test_point(x, y, scroll, false)
+    }
+
+    fn hit_test_point(&self, x: f32, y: f32, scroll: f32, document_x: bool) -> Option<NodeId> {
+        if let Some(bar) = self.scrollbar_at_in_space(x, y, scroll, document_x) {
+            return Some(bar.node_id());
+        }
+        let decoration = self.spatial_states(false);
+        let content = self.spatial_states(true);
+        for (layout_box, phase) in super::paint_order(self).into_iter().rev() {
+            let Some(node_id) = layout_box.node_id else {
+                continue;
+            };
+            let state = if matches!(
+                phase,
+                super::PaintPhase::Content | super::PaintPhase::Text(_)
+            ) {
+                content[&layout_box.box_id]
+            } else {
+                decoration[&layout_box.box_id]
+            };
+            let x = x - if document_x && layout_box.coordinate_space == CoordinateSpace::Document {
+                self.viewport_scroll().x
+            } else {
+                0.0
+            };
+            if self.phase_hit(layout_box, phase, state, x, y, scroll) {
+                return Some(node_id);
+            }
+        }
+        None
+    }
+
+    pub(super) fn phase_hit(
+        &self,
+        layout_box: &LayoutBox,
+        phase: super::PaintPhase,
+        state: super::SpatialState,
+        x: f32,
+        y: f32,
+        scroll: f32,
+    ) -> bool {
         fn contains(rect: Rect, x: f32, y: f32) -> bool {
             rect.width > 0.0
                 && rect.height > 0.0
@@ -275,67 +324,64 @@ impl LayoutTree {
                 && y >= rect.y
                 && y < rect.y + rect.height
         }
-        for (layout_box, phase) in super::paint_order(self).into_iter().rev() {
-            let Some(node_id) = layout_box.node_id else {
-                continue;
-            };
-            let y = y + if layout_box.coordinate_space == CoordinateSpace::Document {
-                scroll
-            } else {
-                0.0
-            };
-            let text_hit = |fragment: &TextFragment| {
-                contains(fragment.ink_rect, x, y)
-                    || fragment.text.chars().all(|c| matches!(c, ' ' | '\t'))
-                        && contains(
+        let y = y + if layout_box.coordinate_space == CoordinateSpace::Document {
+            scroll
+        } else {
+            0.0
+        };
+        if !x.is_finite() || !y.is_finite() || !state.clip.contains(x, y) {
+            return false;
+        }
+        let x = x - state.offset.x;
+        let y = y - state.offset.y;
+        let text_hit = |fragment: &TextFragment| {
+            contains(fragment.ink_rect, x, y)
+                || fragment.text.chars().all(|c| matches!(c, ' ' | '\t'))
+                    && contains(
+                        Rect {
+                            x: fragment.x,
+                            y: fragment.y,
+                            width: fragment.width,
+                            height: fragment.height,
+                        },
+                        x,
+                        y,
+                    )
+        };
+        match phase {
+            super::PaintPhase::Scrollbars => false,
+            super::PaintPhase::InlineDecoration(index) => {
+                contains(layout_box.inline_fragments[index].rect, x, y)
+            }
+            super::PaintPhase::Text(index) => text_hit(&layout_box.text_fragments[index]),
+            super::PaintPhase::Decoration if layout_box.kind == BoxKind::Text => false,
+            super::PaintPhase::Decoration
+                if layout_box.kind == BoxKind::Inline && layout_box.image.is_none() =>
+            {
+                layout_box
+                    .inline_fragments
+                    .iter()
+                    .rev()
+                    .any(|f| contains(f.rect, x, y))
+            }
+            super::PaintPhase::Decoration => contains(layout_box.rect, x, y),
+            super::PaintPhase::Content => {
+                layout_box.image.is_some() && contains(layout_box.content_rect, x, y)
+                    || layout_box.text_fragments.iter().rev().any(text_hit)
+                    || layout_box.list_marker.as_ref().is_some_and(|marker| {
+                        contains(
                             Rect {
-                                x: fragment.x,
-                                y: fragment.y,
-                                width: fragment.width,
-                                height: fragment.height,
+                                x: marker.x,
+                                y: marker.baseline - marker.glyphs.ascent,
+                                width: marker.glyphs.width,
+                                height: marker.glyphs.ascent + marker.glyphs.descent,
                             },
                             x,
                             y,
                         )
-            };
-            let hit = match phase {
-                super::PaintPhase::InlineDecoration(index) => {
-                    contains(layout_box.inline_fragments[index].rect, x, y)
-                }
-                super::PaintPhase::Text(index) => text_hit(&layout_box.text_fragments[index]),
-                super::PaintPhase::Decoration if layout_box.kind == BoxKind::Text => false,
-                super::PaintPhase::Decoration
-                    if layout_box.kind == BoxKind::Inline && layout_box.image.is_none() =>
-                {
-                    layout_box
-                        .inline_fragments
-                        .iter()
-                        .rev()
-                        .any(|f| contains(f.rect, x, y))
-                }
-                super::PaintPhase::Decoration => contains(layout_box.rect, x, y),
-                super::PaintPhase::Content => {
-                    layout_box.image.is_some() && contains(layout_box.content_rect, x, y)
-                        || layout_box.text_fragments.iter().rev().any(text_hit)
-                        || layout_box.list_marker.as_ref().is_some_and(|marker| {
-                            contains(
-                                Rect {
-                                    x: marker.x,
-                                    y: marker.baseline - marker.glyphs.ascent,
-                                    width: marker.glyphs.width,
-                                    height: marker.glyphs.ascent + marker.glyphs.descent,
-                                },
-                                x,
-                                y,
-                            )
-                        })
-                }
-            };
-            if hit {
-                return Some(node_id);
+                    })
             }
         }
-        None
     }
 
     /// Bounds of all real boxes for a node, including block-in-inline
@@ -425,35 +471,17 @@ impl LayoutTree {
             font,
             &mut self.diagnostics,
         );
+        self.finalize_overflow(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_width,
+            height: viewport_height,
+        });
     }
 
-    /// Root scrolling remains a single viewport offset. Include document ink
-    /// overflow, but never fixed boxes or their viewport-space descendants.
+    /// Clipped document extent; hidden panel contents never enlarge the canvas.
     pub(crate) fn document_bottom(&self) -> f32 {
-        fn bottom(b: &LayoutBox) -> f32 {
-            let own = if b.coordinate_space == CoordinateSpace::Document {
-                b.rect.y + b.rect.height
-            } else {
-                0.0
-            };
-            let ink = if b.coordinate_space == CoordinateSpace::Document {
-                let marker = b.list_marker.as_ref().map_or(own, |marker| {
-                    let ink =
-                        marker
-                            .glyphs
-                            .ink_bounds(marker.style.font_size, marker.x, marker.baseline);
-                    own.max(ink.y + ink.height)
-                });
-                b.text_fragments
-                    .iter()
-                    .map(|f| f.ink_rect.y + f.ink_rect.height)
-                    .fold(marker, f32::max)
-            } else {
-                own
-            };
-            b.children.iter().map(bottom).fold(ink, f32::max)
-        }
-        bottom(&self.root)
+        self.viewport_overflow.extent.y + self.viewport_overflow.extent.height
     }
 }
 
@@ -603,6 +631,15 @@ pub fn build_layout_tree_with_resources(
         root,
         construction_diagnostics: diagnostics.clone(),
         diagnostics,
+        scroll_state: super::ScrollState::default(),
+        overflow: std::collections::HashMap::new(),
+        viewport_overflow: super::ScrollContainer {
+            port: Rect::default(),
+            extent: Rect::default(),
+            range: super::ScrollRange::default(),
+            overflow_x: style::Overflow::Auto,
+            overflow_y: style::Overflow::Auto,
+        },
     }
 }
 

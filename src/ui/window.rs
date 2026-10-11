@@ -49,6 +49,7 @@ pub fn run(
         frame,
         cursor: None,
         pressed_link: None,
+        scrollbar_drag: None,
         modifiers: ModifiersState::empty(),
         restore_scroll: None,
         fragment_scroll_pending: true,
@@ -73,6 +74,7 @@ struct BrowserWindow {
     frame: Arc<Frame>,
     cursor: Option<(f64, f64)>,
     pressed_link: Option<url::Url>,
+    scrollbar_drag: Option<(crate::layout::Scrollbar, f32)>,
     modifiers: ModifiersState,
     restore_scroll: Option<f32>,
     fragment_scroll_pending: bool,
@@ -82,6 +84,7 @@ struct BrowserWindow {
 
 impl BrowserWindow {
     fn resize_surface(&mut self, width: u32, height: u32) {
+        self.scrollbar_drag = None;
         let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) else {
             return;
         };
@@ -128,18 +131,35 @@ impl BrowserWindow {
     }
 
     fn scroll_by(&mut self, delta: f32) {
+        self.scroll_by_axes(crate::layout::ScrollOffset { x: 0.0, y: delta });
+    }
+
+    fn scroll_by_axes(&mut self, delta: crate::layout::ScrollOffset) {
         let Some(window) = &self.window else {
             return;
         };
         let scale_factor = window.scale_factor();
-        let logical_height = window.inner_size().to_logical::<f32>(scale_factor).height;
-        let max_scroll = paint::max_scroll_offset(&self.layout_tree, logical_height);
-        let next_offset = (self.scroll_offset + delta).clamp(0.0, max_scroll);
-
-        if next_offset != self.scroll_offset {
+        let (x, y) = self.cursor.map_or((-1.0, -1.0), |(x, y)| {
+            input::document_point(x, y, scale_factor, 0.0)
+        });
+        self.layout_tree
+            .set_viewport_scroll(crate::layout::ScrollOffset {
+                y: self.scroll_offset,
+                ..self.layout_tree.viewport_scroll()
+            });
+        if self.layout_tree.scroll_wheel(x, y, delta) {
             self.fragment_scroll_pending = false;
-            self.scroll_offset = next_offset;
+            self.scroll_offset = self.layout_tree.viewport_scroll().y;
+            Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+            let logical = window.inner_size().to_logical::<f32>(scale_factor);
+            self.display_list = paint::build_display_list(
+                &self.layout_tree,
+                logical.width,
+                logical.height,
+                self.show_layout_outlines,
+            );
             self.update_cursor();
+            self.update_interaction(InteractionEvent::Pointer);
             self.request_redraw();
         }
     }
@@ -164,6 +184,7 @@ impl BrowserWindow {
             match self.navigation.try_recv() {
                 Ok(LoadEvent::Progress(frame)) => {
                     let mut frame = frame;
+                    Arc::make_mut(&mut frame).copy_scroll_state_from(&self.frame);
                     if self.navigation.is_font_loading() {
                         let state = self.frame.interaction_state().clone();
                         let environment = self.frame.media_environment();
@@ -306,6 +327,13 @@ impl BrowserWindow {
             .to_logical::<f32>(window.scale_factor())
             .height;
         self.scroll_offset = offset.clamp(0.0, paint::max_scroll_offset(&self.layout_tree, height));
+        self.layout_tree
+            .set_viewport_scroll(crate::layout::ScrollOffset {
+                y: self.scroll_offset,
+                ..self.layout_tree.viewport_scroll()
+            });
+        self.scroll_offset = self.layout_tree.viewport_scroll().y;
+        Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
         self.update_cursor();
         self.update_interaction(InteractionEvent::Pointer);
         self.request_redraw();
@@ -472,6 +500,7 @@ impl BrowserWindow {
     }
 
     fn begin_navigation(&mut self, restore_scroll: Option<f32>) {
+        self.scrollbar_drag = None;
         self.restore_scroll = restore_scroll;
         self.fragment_scroll_pending = restore_scroll.is_none();
         self.scroll_offset = 0.0;
@@ -522,9 +551,15 @@ fn render_for_window_size(
         ..frame.media_environment()
     };
     frame.set_media_environment(environment);
-    let tree = frame.layout_with_container_queries(font);
-    let list = paint::build_display_list(&tree, logical.width, logical.height, outlines);
+    let mut tree = frame.layout_with_container_queries(font);
     let scroll = scroll.clamp(0.0, paint::max_scroll_offset(&tree, logical.height));
+    tree.set_viewport_scroll(crate::layout::ScrollOffset {
+        y: scroll,
+        ..tree.viewport_scroll()
+    });
+    let scroll = tree.viewport_scroll().y;
+    frame.retain_scroll_state(&tree);
+    let list = paint::build_display_list(&tree, logical.width, logical.height, outlines);
     (tree, list, scroll)
 }
 
@@ -572,6 +607,16 @@ impl ApplicationHandler for BrowserWindow {
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = Some((position.x, position.y));
+                if let Some((bar, grab)) = self.scrollbar_drag {
+                    let scale = self.window.as_ref().expect("active window").scale_factor();
+                    let (x, y) = input::document_point(position.x, position.y, scale, 0.0);
+                    if self.layout_tree.drag_scrollbar(bar, x, y, grab) {
+                        Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+                        self.rebuild_display_list();
+                        self.request_redraw();
+                    }
+                    return;
+                }
                 self.update_interaction(InteractionEvent::Pointer);
                 self.update_cursor();
             }
@@ -586,6 +631,27 @@ impl ApplicationHandler for BrowserWindow {
                 button: MouseButton::Left,
                 ..
             } => {
+                if state == ElementState::Released && self.scrollbar_drag.take().is_some() {
+                    self.update_interaction(InteractionEvent::Pointer);
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && let Some((x, y)) = self.cursor
+                {
+                    let scale = self.window.as_ref().expect("active window").scale_factor();
+                    let (x, y) = input::document_point(x, y, scale, 0.0);
+                    if let Some(bar) = self.layout_tree.scrollbar_at(x, y) {
+                        let grab = self.layout_tree.scrollbar_grab(bar, x, y);
+                        self.scrollbar_drag = Some((bar, grab));
+                        self.pressed_link = None;
+                        if self.layout_tree.drag_scrollbar(bar, x, y, grab) {
+                            Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+                            self.rebuild_display_list();
+                            self.request_redraw();
+                        }
+                        return;
+                    }
+                }
                 let link = self.cursor_link();
                 self.update_interaction(if state == ElementState::Pressed {
                     InteractionEvent::Press
@@ -605,6 +671,7 @@ impl ApplicationHandler for BrowserWindow {
                 }
             }
             WindowEvent::Focused(false) => {
+                self.scrollbar_drag = None;
                 self.pressed_link = None;
                 self.update_interaction(InteractionEvent::Blur);
             }
@@ -629,10 +696,16 @@ impl ApplicationHandler for BrowserWindow {
                     .expect("window event must belong to the active window")
                     .scale_factor() as f32;
                 let scroll_delta = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => -y * paint::LINE_HEIGHT,
-                    MouseScrollDelta::PixelDelta(position) => -(position.y as f32) / scale_factor,
+                    MouseScrollDelta::LineDelta(x, y) => crate::layout::ScrollOffset {
+                        x: -x * paint::LINE_HEIGHT,
+                        y: -y * paint::LINE_HEIGHT,
+                    },
+                    MouseScrollDelta::PixelDelta(position) => crate::layout::ScrollOffset {
+                        x: -(position.x as f32) / scale_factor,
+                        y: -(position.y as f32) / scale_factor,
+                    },
                 };
-                self.scroll_by(scroll_delta);
+                self.scroll_by_axes(scroll_delta);
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Some(direction) = input::history_shortcut(&event.logical_key, self.modifiers)
@@ -711,6 +784,91 @@ impl ApplicationHandler for BrowserWindow {
 mod tests {
     use super::*;
     use crate::{css::values::Length, html::parser};
+
+    #[test]
+    fn nested_scroll_input_survives_native_scale_resize_and_hover_rebuilds() {
+        let doc = parser::parse(
+            "<style>html,body{margin:0}\
+            #p{overflow:auto;width:100px;height:60px}a{display:block;height:40px}\
+            #last{height:200px}#tail{height:500px}#second:hover{background:blue}\
+            @media(max-width:250px){#last{height:0}a{height:10px}}</style>\
+            <div id=p><a href='#second'>First</a><a id=second href='#tail'>Second</a>\
+            <div id=last></div></div><div id=tail></div>",
+        )
+        .unwrap();
+        let mut frame = Frame::new(url::Url::parse("https://overflow.test/").unwrap(), doc);
+        let find = |name: &str| {
+            frame
+                .document
+                .preorder()
+                .find(|&id| {
+                    frame
+                        .document
+                        .node(id)
+                        .unwrap()
+                        .as_element()
+                        .is_some_and(|e| e.attribute("id") == Some(name))
+                })
+                .unwrap()
+        };
+        let panel = find("p");
+        let second = find("second");
+        let font = crate::text::FontContext::bundled();
+        let (mut tree, _, _) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(600, 400),
+            2.0,
+            &font,
+            false,
+            0.0,
+        );
+        assert!(tree.scroll_wheel(35.0, 35.0, crate::layout::ScrollOffset { x: 0.0, y: 40.5 }));
+        frame.retain_scroll_state(&tree);
+        let (tree, _, root) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(750, 500),
+            2.5,
+            &font,
+            false,
+            20.0,
+        );
+        assert_eq!(root, 20.0);
+        assert_eq!(tree.scroll_offset(panel).y, 40.5);
+        let hit = tree.hit_test_viewport(35.0, 10.0, root).unwrap();
+        assert!(hit == second || frame.document.node(hit).unwrap().parent() == Some(second));
+        assert!(update_interaction_for_window_scrolled(
+            &mut frame,
+            &tree,
+            Some((35.0, 10.0)),
+            root,
+            InteractionEvent::Pointer,
+        ));
+        let (tree, _, root) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(750, 500),
+            2.5,
+            &font,
+            false,
+            root,
+        );
+        assert_eq!(tree.scroll_offset(panel).y, 40.5);
+        assert_eq!(
+            frame.styles.get(second).unwrap().background_color,
+            Some(0x0000ff)
+        );
+        let (tree, _, _) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(600, 500),
+            2.5,
+            &font,
+            false,
+            root,
+        );
+        assert_eq!(
+            tree.scroll_offset(panel),
+            crate::layout::ScrollOffset::default()
+        );
+    }
 
     #[test]
     fn pointer_press_release_tab_blur_and_fragment_restyle_through_the_window_boundary() {

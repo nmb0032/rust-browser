@@ -56,7 +56,7 @@ pub use cascade::{
 };
 pub use computed::{
     BaselineShift, BaselineSource, BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem,
-    Direction, Display, Position, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign,
+    Direction, Display, Overflow, Position, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign,
     WhiteSpaceCollapse, ZIndex,
 };
 pub use container::ContainerSnapshot;

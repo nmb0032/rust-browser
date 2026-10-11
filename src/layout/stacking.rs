@@ -13,6 +13,7 @@ pub(crate) enum PaintPhase {
     InlineDecoration(usize),
     Content,
     Text(usize),
+    Scrollbars,
 }
 
 struct Group<'a> {
@@ -177,6 +178,15 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         foreground.sort_by_key(|(flow, line, order, phase, _, _)| (*flow, *line, *order, *phase));
         for (_, _, _, _, b, phase) in foreground {
             list.push((b, phase));
+        }
+        // Basic overlays stay in their owning CSS2 paint group. Positioned
+        // descendants still follow the existing context ordering.
+        for (b, _) in &group.boxes {
+            if b.kind == BoxKind::Block
+                && (b.style.overflow_x.user_scrollable() || b.style.overflow_y.user_scrollable())
+            {
+                list.push((b, PaintPhase::Scrollbars));
+            }
         }
         for (child, _) in children.iter().filter(|(_, g)| g.level.unwrap_or(0) >= 0) {
             paint(**child, root_element, groups, list);

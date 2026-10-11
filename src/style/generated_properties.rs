@@ -2,7 +2,7 @@
 // @webref/css 8.7.6, MIT; see tools/css-spec/LICENSE and provenance.json.
 // Snapshot SHA-256: 4860d2a9ad90814a61888e8b2d879651fd523c0d3926eecfe4548b4dd60a20eb
 use super::{
-    BaselineSource, BoxSizing, Direction, Display, Position, TextAlign, TextAlignLast,
+    BaselineSource, BoxSizing, Direction, Display, Overflow, Position, TextAlign, TextAlignLast,
     TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
     declarations::{Property, Value},
     metadata::{Grammar, PropertyMetadata, Support, SyntaxMetadata},
@@ -8389,8 +8389,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["overflow-x", "overflow-y"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "overflow-anchor",
@@ -8656,8 +8656,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["auto", "clip", "hidden", "scroll", "visible"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "overflow-y",
@@ -8671,8 +8671,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["auto", "clip", "hidden", "scroll", "visible"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "overlay",
@@ -18036,6 +18036,7 @@ pub(super) enum Parser {
     TextAlign,
     VerticalAlign,
     WhiteSpace,
+    Overflow,
 }
 pub(super) fn parser(name: &str) -> Option<Parser> {
     Some(match name {
@@ -18091,6 +18092,9 @@ pub(super) fn parser(name: &str) -> Option<Parser> {
         "margin-left" => Parser::Longhand,
         "margin-right" => Parser::Longhand,
         "margin-top" => Parser::Longhand,
+        "overflow" => Parser::Overflow,
+        "overflow-x" => Parser::Longhand,
+        "overflow-y" => Parser::Longhand,
         "padding" => Parser::Four,
         "padding-bottom" => Parser::Longhand,
         "padding-left" => Parser::Longhand,
@@ -18124,6 +18128,8 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
             Property::BackgroundImage,
             Property::Display,
             Property::Position,
+            Property::OverflowX,
+            Property::OverflowY,
             Property::Inset(Side::Top),
             Property::Inset(Side::Right),
             Property::Inset(Side::Bottom),
@@ -18275,6 +18281,9 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         "margin-left" => vec![Property::Margin(Side::Left)],
         "margin-right" => vec![Property::Margin(Side::Right)],
         "margin-top" => vec![Property::Margin(Side::Top)],
+        "overflow" => vec![Property::OverflowX, Property::OverflowY],
+        "overflow-x" => vec![Property::OverflowX],
+        "overflow-y" => vec![Property::OverflowY],
         "padding" => vec![
             Property::Padding(Side::Top),
             Property::Padding(Side::Right),
@@ -18314,6 +18323,8 @@ impl Property {
             Self::BackgroundImage => "background-image",
             Self::Display => "display",
             Self::Position => "position",
+            Self::OverflowX => "overflow-x",
+            Self::OverflowY => "overflow-y",
             Self::Inset(Side::Top) => "top",
             Self::Inset(Side::Right) => "right",
             Self::Inset(Side::Bottom) => "bottom",
@@ -18368,6 +18379,8 @@ impl Property {
             Self::BackgroundImage => false,
             Self::Display => false,
             Self::Position => false,
+            Self::OverflowX => false,
+            Self::OverflowY => false,
             Self::Inset(Side::Top) => false,
             Self::Inset(Side::Right) => false,
             Self::Inset(Side::Bottom) => false,
@@ -18422,6 +18435,8 @@ impl Property {
             Self::BackgroundImage => false,
             Self::Display => false,
             Self::Position => false,
+            Self::OverflowX => false,
+            Self::OverflowY => false,
             Self::Inset(Side::Top) => false,
             Self::Inset(Side::Right) => false,
             Self::Inset(Side::Bottom) => false,
@@ -18477,6 +18492,8 @@ pub(super) fn initial_css(property: Property) -> &'static str {
         Property::BackgroundImage => "none",
         Property::Display => "inline",
         Property::Position => "static",
+        Property::OverflowX => "visible",
+        Property::OverflowY => "visible",
         Property::Inset(Side::Top) => "auto",
         Property::Inset(Side::Right) => "auto",
         Property::Inset(Side::Bottom) => "auto",
@@ -18531,6 +18548,8 @@ pub(super) fn simple(property: Property) -> bool {
             | Property::BackgroundImage
             | Property::Display
             | Property::Position
+            | Property::OverflowX
+            | Property::OverflowY
             | Property::Direction
             | Property::TextAlignAll
             | Property::TextAlignLast
@@ -18585,6 +18604,16 @@ pub(super) fn simple_value(property: Property, tokens: &[Component]) -> Option<V
             "static" => Value::Position(Position::Static),
             _ => return None,
         }),
+        Property::OverflowX | Property::OverflowY => {
+            Some(match token.ident()?.to_ascii_lowercase().as_str() {
+                "auto" => Value::Overflow(Overflow::Auto),
+                "clip" => Value::Overflow(Overflow::Clip),
+                "hidden" => Value::Overflow(Overflow::Hidden),
+                "scroll" => Value::Overflow(Overflow::Scroll),
+                "visible" => Value::Overflow(Overflow::Visible),
+                _ => return None,
+            })
+        }
         Property::Direction => Some(match token.ident()?.to_ascii_lowercase().as_str() {
             "ltr" => Value::Direction(Direction::Ltr),
             "rtl" => Value::Direction(Direction::Rtl),
@@ -18705,6 +18734,9 @@ pub(super) static SAMPLES: &[(&str, &str)] = &[
     ("margin-left", "12px"),
     ("margin-right", "12px"),
     ("margin-top", "12px"),
+    ("overflow", "hidden scroll"),
+    ("overflow-x", "hidden"),
+    ("overflow-y", "scroll"),
     ("padding", "1px 2px 3px 4px"),
     ("padding-bottom", "8px"),
     ("padding-left", "8px"),

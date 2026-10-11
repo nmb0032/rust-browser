@@ -168,6 +168,42 @@ pub enum ZIndex {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Overflow {
+    #[default]
+    Visible,
+    Hidden,
+    Clip,
+    Scroll,
+    Auto,
+}
+
+impl Overflow {
+    pub fn scroll_container(self) -> bool {
+        matches!(self, Self::Hidden | Self::Scroll | Self::Auto)
+    }
+
+    pub fn user_scrollable(self) -> bool {
+        matches!(self, Self::Scroll | Self::Auto)
+    }
+
+    pub fn clips(self) -> bool {
+        self != Self::Visible
+    }
+
+    pub(crate) fn coupled(self, other: Self) -> Self {
+        if other.scroll_container() {
+            match self {
+                Self::Visible => Self::Auto,
+                Self::Clip => Self::Hidden,
+                _ => self,
+            }
+        } else {
+            self
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BoxSizing {
     #[default]
     ContentBox,
@@ -200,6 +236,8 @@ pub struct ComputedStyle {
     pub position: Position,
     pub inset: Edges<LengthOrAuto>,
     pub z_index: ZIndex,
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
     /// Pre-blockification display used by CSS2's hypothetical static position.
     pub positioned_inline: bool,
     pub direction: Direction,
@@ -255,6 +293,8 @@ impl Default for ComputedStyle {
             position: Position::Static,
             inset: Edges::all(LengthOrAuto::Auto),
             z_index: ZIndex::Auto,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
             positioned_inline: false,
             direction: Direction::Ltr,
             text_align: TextAlign::Start,

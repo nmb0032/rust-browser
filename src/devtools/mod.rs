@@ -6,7 +6,7 @@ use crate::paint::DisplayItem;
 /// "Actual" here is unclipped rectangle quantization, not glyph rasterization.
 pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
     use std::fmt::Write;
-    fn walk(layout_box: &LayoutBox, scale: f32, output: &mut String) {
+    fn walk(tree: &LayoutTree, layout_box: &LayoutBox, scale: f32, output: &mut String) {
         if let Some(node) = layout_box.dom_node_id() {
             writeln!(output, "Node {node:?} {}", layout_box.tag_name()).unwrap();
         } else {
@@ -63,6 +63,34 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
             layout_box.coordinate_space()
         )
         .unwrap();
+        writeln!(
+            output,
+            "  computed overflow: {:?} {:?}",
+            layout_box.style().overflow_x,
+            layout_box.style().overflow_y
+        )
+        .unwrap();
+        if let Some(container) = tree.box_scroll_container(layout_box) {
+            writeln!(output, "  used scroll-port: {:?}", container.port).unwrap();
+            writeln!(output, "  used scroll-extent: {:?}", container.extent).unwrap();
+            writeln!(
+                output,
+                "  used scroll-range: {:?} offset={:?}",
+                container.range,
+                tree.box_scroll_offset(layout_box)
+            )
+            .unwrap();
+            if let Some(node) = layout_box.dom_node_id()
+                && layout_box.pseudo_element().is_none()
+            {
+                writeln!(
+                    output,
+                    "  visual clipped-border: {:?}",
+                    tree.visual_node_rect(node, tree.viewport_scroll().y)
+                )
+                .unwrap();
+            }
+        }
         writeln!(
             output,
             "  computed direction: {:?}",
@@ -170,11 +198,18 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
         )
         .unwrap();
         for child in layout_box.children() {
-            walk(child, scale, output);
+            walk(tree, child, scale, output);
         }
     }
     let mut output = String::new();
-    walk(tree.root(), device_scale, &mut output);
+    writeln!(
+        output,
+        "Viewport overflow: {:?} offset={:?}",
+        tree.viewport_scroll_container(),
+        tree.viewport_scroll()
+    )
+    .unwrap();
+    walk(tree, tree.root(), device_scale, &mut output);
     output
 }
 
@@ -208,6 +243,8 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
             }
         };
         writeln!(output, "  display: {:?}", style.display).unwrap();
+        writeln!(output, "  overflow-x: {:?}", style.overflow_x).unwrap();
+        writeln!(output, "  overflow-y: {:?}", style.overflow_y).unwrap();
         writeln!(
             output,
             "  position: {:?} inset={:?} z-index={:?}",
@@ -599,10 +636,15 @@ pub fn dump_display_list(display_list: &[DisplayItem]) {
 }
 
 pub fn dump_layout(layout: &LayoutTree) {
-    dump_layout_box(layout.root(), 0);
+    println!(
+        "Viewport overflow: {:?} offset={:?}",
+        layout.viewport_scroll_container(),
+        layout.viewport_scroll()
+    );
+    dump_layout_box(layout, layout.root(), 0);
 }
 
-fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
+fn dump_layout_box(tree: &LayoutTree, layout_box: &LayoutBox, depth: usize) {
     if layout_box.kind() == BoxKind::Text
         && layout_box.text().is_some_and(|text| text.trim().is_empty())
     {
@@ -631,6 +673,20 @@ fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
         layout_box.style().z_index,
         layout_box.coordinate_space()
     );
+    println!(
+        "{indent}  overflow-x={:?} overflow-y={:?}",
+        layout_box.style().overflow_x,
+        layout_box.style().overflow_y
+    );
+    if let Some(container) = tree.box_scroll_container(layout_box) {
+        println!(
+            "{indent}  clip-port={:?} scroll-extent={:?} scroll-range={:?} scroll-offset={:?}",
+            container.port,
+            container.extent,
+            container.range,
+            tree.box_scroll_offset(layout_box)
+        );
+    }
     for line in layout_box.line_boxes() {
         println!(
             "{indent}  line x={:.3} y={:.3} width={:.3} height={:.3} baseline={:.3} ascent={:.3} descent={:.3} content-x={:.3} content-width={:.3}",
@@ -675,6 +731,6 @@ fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
     }
 
     for child in layout_box.children() {
-        dump_layout_box(child, depth + 1);
+        dump_layout_box(tree, child, depth + 1);
     }
 }

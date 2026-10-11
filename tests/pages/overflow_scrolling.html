@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Clipped content and nested scrolling</title>
+  <style>
+    html, body { margin: 0; color: #18212c; background: #faf8f4; }
+    body { font: 16px/24px sans-serif; }
+    header { position: fixed; inset: 0 0 auto; height: 48px; padding: 12px 24px;
+      box-sizing: border-box; background: #18212c; color: white; z-index: 10; }
+    main { width: 620px; margin: 64px auto 0; }
+    h1 { font-size: 28px; line-height: 36px; }
+    section { margin: 24px 0; }
+    .panel { width: 500px; padding: 12px; border: 2px solid #8d9aa6;
+      background: white; }
+    .clipped { overflow: hidden; height: 64px; }
+    .wide { width: 700px; background: #dfece5; padding: 8px; }
+    .outer { overflow: auto; height: 220px; position: relative; }
+    .inner { overflow: scroll; width: 320px; height: 100px; padding: 8px;
+      border: 2px solid #65a9ad; background: #f0f7f7; }
+    .inner p { width: 500px; padding: 4px; }
+    .tail { height: 280px; background: #efe3ce; padding: 12px; }
+    .clip-only { overflow: clip visible; width: 180px; height: 40px;
+      border: 2px solid #d67a46; }
+    .escape-stage { position: relative; height: 100px; }
+    .escape-window { overflow: hidden; width: 200px; height: 60px; background: #efe3ce; }
+    .escaped { position: absolute; left: 220px; top: 20px; background: #65a9ad; padding: 8px; }
+    .root-tail { height: 400px; }
+  </style>
+</head>
+<body>
+  <header>Overflow 8.9 — fixed viewport header</header>
+  <main>
+    <h1>Clipped content and scrollable panels</h1>
+    <p>Wheel over a panel to scroll it. Drag its grey thumb or click its track.
+      At an edge, remaining wheel movement reaches the outer panel, then the page.</p>
+    <section>
+      <h2>Hidden: clipped, no user scrolling</h2>
+      <div class="panel clipped" id="hidden-panel">
+        <div class="wide">This line continues past the padding edge and stays clipped.</div>
+        <p><a href="#end">This link is clipped when below the panel edge.</a></p>
+        <p>Hidden content does not enlarge the document scroll range.</p>
+      </div>
+    </section>
+    <section>
+      <h2>Auto outside, scroll inside</h2>
+      <div class="panel outer" id="outer-panel">
+        <p>Outer panel: scroll vertically after the inner panel reaches its end.</p>
+        <div class="inner" id="inner-panel">
+          <p><a href="#end">Wide linked row: horizontal wheel also works.</a></p>
+          <p>Second row. The inner clip and translation remain independent.</p>
+          <p>Third row. Grey tracks show both reachable axes.</p>
+          <p>Fourth row. Keep scrolling to chain to the parent.</p>
+          <p>Last row of this inner panel.</p>
+        </div>
+        <div class="tail">Outer content continues below its initial view.</div>
+        <p>End of the outer panel.</p>
+      </div>
+    </section>
+    <section class="escape-stage">
+      <h2>Containing-block escape</h2>
+      <div class="escape-window">This static clipping ancestor is not the absolute containing block.
+        <span class="escaped">Correctly escapes</span>
+      </div>
+    </section>
+    <div class="root-tail">The root scrolls without moving the fixed header.</div>
+    <p id="end">End of the overflow fixture.</p>
+  </main>
+</body>
+</html>

@@ -12,8 +12,8 @@ use crate::css::{
 };
 
 use super::{
-    BaselineShift, BaselineSource, BoxSizing, Content, ContentItem, Direction, Display, Position,
-    TextAlign, TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
+    BaselineShift, BaselineSource, BoxSizing, Content, ContentItem, Direction, Display, Overflow,
+    Position, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -30,6 +30,8 @@ pub(super) enum Property {
     Position,
     Inset(Side),
     ZIndex,
+    OverflowX,
+    OverflowY,
     Direction,
     TextAlignAll,
     TextAlignLast,
@@ -76,6 +78,7 @@ pub(super) enum Value {
     Display(Display),
     Position(Position),
     ZIndex(ZIndex),
+    Overflow(Overflow),
     Direction(Direction),
     TextAlign(TextAlign),
     TextAlignLast(TextAlignLast),
@@ -201,6 +204,17 @@ pub(super) fn parse_tokens_with_context(
         return Some(vec![Value::Wide(wide); properties.len()]);
     }
     match parser {
+        Parser::Overflow => {
+            let (x, y) = match tokens.as_slice() {
+                [x] => (x, x),
+                [x, y] => (x, y),
+                _ => return None,
+            };
+            Some(vec![
+                value(Property::OverflowX, std::slice::from_ref(x))?,
+                value(Property::OverflowY, std::slice::from_ref(y))?,
+            ])
+        }
         Parser::Longhand => value(properties[0], &tokens).map(|value| vec![value]),
         Parser::TextAlign => Some(vec![
             value(Property::TextAlignAll, &tokens)?,
@@ -383,6 +397,8 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::BorderStyle(_)
         | P::Display
         | P::Position
+        | P::OverflowX
+        | P::OverflowY
         | P::Direction
         | P::TextAlignAll
         | P::TextAlignLast

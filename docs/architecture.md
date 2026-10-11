@@ -1963,8 +1963,10 @@ and the CSSOM parts covered here meet the conformance gate.
   Step 8.5 supplies Unicode opportunities, noncollapsing/nonbreaking NBSP,
   and typed CSS whitespace modes. Preserved whitespace establishes real
   lines (even with zero line-height); collapsed-only runs stay phantom.
-  No `min-height`, clearance/floats, overflow-created formatting contexts,
-  positioned/inline-block/table/flex/grid layout, or writing modes are added.
+  No `min-height`, clearance/floats, or overflow-created formatting contexts
+  are added by 8.3 (overflow contexts are supplied by 8.9);
+  positioned/inline-block/table/flex/grid layout and writing modes also remain
+  outside that step.
   Those require their later sizing/formatting/property milestones. The
   existing image sizing cap/alt fallback and viewport gutter remain.
   Milestone 8 is not complete.
@@ -2397,14 +2399,102 @@ and the CSSOM parts covered here meet the conformance gate.
   transforms/effect-created containing blocks/contexts, integer math/animation,
   and paged media remain absent. Fixed auto follows CSS2 (not the modern rule
   that fixed unconditionally creates a context). Overflow clips/nested scroll
-  containers remain 8.9, sticky remains 8.19, and broader fragment hit testing
+  containers are supplied by 8.9, sticky remains 8.19, and broader fragment hit testing
   remains milestone 9. No WPT or full browser parity is claimed.
   Cyclic descendant percentage sizing during intrinsic measurement uses the
   available containing width, not a complete CSS Sizing percentage-cycle model
   (8.15).
-- [ ] **8.9 Handle overflow.** Support `overflow: hidden` and nested
+- [x] **8.9 Handle overflow.** Support `overflow: hidden` and nested
   scroll containers.
   *You'll see:* clipped content and scrollable panels.
+
+  The non-inherited `Overflow` enum supports `visible`, `hidden`, `clip`,
+  `scroll`, and `auto` on physical `overflow-x`/`overflow-y`. The one/two-value
+  shorthand expands atomically through the existing CSS-wide, variable,
+  origin/layer and rollback machinery. Computation couples the axes: visible
+  becomes auto and clip becomes hidden when the opposite axis is a scroll
+  container. Hidden/scroll/auto establish an independent block formatting
+  context, preventing parent/child margin collapse; clip alone does not.
+  Float containment will become observable when floats arrive in 8.12.
+
+  `layout::overflow` keeps scroll-port padding edges (borders stay visible),
+  unscrolled content/ink extents, bounded X/Y ranges, and explicit fractional
+  offsets separate from used border/content geometry. Extents include line
+  advance, indexed glyph ink, images, outside markers and positioned boxes
+  whose containing-block ancestry contributes to the container. Intervening
+  axis clips bound outer/document extents, so hidden contents cannot enlarge
+  the root scroll range. Negative ink remains inspectable; the horizontal LTR
+  origin and downward vertical origin do not expose the negative area. RTL
+  containers have a bounded negative horizontal range, not RTL inline/bidi
+  layout. Zero-size ports have zero ranges, and invalid offsets or
+  unrepresentable arithmetic produce retained used-value diagnostics.
+
+  A document-owned `ScrollState` uses real `NodeId` plus originating pseudo
+  identity, never reconstruction-order box IDs or font/global caches. An
+  immutable document identity token survives Frame/tree snapshot clones, while
+  offset maps remain independently mutable. Frame layout seeds each container
+  feedback pass from retained state and adopts only the final clamped state.
+  Repaint, hover restyle, container feedback, resize/device-scale and
+  asynchronous resource/font updates preserve offsets; shrinking content
+  clamps them. Fresh document navigation resets them (existing root-Y history
+  restoration is unchanged). Hidden permits `set_scroll_offset`/
+  `set_viewport_scroll` programmatic scrolling; clip does not. No DOM/JS
+  scrolling API is claimed.
+
+  Each flattened CSS2 paint phase receives a complete `SpatialState`: ancestor
+  axis-clip intersection and accumulated scroll translation, not a DFS
+  push/pop stack that would break escaped stacking contexts. Decorations stay
+  attached to the port; its contents move. Absolute descendants follow their
+  established containing-block ancestry: they can escape a static intervening
+  clipping ancestor when their containing block is outside it, but move and
+  clip when their containing block is inside. Fixed descendants bypass ordinary
+  ancestor overflow and document scrolling; their own viewport-space nested
+  containers still work. Transform-created containing blocks remain 8.17.
+  Rectangles, images, indexed glyphs (including synthetic slant/bold), and debug
+  outlines use the same clips. Rasterization tests cover fractional CSS
+  offsets and 1/1.25/1.5/2 device scales; clipping never changes glyph indices,
+  baselines or image sampling origins.
+
+  Reverse-order hits use those same phases, clip intersections and inverse
+  translations, including the basic scrollbar overlay phases. Viewport hits
+  reject points outside the window; `node_rect` remains layout geometry,
+  `visual_node_rect` reports clipped viewport border bounds, and container
+  size queries continue to consume unscrolled content sizes. HTML root
+  overflow is propagated to the viewport, or body overflow when both root
+  axes are visible; the supplying box is not also a nested clip. Viewport
+  visible behaves as auto, hidden disables user scrolling but permits
+  programmatic movement, and clip has no scrolling range.
+
+  Native wheel input preserves both axes, targets the deepest visible
+  scrollable lineage under the pointer, clamps each axis independently, and
+  chains only the unconsumed delta to outer containers and the viewport.
+  Hidden and clip do not consume user wheel input. Auto panels show basic
+  overlay tracks only with a nonzero range; scroll panels always show them.
+  Panel tracks/thumbs support click and drag in CSS coordinates, honor
+  containing clips and z order, and share retained state with wheel input.
+  They do not reserve a layout gutter; the root retains its existing
+  wheel/keyboard scrolling without a newly drawn root scrollbar.
+
+  `tests/pages/overflow_scrolling.html` demonstrates hidden clipping, nested
+  two-axis scroll/auto panels, wheel chaining, containing-block escape and a
+  fixed header. Deterministic CLI layout/value/display-list tests expose clip
+  ports, extents, ranges, offsets and complete spatial state. Unit/pixel/native
+  boundary tests cover axis computation, percentage sizes, BFC margins,
+  positioned/fixed escapes, flattened z contexts, font/container feedback,
+  cloning, resize/clamping and navigation identity. The all-features suite
+  passes **623 tests**, along with formatting, strict all-target clippy,
+  benchmark compilation, and offline generator tests/checks. CSS coverage is
+  regenerated from `tools/css-spec/engine-support.json`, not edited by hand.
+
+  **Limits:** only the current horizontal block/replaced formatting model;
+  non-replaced inline overflow, logical overflow axes, overflow-clip-margin,
+  generalized min/max/intrinsic sizing, bidi/writing modes, floats/tables,
+  transforms and paged media remain their later steps. No scroll anchoring,
+  smooth scrolling, keyboard focus reveal inside panels, styled/reserved
+  scrollbar gutters or root scrollbar UI is claimed. Sticky positioning,
+  scroll snapping and advanced/styled scrollbar behavior remain 8.19. No WPT
+  conformance or full-browser parity is claimed. **8.10 and later are not
+  implemented by this step; milestone 8 is not complete.**
 - [ ] **8.10 Implement flexbox.**
   *You'll see:* navigation bars and card rows as designed.
 - [ ] **8.11 Implement grid.**

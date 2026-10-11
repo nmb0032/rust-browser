@@ -7,6 +7,8 @@
     "background-image": {"rust": "BackgroundImage", "policy": "image", "sample": "none"},
     "display": {"rust": "Display", "policy": "display", "sample": "block"},
     "position": {"rust": "Position", "policy": "position", "sample": "absolute"},
+    "overflow-x": {"rust": "OverflowX", "policy": "overflow", "sample": "hidden"},
+    "overflow-y": {"rust": "OverflowY", "policy": "overflow", "sample": "scroll"},
     "top": {"rust": "Inset(Side::Top)", "policy": "inset", "sample": "10%"},
     "right": {"rust": "Inset(Side::Right)", "policy": "inset", "sample": "auto"},
     "bottom": {"rust": "Inset(Side::Bottom)", "policy": "inset", "sample": "-5px"},
@@ -43,6 +45,7 @@
   },
   "shorthands": {
     "all": {"parser": "Wide", "policy": "all", "sample": "initial"},
+    "overflow": {"parser": "Overflow", "policy": "overflow", "sample": "hidden scroll", "order": ["overflow-x", "overflow-y"]},
     "background": {"parser": "Background", "policy": "background", "sample": "red", "order": ["background-color", "background-image"]},
     "font": {"parser": "Font", "policy": "font", "sample": "italic bold 20px/2 serif"},
     "text-align": {"parser": "TextAlign", "policy": "text-align", "sample": "center", "order": ["text-align-all", "text-align-last"]},
@@ -69,6 +72,7 @@
     "image": {"keywords": {"none": "Value::BackgroundImage(BackgroundImage::None)"}},
     "display": {"keywords": {"block": "Value::Display(Display::Block)", "inline": "Value::Display(Display::Inline)", "list-item": "Value::Display(Display::ListItem)", "none": "Value::Display(Display::None)"}},
     "position": {"keywords": {"static": "Value::Position(Position::Static)", "relative": "Value::Position(Position::Relative)", "absolute": "Value::Position(Position::Absolute)", "fixed": "Value::Position(Position::Fixed)"}},
+    "overflow": {"keywords": {"visible": "Value::Overflow(Overflow::Visible)", "hidden": "Value::Overflow(Overflow::Hidden)", "clip": "Value::Overflow(Overflow::Clip)", "scroll": "Value::Overflow(Overflow::Scroll)", "auto": "Value::Overflow(Overflow::Auto)"}},
     "direction": {"keywords": {"ltr": "Value::Direction(Direction::Ltr)", "rtl": "Value::Direction(Direction::Rtl)"}},
     "text-align-all": {"keywords": {"start": "Value::TextAlign(TextAlign::Start)", "end": "Value::TextAlign(TextAlign::End)", "left": "Value::TextAlign(TextAlign::Left)", "right": "Value::TextAlign(TextAlign::Right)", "center": "Value::TextAlign(TextAlign::Center)"}},
     "text-align-last": {"keywords": {"auto": "Value::TextAlignLast(TextAlignLast::Auto)"}},
@@ -81,6 +85,7 @@
     "container-type": {"keywords": {"normal": "Value::ContainerType(ContainerType::Normal)", "inline-size": "Value::ContainerType(ContainerType::InlineSize)", "size": "Value::ContainerType(ContainerType::Size)"}}
   },
   "policies": {
+    "overflow": {"parser": "visible, hidden, clip, scroll and auto; one/two physical-axis shorthand keywords. Logical axes and overflow-clip-margin absent.", "cascade": "Non-inherited typed axes; atomic shorthand, CSS-wide/var/origin/layer rollback.", "computed": "Coupled visible becomes auto and clip becomes hidden when the opposite axis establishes a scroll container.", "used": "Padding-edge axis clips, nested document-owned bounded offsets, wheel chaining, click/drag panel overlay tracks, root/body viewport propagation and positioned containing-block clip ancestry. No non-replaced inline overflow, sticky, snap, styled/reserved gutters, root scrollbar UI, transforms, writing modes or external WPT conformance claim."},
     "position": {"parser": "static, relative, absolute and fixed; sticky deferred to 8.19.", "cascade": "Non-inherited typed value; wide/var/origin/layer handling and out-of-flow inline blockification.", "computed": "Keyword enum; no transforms, anchors or writing modes.", "used": "CSS2 horizontal positioning, padding-box and first/last inline-fragment containing blocks, initial/viewport fixed space. Split inline continuations share construction identity. No floats, tables, flex/grid, transforms or paged media."},
     "inset": {"parser": "auto or finite signed length/percentage/math; anchor functions and logical inset properties absent.", "cascade": "Non-inherited sides; atomic four-side inset shorthand with wide/var/rollback.", "computed": "Typed length-or-auto; font/viewport/container units computed, percentages retained.", "used": "CSS2 relative offsets and absolute/fixed horizontal/vertical equations, static-position fallback, shrink-to-fit, opposing insets and auto margins. Horizontal writing only; normal-flow percentage height remains partial."},
     "z-index": {"parser": "auto or signed 32-bit lexical integer; integer math and exceptional values absent.", "cascade": "Non-inherited; wide/var/origin/layer handling.", "computed": "Auto distinct from integer zero; ignored on static boxes.", "used": "Root and positioned integer contexts are atomic; CSS2 Appendix E phases for the supported block/inline model, escaped contexts, negative/zero/positive levels and source-order ties. Floats and future context-creating effects absent; fixed auto follows CSS2 rather than modern unconditional contexts."},

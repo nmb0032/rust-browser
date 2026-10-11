@@ -1,5 +1,7 @@
 Element NodeId(1) <p> id=Some("target")
   display: Block
+  overflow-x: Visible
+  overflow-y: Visible
   position: Static inset=Edges { top: Auto, right: Auto, bottom: Auto, left: Auto } z-index=Auto
   direction: Ltr
   text-align: Start
