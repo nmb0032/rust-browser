@@ -10,11 +10,15 @@
 //! lengths, wrapped/reversed axes, baseline alignment and atomic inline-flex.
 //! Grid adds bounded named/implicit tracks, phased dense/sparse placement,
 //! spanning intrinsic growth, fractional allocation and atomic inline-grid.
+//! Floats share source-ordered BFC exclusions with dynamically shaped lines.
+//! Tables add anonymous fixup, intrinsic/fixed columns, bounded spans/captions,
+//! row baselines, separate spacing and single-painted collapsed border edges.
 //! Paragraph bidi and advanced language-dependent text tailoring are deferred.
 //! Consumes computed styles, never CSS source.
 
 mod block;
 mod flex;
+mod floats;
 mod geometry;
 mod grid;
 mod inline;
@@ -23,6 +27,7 @@ mod positioning;
 mod replaced;
 mod sizing;
 mod stacking;
+mod table;
 mod tree;
 
 pub use geometry::{ActualRect, Rect};
@@ -40,6 +45,8 @@ pub use tree::{
 mod collapse_tests;
 #[cfg(test)]
 mod flex_tests;
+#[cfg(test)]
+mod floats_tables_tests;
 #[cfg(test)]
 mod grid_tests;
 #[cfg(test)]

@@ -76,6 +76,54 @@ pub enum TextWrapMode {
 pub enum VerticalAlign {
     #[default]
     Baseline,
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Float {
+    #[default]
+    None,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Clear {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TableLayout {
+    #[default]
+    Auto,
+    Fixed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BorderCollapse {
+    #[default]
+    Separate,
+    Collapse,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CaptionSide {
+    #[default]
+    Top,
+    Bottom,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EmptyCells {
+    #[default]
+    Show,
+    Hide,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -145,11 +193,42 @@ pub enum Display {
     InlineFlex,
     Grid,
     InlineGrid,
+    Table,
+    InlineTable,
+    TableCaption,
+    TableRowGroup,
+    TableHeaderGroup,
+    TableFooterGroup,
+    TableRow,
+    TableCell,
+    TableColumn,
+    TableColumnGroup,
     ListItem,
     None,
 }
 
 impl Display {
+    pub fn is_table(self) -> bool {
+        matches!(self, Self::Table | Self::InlineTable)
+    }
+    pub(crate) fn table_internal(self) -> bool {
+        matches!(
+            self,
+            Self::TableRowGroup
+                | Self::TableHeaderGroup
+                | Self::TableFooterGroup
+                | Self::TableRow
+                | Self::TableCell
+                | Self::TableColumn
+                | Self::TableColumnGroup
+        )
+    }
+    pub(crate) fn row_group(self) -> bool {
+        matches!(
+            self,
+            Self::TableRowGroup | Self::TableHeaderGroup | Self::TableFooterGroup
+        )
+    }
     pub fn is_grid(self) -> bool {
         matches!(self, Self::Grid | Self::InlineGrid)
     }
@@ -165,6 +244,15 @@ impl Display {
             Self::Inline => Self::Block,
             Self::InlineFlex => Self::Flex,
             Self::InlineGrid => Self::Grid,
+            Self::InlineTable => Self::Table,
+            Self::TableCaption
+            | Self::TableRowGroup
+            | Self::TableHeaderGroup
+            | Self::TableFooterGroup
+            | Self::TableRow
+            | Self::TableCell
+            | Self::TableColumn
+            | Self::TableColumnGroup => Self::Block,
             other => other,
         }
     }
@@ -327,6 +415,13 @@ pub struct ComputedStyle {
     pub custom_properties: BTreeMap<String, Option<Arc<[TokenKind]>>>,
     pub display: Display,
     pub position: Position,
+    pub float: Float,
+    pub clear: Clear,
+    pub table_layout: TableLayout,
+    pub border_collapse: BorderCollapse,
+    pub border_spacing: (Length, Length),
+    pub caption_side: CaptionSide,
+    pub empty_cells: EmptyCells,
     pub inset: Edges<LengthOrAuto>,
     pub z_index: ZIndex,
     pub overflow_x: Overflow,
@@ -415,6 +510,13 @@ impl Default for ComputedStyle {
             custom_properties: BTreeMap::new(),
             display: Display::Inline,
             position: Position::Static,
+            float: Float::None,
+            clear: Clear::None,
+            table_layout: TableLayout::Auto,
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: (Length::Px(0.0), Length::Px(0.0)),
+            caption_side: CaptionSide::Top,
+            empty_cells: EmptyCells::Show,
             inset: Edges::all(LengthOrAuto::Auto),
             z_index: ZIndex::Auto,
             overflow_x: Overflow::Visible,
@@ -497,6 +599,10 @@ impl ComputedStyle {
         Self {
             custom_properties: parent.custom_properties.clone(),
             direction: parent.direction,
+            border_collapse: parent.border_collapse,
+            border_spacing: parent.border_spacing.clone(),
+            caption_side: parent.caption_side,
+            empty_cells: parent.empty_cells,
             text_align: parent.text_align,
             text_align_last: parent.text_align_last,
             white_space_collapse: parent.white_space_collapse,

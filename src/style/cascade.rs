@@ -2059,9 +2059,15 @@ fn compute_with_context(
     style.positioned_inline = style.position.out_of_flow()
         && matches!(
             style.display,
-            Display::Inline | Display::InlineFlex | Display::InlineGrid
+            Display::Inline | Display::InlineFlex | Display::InlineGrid | Display::InlineTable
         );
     if style.positioned_inline {
+        style.display = style.display.blockified();
+    }
+    if style.position.out_of_flow() {
+        style.float = super::Float::None;
+        style.display = style.display.blockified();
+    } else if style.float != super::Float::None {
         style.display = style.display.blockified();
     }
     if parent.style.display.is_item_container() && !style.position.out_of_flow() {
@@ -2108,6 +2114,10 @@ fn absolutize(
     reference: f32,
 ) -> Option<Value> {
     match value {
+        Value::BorderSpacing(x, y) => Some(Value::BorderSpacing(
+            Length::Px(x.used(context, 0.0)?.0.max(0.0)),
+            Length::Px(y.used(context, 0.0)?.0.max(0.0)),
+        )),
         Value::GridTracks(values) => {
             super::grid::computed_tracks(values, context).map(Value::GridTracks)
         }
@@ -2202,6 +2212,16 @@ fn computed_value(
         P::BackgroundColor => Value::Color(parent.colors.background.clone()),
         P::BackgroundImage => Value::BackgroundImage(style.background_image),
         P::Display => Value::Display(style.display),
+        P::Float => Value::Float(style.float),
+        P::Clear => Value::Clear(style.clear),
+        P::TableLayout => Value::TableLayout(style.table_layout),
+        P::BorderCollapse => Value::BorderCollapse(style.border_collapse),
+        P::BorderSpacing => Value::BorderSpacing(
+            style.border_spacing.0.clone(),
+            style.border_spacing.1.clone(),
+        ),
+        P::CaptionSide => Value::CaptionSide(style.caption_side),
+        P::EmptyCells => Value::EmptyCells(style.empty_cells),
         P::Position => Value::Position(style.position),
         P::ZIndex => Value::ZIndex(style.z_index),
         P::OverflowX => Value::Overflow(style.overflow_x),
@@ -2332,6 +2352,13 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         }
         (P::BackgroundImage, Value::BackgroundImage(image)) => style.background_image = image,
         (P::Display, Value::Display(display)) => style.display = display,
+        (P::Float, Value::Float(v)) => style.float = v,
+        (P::Clear, Value::Clear(v)) => style.clear = v,
+        (P::TableLayout, Value::TableLayout(v)) => style.table_layout = v,
+        (P::BorderCollapse, Value::BorderCollapse(v)) => style.border_collapse = v,
+        (P::BorderSpacing, Value::BorderSpacing(x, y)) => style.border_spacing = (x, y),
+        (P::CaptionSide, Value::CaptionSide(v)) => style.caption_side = v,
+        (P::EmptyCells, Value::EmptyCells(v)) => style.empty_cells = v,
         (P::Direction, Value::Direction(direction)) => style.direction = direction,
         (P::TextAlignAll, Value::TextAlign(align)) => style.text_align = align,
         (P::TextAlignLast, Value::TextAlignLast(align)) => style.text_align_last = align,

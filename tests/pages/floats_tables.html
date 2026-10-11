@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Floats and tables — legacy flow and real columns</title>
+  <style>
+    html, body { margin: 0; background: #eef3f2; color: #183b42; }
+    body { font: 16px/20px sans-serif; }
+    main { width: 720px; }
+    h1 { font: bold 24px/32px sans-serif; margin: 0 0 12px; }
+    .flow { overflow: hidden; background: white; margin-bottom: 12px; }
+    .left { float: left; width: 80px; height: 60px; margin-right: 12px;
+      background: #183b42; color: white; }
+    .right { float: right; width: 60px; height: 80px; margin-left: 12px;
+      background: #e7be5c; }
+    .clear { clear: both; height: 12px; background: #7b9d95; }
+    table { width: 640px; border-spacing: 4px; margin-bottom: 12px; }
+    caption { text-align: left; font-weight: bold; height: 24px; }
+    td, th { padding: 4px 8px; border: 1px solid #7b9d95; vertical-align: top; }
+    th { text-align: left; background: #d3e5df; }
+    tbody { background: white; }
+    .fixed { table-layout: fixed; }
+    .name { width: 140px; }
+    .value { width: 80px; }
+    .merged { border-collapse: collapse; width: 640px; }
+    .merged td { height: 24px; border: 2px solid #7b9d95; }
+    .merged .strong { border-left: 4px solid #183b42; background: #d3e5df; }
+    .atomic { display: inline-table; width: 90px; border-spacing: 0; margin: 0; }
+    .atomic td { height: 20px; padding: 0 4px; vertical-align: baseline; }
+    .scroll { width: 640px; height: 50px; overflow: auto; margin-top: 12px; }
+    .wide { width: 1000px; table-layout: fixed; border-spacing: 0; margin: 0; }
+    .wide td { height: 70px; background: #d3e5df; }
+  </style>
+</head>
+<body>
+  <main id="host">
+    <h1>Floats and data tables</h1>
+    <section class="flow" id="flow">
+      <div class="left" id="left">Left float</div>
+      <div class="right" id="right"></div>
+      Legacy paragraphs wrap around each margin box, regain space after the shorter
+      float ends, and return to the full line width after both ends. More text keeps
+      the bands observable without turning a float into permanent paragraph padding.
+      <div class="clear" id="clear"></div>
+    </section>
+    <table class="fixed" id="fixed">
+      <caption>Fixed columns, wrapped details, and row spans</caption>
+      <colgroup><col class="name" id="name-column"><col><col class="value"></colgroup>
+      <thead><tr><th>Feature</th><th>Description</th><th>State</th></tr></thead>
+      <tbody id="body-group">
+        <tr><td rowspan="2" id="row-span">Shared category</td><td>Text uses actual available cell width.</td><td>Ready</td></tr>
+        <tr><td id="details">The second row skips the occupied first column.</td><td>Ready</td></tr>
+      </tbody>
+    </table>
+    <table class="merged" id="merged">
+      <tbody><tr><td colspan="2" id="col-span">A spanning cell with shared edges</td></tr>
+        <tr><td id="merge-left">Separate content</td><td class="strong" id="merge-right">Winning border</td></tr></tbody>
+    </table>
+    <div>Atomic baseline:
+      <table class="atomic" id="atomic"><tr><td>Ready</td></tr></table>
+      after the first-row baseline.
+    </div>
+    <section class="scroll" id="scroll">
+      <table class="wide" id="wide"><tr><td id="wide-a">Horizontal and vertical overflow</td><td>Real table geometry</td></tr></table>
+    </section>
+  </main>
+</body>
+</html>

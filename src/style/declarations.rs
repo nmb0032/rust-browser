@@ -12,9 +12,10 @@ use crate::css::{
 };
 
 use super::{
-    AlignKeyword, Alignment, BaselineShift, BaselineSource, BoxSizing, Content, ContentItem,
-    Direction, Display, FlexDirection, FlexWrap, Overflow, Position, TextAlign, TextAlignLast,
-    TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
+    AlignKeyword, Alignment, BaselineShift, BaselineSource, BorderCollapse, BoxSizing, CaptionSide,
+    Clear, Content, ContentItem, Direction, Display, EmptyCells, FlexDirection, FlexWrap, Float,
+    Overflow, Position, TableLayout, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign,
+    WhiteSpaceCollapse, ZIndex,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -28,6 +29,13 @@ pub(super) enum Property {
     BackgroundColor,
     BackgroundImage,
     Display,
+    Float,
+    Clear,
+    TableLayout,
+    BorderCollapse,
+    BorderSpacing,
+    CaptionSide,
+    EmptyCells,
     Position,
     Inset(Side),
     ZIndex,
@@ -105,6 +113,13 @@ pub(super) enum Value {
     BackgroundImage(BackgroundImage),
     BorderStyle(BorderStyle),
     Display(Display),
+    Float(Float),
+    Clear(Clear),
+    TableLayout(TableLayout),
+    BorderCollapse(BorderCollapse),
+    BorderSpacing(Length, Length),
+    CaptionSide(CaptionSide),
+    EmptyCells(EmptyCells),
     Position(Position),
     ZIndex(ZIndex),
     Overflow(Overflow),
@@ -315,8 +330,11 @@ pub(super) fn parse_tokens_with_context(
         ]),
         Parser::WhiteSpace => white_space(&tokens),
         Parser::VerticalAlign => {
-            // Only the baseline shorthand subset; all targets reset atomically.
-            let alignment = value(Property::AlignmentBaseline, &tokens)?;
+            let alignment = match tokens.as_slice() {
+                [token] if token.is_ident("top") => Value::VerticalAlign(VerticalAlign::Top),
+                [token] if token.is_ident("bottom") => Value::VerticalAlign(VerticalAlign::Bottom),
+                _ => value(Property::AlignmentBaseline, &tokens)?,
+            };
             Some(vec![
                 alignment,
                 initial_value(Property::BaselineShift),
@@ -502,6 +520,19 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     if property == P::ContainerName {
         return container_names(tokens).map(Value::ContainerNames);
     }
+    if property == P::BorderSpacing {
+        let (x, y) = match tokens {
+            [x] => (x, x),
+            [x, y] => (x, y),
+            _ => return None,
+        };
+        let (x, y) = (x.length()?, y.length()?);
+        return (x.is_nonnegative()
+            && y.is_nonnegative()
+            && !x.has_percentage()
+            && !y.has_percentage())
+        .then_some(Value::BorderSpacing(x, y));
+    }
     let [token] = tokens else {
         return None;
     };
@@ -515,6 +546,12 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::BackgroundImage
         | P::BorderStyle(_)
         | P::Display
+        | P::Float
+        | P::Clear
+        | P::TableLayout
+        | P::BorderCollapse
+        | P::CaptionSide
+        | P::EmptyCells
         | P::Position
         | P::OverflowX
         | P::OverflowY
@@ -546,6 +583,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::GridRowStart
         | P::GridRowEnd => unreachable!(),
         P::ContainerName => unreachable!(),
+        P::BorderSpacing => unreachable!(),
         P::BaselineShift => {
             (token.number()? == 0.0).then_some(Value::BaselineShift(BaselineShift::Zero))
         }

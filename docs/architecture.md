@@ -2666,10 +2666,62 @@ and the CSSOM parts covered here meet the conformance gate.
   requests diagnose start fallback. Cyclic intrinsic decoration sizing,
   full replaced min/max ratio constraints and all Grid Level 1/WPT edge-case
   algorithms remain partial. These are engine regression results, **not full
-  WPT conformance or browser parity**. **8.12 remains unimplemented; milestone
-  8 is not complete.**
-- [ ] **8.12 Implement floats and tables.**
+  WPT conformance or browser parity**. Milestone 8 is not complete.
+- [x] **8.12 Implement floats and tables.**
   *You'll see:* older sites and data tables laid out correctly.
+
+  Typed physical `float`/`clear` values blockify applicable boxes, remove floats
+  from normal block/inline advance, and retain source-order inline events.
+  Each block formatting context owns margin-box exclusions; ordinary nested
+  blocks share them while roots, overflow containers, floats, positioned boxes,
+  flex/grid containers/items and table cells isolate them. Actual shaped line
+  fitting obtains a new X/width opportunity for each line and float-height band,
+  including tall inline participants; floats shrink to fit intrinsic content
+  and support images, decorations, min/max sizes and nested formatting models.
+  Clearance breaks parent/child collapse when needed; independent auto-height
+  contexts contain their floats. Appendix E float paint groups sit above block
+  backgrounds and below inline foreground without trapping positioned stacking
+  descendants; reverse-order hits consume the same ordering.
+
+  Native HTML table UA displays and arbitrary CSS table displays generate
+  bounded anonymous table/group/row/cell fixup. Real row, column, group and cell
+  boxes preserve DOM bounds/hits. Automatic columns reuse shaped legal-break
+  min/max-content widths, declared column/cell widths and spanning constraints;
+  fixed declared-width tables use columns/column groups and the first row.
+  Colspan/rowspan occupancy, `rowspan=0` group boundaries, header/footer ordering,
+  wrapped row heights, baseline/top/middle/bottom cell content alignment,
+  definite table/cell percentage descendants, top/bottom captions and atomic
+  inline-table first-row baselines are executable. Table margins/positioning,
+  intrinsic flex/grid contributions, overflow extents and document-owned scroll
+  state use existing machinery. The shared HTML integer scanner is reused.
+
+  Separate borders honor both inner and outer spacing and empty-cell hiding.
+  Collapsed edges resolve hidden, width, supported style, table-part origin and
+  source precedence, suppress span interiors, and paint once after ordered table,
+  column, group, row and cell backgrounds; translucent edge crossings do not
+  double-composite. Computed borders remain separate from used half-edge widths.
+  CLI layout/value dumps expose float/clear and table properties/shared edges.
+  `tests/pages/floats_tables.html` has deterministic CLI, pixel, hit and repeated
+  layout checks; numeric tests also exercise font overlays, container feedback,
+  frame clones, resize, nested scroll and hostile bounds.
+
+  Validation: **750 all-features Rust tests**, including **49 float/table
+  regressions** and the CLI fixture, pass alongside strict all-target Clippy,
+  formatting, benchmark compilation, offline regeneration checks and **7
+  generator tests**. CSS coverage is generated from the engine overlay: **87
+  longhands and 28 shorthands**, still classified partial.
+
+  **Finite CSS2 subset, not full WPT/browser parity:** horizontal writing only;
+  at most **4,096 exclusions per BFC**, with diagnosed conservative full-width
+  exclusion/vertical stacking beyond that; tables allow **512 rows, 128 columns,
+  65,536 slots**, bounded integer spans and **1,000,000px per used size/intrinsic
+  contribution** (excess is diagnosed). No pagination/repeated paged headers,
+  `visibility:collapse`, logical float/clear/caption axes, shape-outside,
+  alternative script baselines, complete cyclic percentage table sizing,
+  advanced table height-distribution/conformance algorithms or unsupported
+  groove/ridge/inset/outset border styles are claimed. Non-baseline ordinary
+  inline `vertical-align` diagnoses baseline fallback; top/middle/bottom cell
+  alignment is supported. **8.13 remains unchecked; milestone 8 is not complete.**
 - [ ] **8.13 Add reftests.** Render test pages and compare screenshots with
   reference pages or committed images. Use the WPT reftest format so the
   same tests run through `wptrunner` after 9.8.

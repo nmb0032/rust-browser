@@ -90,13 +90,7 @@ fn invalid_alignment_and_justification_are_rejected_without_claiming_support() {
             .iter()
             .any(|d| d.message.contains("text-align: justify"))
     );
-    assert!(
-        result
-            .stylesheets
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("vertical-align: top"))
-    );
+    assert_eq!(target.vertical_align, VerticalAlign::Top);
     assert_eq!(
         metadata::property("text-align").unwrap().support,
         metadata::Support::Partial

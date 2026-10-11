@@ -119,6 +119,12 @@ pub struct LayoutBox {
     pub(super) marker_text: Option<String>,
     pub(super) inline_start: bool,
     pub(super) inline_end: bool,
+    pub(super) table_span: (usize, usize),
+    pub(super) table_rect: Option<Rect>,
+    pub(super) table_borders: Vec<super::table::BorderSegment>,
+    pub(super) collapsed_table_part: bool,
+    pub(super) hidden_empty_cell: bool,
+    pub(super) used_border: Option<Edges<f32>>,
 }
 
 impl LayoutBox {
@@ -190,11 +196,46 @@ impl LayoutBox {
     pub fn line_boxes(&self) -> &[LineBox] {
         &self.line_boxes
     }
+    pub(crate) fn table_paint_rect(&self) -> Option<Rect> {
+        self.table_rect
+    }
+    pub(crate) fn table_border_segments(&self) -> &[super::table::BorderSegment] {
+        &self.table_borders
+    }
+    pub(crate) fn hides_empty_cell(&self) -> bool {
+        self.hidden_empty_cell
+    }
+    pub(crate) fn suppresses_table_borders(&self) -> bool {
+        self.collapsed_table_part
+    }
     pub(super) fn atomic_inline(&self) -> bool {
         matches!(
             self.style.display,
-            Display::InlineFlex | Display::InlineGrid
+            Display::InlineFlex | Display::InlineGrid | Display::InlineTable
         ) && !self.style.position.out_of_flow()
+    }
+    pub(super) fn floating(&self) -> bool {
+        self.style.float != style::Float::None
+            && !self.style.position.out_of_flow()
+            && !self.is_layout_item()
+    }
+    pub(super) fn normal_block(&self) -> bool {
+        self.kind == BoxKind::Block && !self.style.position.out_of_flow() && !self.floating()
+    }
+    pub(super) fn establishes_bfc(&self) -> bool {
+        self.floating()
+            || self.atomic_inline()
+            || self.style.position.out_of_flow()
+            || self.style.display.is_item_container()
+            || self.is_layout_item()
+            || self.style.display.is_table()
+            || self.style.display == Display::TableCell
+            || self.style.display == Display::TableCaption
+            || self.style.container_type != crate::css::container::ContainerType::Normal
+            || self.style.overflow_x.scroll_container()
+            || self.style.overflow_y.scroll_container()
+            || self.tag_name == "#document"
+            || self.tag_name == "<html>"
     }
     pub(super) fn local_root(&self) -> bool {
         self.kind == BoxKind::Block || self.atomic_inline()
@@ -203,6 +244,22 @@ impl LayoutBox {
     /// Before finalization, descendants' baselines relative to this border
     /// origin are used to position an outside marker in the parent's flow.
     pub(super) fn first_local_baseline(&self) -> Option<f32> {
+        if self.style.display.is_table() {
+            return self
+                .children
+                .iter()
+                .filter(|c| c.style.display.row_group())
+                .min_by_key(|c| match c.style.display {
+                    Display::TableHeaderGroup => 0,
+                    Display::TableFooterGroup => 2,
+                    _ => 1,
+                })
+                .and_then(|group| {
+                    group
+                        .first_local_baseline()
+                        .map(|baseline| baseline + group.rect.y)
+                });
+        }
         if self.style.display.is_item_container() {
             let mut items: Vec<_> = self
                 .children
@@ -278,6 +335,11 @@ impl LayoutBox {
         self.inline_fragments.clear();
         self.line_boxes.clear();
         self.list_marker = None;
+        self.table_rect = None;
+        self.table_borders.clear();
+        self.collapsed_table_part = false;
+        self.hidden_empty_cell = false;
+        self.used_border = None;
         for child in &mut self.children {
             child.reset();
         }
@@ -395,6 +457,10 @@ impl LayoutTree {
                     )
         };
         match phase {
+            super::PaintPhase::TableBorders => layout_box
+                .table_borders
+                .iter()
+                .any(|s| contains(s.rect, x, y)),
             super::PaintPhase::Scrollbars => false,
             super::PaintPhase::InlineDecoration(index) => {
                 contains(layout_box.inline_fragments[index].rect, x, y)
@@ -555,6 +621,12 @@ pub(super) fn absolutize_y(
         offset
     };
     let fragment_offset = child_offset;
+    if let Some(rect) = &mut layout_box.table_rect {
+        rect.y += fragment_offset as f32;
+    }
+    for segment in &mut layout_box.table_borders {
+        segment.rect.y += fragment_offset as f32;
+    }
     layout_box.rect.y = finite_used(
         offset + layout_box.rect.y as f64,
         layout_box.node_id,
@@ -857,10 +929,23 @@ fn build_box(
         }
         NodeKind::Element(element) => {
             let kind = match style.display {
-                Display::Block | Display::ListItem | Display::Flex | Display::Grid => {
-                    BoxKind::Block
-                }
-                Display::Inline | Display::InlineFlex | Display::InlineGrid => BoxKind::Inline,
+                Display::Block
+                | Display::ListItem
+                | Display::Flex
+                | Display::Grid
+                | Display::Table
+                | Display::TableCaption
+                | Display::TableRowGroup
+                | Display::TableHeaderGroup
+                | Display::TableFooterGroup
+                | Display::TableRow
+                | Display::TableCell
+                | Display::TableColumn
+                | Display::TableColumnGroup => BoxKind::Block,
+                Display::Inline
+                | Display::InlineFlex
+                | Display::InlineGrid
+                | Display::InlineTable => BoxKind::Inline,
                 Display::None => return None,
             };
             (format!("<{}>", element.tag_name()), kind, None)
@@ -883,6 +968,51 @@ fn build_box(
         .iter()
         .filter_map(|id| build_box(document, *id, styles, images, diagnostics, identity))
         .collect();
+    let layout_box = finish_box(
+        document,
+        node_id,
+        styles,
+        images,
+        diagnostics,
+        identity,
+        (
+            box_id,
+            parent_box,
+            position_parent,
+            flex_parent,
+            grid_parent,
+        ),
+        (tag_name, kind, text),
+        style,
+        &mut children,
+    );
+    identity.parent = parent_box;
+    identity.positioned = position_parent;
+    identity.flex_parent = flex_parent;
+    identity.grid_parent = grid_parent;
+    Some(layout_box)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_box(
+    document: &Document,
+    node_id: NodeId,
+    styles: &ComputedStyles,
+    images: &ImageMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    identity: &mut Construction,
+    (box_id, parent_box, position_parent, flex_parent, grid_parent): (
+        usize,
+        Option<usize>,
+        Option<usize>,
+        bool,
+        bool,
+    ),
+    (tag_name, kind, text): (String, BoxKind, Option<String>),
+    style: Box<ComputedStyle>,
+    children: &mut Vec<LayoutBox>,
+) -> LayoutBox {
+    let node = document.node(node_id).expect("construction node");
     let mut marker_text = None;
     let mut marker_style = None;
     if let Some(element) = node.as_element() {
@@ -981,7 +1111,7 @@ fn build_box(
             .as_element()
             .filter(|element| element.tag_name().eq_ignore_ascii_case("img"))
             .map(|element| ImageContent::new(element, images.get(&node_id).cloned())),
-        children,
+        children: std::mem::take(children),
         text_fragments: Vec::new(),
         inline_fragments: Vec::new(),
         line_boxes: Vec::new(),
@@ -991,17 +1121,95 @@ fn build_box(
         marker_text,
         inline_start: true,
         inline_end: true,
+        table_span: node.as_element().map_or((1, 1), |e| {
+            let col = if matches!(e.tag_name(), "col" | "colgroup") {
+                "span"
+            } else {
+                "colspan"
+            };
+            (
+                super::table::html_span(e.attribute(col), false, diagnostics, Some(node_id)),
+                super::table::html_span(e.attribute("rowspan"), true, diagnostics, Some(node_id)),
+            )
+        }),
+        table_rect: None,
+        table_borders: Vec::new(),
+        collapsed_table_part: false,
+        hidden_empty_cell: false,
+        used_border: None,
     };
+    let owner = layout_box.box_id;
+    super::table::normalize(&mut layout_box, &mut |style, children| {
+        anonymous_box(style, children, identity.allocate(), owner, position_parent)
+    });
     if layout_box.style.display.is_item_container() && layout_box.image.is_none() {
         normalize_item_children(&mut layout_box, identity);
-    } else if kind == BoxKind::Block && layout_box.image.is_none() {
+    } else if kind == BoxKind::Block
+        && layout_box.image.is_none()
+        && !layout_box.style.display.is_table()
+        && (!layout_box.style.display.table_internal()
+            || layout_box.style.display == Display::TableCell)
+    {
         normalize_block_children(&mut layout_box, identity);
     }
-    identity.parent = parent_box;
-    identity.positioned = position_parent;
-    identity.flex_parent = flex_parent;
-    identity.grid_parent = grid_parent;
-    Some(layout_box)
+
+    fn anonymous_box(
+        style: ComputedStyle,
+        mut children: Vec<LayoutBox>,
+        box_id: usize,
+        parent: usize,
+        position_parent: Option<usize>,
+    ) -> LayoutBox {
+        for child in &mut children {
+            child.parent_box = Some(box_id);
+        }
+        let kind = if style.display == Display::InlineTable {
+            BoxKind::Inline
+        } else {
+            BoxKind::Block
+        };
+        LayoutBox {
+            box_id,
+            parent_box: Some(parent),
+            position_parent,
+            coordinate_space: CoordinateSpace::Document,
+            flow_width: 0.0,
+            definite_height: None,
+            definite_width: false,
+            inline_line: None,
+            is_flex_item: false,
+            is_grid_item: false,
+            grid_area: None,
+            flex_static: None,
+            node_id: None,
+            tag_name: "#anonymous-table-box".into(),
+            kind,
+            text: None,
+            style: Box::new(style),
+            rect: Rect::default(),
+            content_rect: Rect::default(),
+            padding: Edges::default(),
+            margin: Edges::default(),
+            children,
+            text_fragments: Vec::new(),
+            inline_fragments: Vec::new(),
+            line_boxes: Vec::new(),
+            list_marker: None,
+            image: None,
+            pseudo: None,
+            marker_style: None,
+            marker_text: None,
+            inline_start: true,
+            inline_end: true,
+            table_span: (1, 1),
+            table_rect: None,
+            table_borders: Vec::new(),
+            collapsed_table_part: false,
+            hidden_empty_cell: false,
+            used_border: None,
+        }
+    }
+    layout_box
 }
 
 fn normalize_block_children(parent: &mut LayoutBox, identity: &mut Construction) {
@@ -1009,16 +1217,13 @@ fn normalize_block_children(parent: &mut LayoutBox, identity: &mut Construction)
         .into_iter()
         .flat_map(split_inline)
         .collect();
-    if !children
-        .iter()
-        .any(|child| child.kind == BoxKind::Block && !child.style.position.out_of_flow())
-    {
+    if !children.iter().any(LayoutBox::normal_block) {
         parent.children = children;
         return;
     }
     let mut run = Vec::new();
     for child in children {
-        if child.kind == BoxKind::Block && !child.style.position.out_of_flow() {
+        if child.normal_block() {
             flush_inline_run(parent, &mut run, identity);
             parent.children.push(child);
         } else {
@@ -1119,6 +1324,12 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         marker_text: None,
         inline_start: true,
         inline_end: true,
+        table_span: (1, 1),
+        table_rect: None,
+        table_borders: Vec::new(),
+        collapsed_table_part: false,
+        hidden_empty_cell: false,
+        used_border: None,
     });
 }
 
@@ -1130,6 +1341,7 @@ fn split_inline(mut inline: LayoutBox) -> Vec<LayoutBox> {
         || inline.atomic_inline()
         || inline.image.is_some()
         || inline.style.position.out_of_flow()
+        || inline.floating()
     {
         return vec![inline];
     }
@@ -1137,17 +1349,14 @@ fn split_inline(mut inline: LayoutBox) -> Vec<LayoutBox> {
         .into_iter()
         .flat_map(split_inline)
         .collect();
-    if !children
-        .iter()
-        .any(|child| child.kind == BoxKind::Block && !child.style.position.out_of_flow())
-    {
+    if !children.iter().any(LayoutBox::normal_block) {
         inline.children = children;
         return vec![inline];
     }
     let mut result = Vec::new();
     let mut run = Vec::new();
     for child in children {
-        if child.kind == BoxKind::Block && !child.style.position.out_of_flow() {
+        if child.normal_block() {
             // Keep the first and last continuations even when empty, but do
             // not insert empty continuations between consecutive blocks.
             if result.is_empty() || !run.is_empty() {
@@ -1226,6 +1435,12 @@ fn generated_box(
         marker_text: None,
         inline_start: true,
         inline_end: true,
+        table_span: (1, 1),
+        table_rect: None,
+        table_borders: Vec::new(),
+        collapsed_table_part: false,
+        hidden_empty_cell: false,
+        used_border: None,
     };
     let mut generated = LayoutBox {
         box_id,
@@ -1267,6 +1482,12 @@ fn generated_box(
         marker_text: None,
         inline_start: true,
         inline_end: true,
+        table_span: (1, 1),
+        table_rect: None,
+        table_borders: Vec::new(),
+        collapsed_table_part: false,
+        hidden_empty_cell: false,
+        used_border: None,
     };
     if generated.style.display.is_item_container() {
         normalize_item_children(&mut generated, identity);

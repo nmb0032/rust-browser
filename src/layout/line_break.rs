@@ -517,10 +517,34 @@ struct Measure {
     hung: f64,
     conditional: f64,
     content: bool,
+    above: f32,
+    below: f32,
 }
 
 impl Measure {
     fn add(&mut self, token: &Token, boxes: &[BoxData], tab: f64, half_ch: f64) -> f64 {
+        if token.real(boxes) {
+            let metrics = match token {
+                Token::Image(id) => Some((
+                    boxes[*id].margin.top + boxes[*id].atomic_baseline,
+                    boxes[*id].rect.height + boxes[*id].margin.bottom - boxes[*id].atomic_baseline,
+                )),
+                Token::Glyphs(id, _, run) => Some(
+                    run.line_extents
+                        .unwrap_or((boxes[*id].metrics.above, boxes[*id].metrics.below)),
+                ),
+                Token::Begin(id)
+                | Token::End(id)
+                | Token::Text(id, ..)
+                | Token::Space(id, ..)
+                | Token::Break(id) => Some((boxes[*id].metrics.above, boxes[*id].metrics.below)),
+                _ => None,
+            };
+            if let Some((above, below)) = metrics {
+                self.above = self.above.max(above);
+                self.below = self.below.max(below);
+            }
+        }
         let width = if matches!(token, Token::Space(_, '\t', _, true)) {
             let mut distance = ((self.x / tab).floor() + 1.0) * tab - self.x;
             if distance < half_ch {
@@ -607,6 +631,7 @@ fn emit(
                 | Token::Control(..)
                 | Token::Break(_)
                 | Token::Positioned(_)
+                | Token::Float(_)
         ) {
             continue;
         }
@@ -698,6 +723,9 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
         }
         let before = measure;
         for token in &tokens[measured_to..boundary.end] {
+            if let Token::Float(id) = token {
+                assembly.place_float(*id, measure.fit().max(0.0) as f32);
+            }
             measure.add(token, assembly.boxes, tab, half_ch);
         }
         let candidate_fit = if boundary.context_break {
@@ -716,6 +744,13 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
         } else {
             measure.fit()
         };
+        let line_height =
+            measure.above.max(assembly.strut.above) + measure.below.max(assembly.strut.below);
+        if !before.content && previous.is_none() {
+            assembly.opportunity(candidate_fit.max(0.0) as f32, line_height.max(0.0));
+        } else {
+            assembly.opportunity(0.0, line_height.max(0.0));
+        }
         if candidate_fit > assembly.width as f64
             && let Some(last) = previous
             && before.content
@@ -742,6 +777,10 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
             for token in &tokens[start..boundary.end] {
                 measure.add(token, assembly.boxes, tab, half_ch);
             }
+            assembly.opportunity(
+                measure.fit().max(0.0) as f32,
+                (assembly.strut.above + assembly.strut.below).max(0.0),
+            );
         }
         measured_to = boundary.end;
         previous = Some(boundary);
@@ -779,8 +818,16 @@ pub(super) fn intrinsic(
     let mut line = Measure::default();
     let mut interval = Measure::default();
     let mut start = 0;
+    let mut float_min: f64 = 0.0;
+    let mut float_max: f64 = 0.0;
     for boundary in opportunities {
         for token in &tokens[start..boundary.end] {
+            if let Token::Float(id) = token {
+                let b = &assembly.boxes[*id];
+                let width = (b.rect.width + b.margin.left + b.margin.right).max(0.0) as f64;
+                float_min = float_min.max(width);
+                float_max += width;
+            }
             line.add(token, assembly.boxes, tab, half_ch);
             interval.add(token, assembly.boxes, tab, half_ch);
         }
@@ -790,8 +837,11 @@ pub(super) fn intrinsic(
             interval = Measure::default();
         }
         if boundary.forced {
-            maximum = maximum.max(line.fit());
+            maximum = maximum.max(line.fit() + float_max);
+            minimum = minimum.max(float_min);
             line = Measure::default();
+            float_min = 0.0;
+            float_max = 0.0;
         }
         start = boundary.end;
     }

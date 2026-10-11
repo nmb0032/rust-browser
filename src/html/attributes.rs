@@ -1,16 +1,17 @@
 /// The HTML non-negative integer algorithm accepts a leading integer, not CSS.
 /// https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#non-negative-integers
 pub(crate) fn image_dimension(value: &str) -> Option<f32> {
+    let value: f32 = nonnegative_integer_digits(value)?.parse().ok()?;
+    (value.is_finite() && value <= 1_000_000.0).then_some(value)
+}
+
+pub(crate) fn nonnegative_integer_digits(value: &str) -> Option<&str> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let digits = value.strip_prefix('+').unwrap_or(value);
     let end = digits
         .find(|ch: char| !ch.is_ascii_digit())
         .unwrap_or(digits.len());
-    if end == 0 {
-        return None;
-    }
-    let value: f32 = digits[..end].parse().ok()?;
-    (value.is_finite() && value <= 1_000_000.0).then_some(value)
+    (end != 0).then_some(&digits[..end])
 }
 
 #[cfg(test)]

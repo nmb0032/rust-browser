@@ -42,6 +42,13 @@ fn style(source: &str) -> ComputedStyle {
 fn projection(style: &ComputedStyle, property: Property) -> String {
     use Property as P;
     match property {
+        P::Float => format!("{:?}", style.float),
+        P::Clear => format!("{:?}", style.clear),
+        P::TableLayout => format!("{:?}", style.table_layout),
+        P::BorderCollapse => format!("{:?}", style.border_collapse),
+        P::BorderSpacing => format!("{:?}", style.border_spacing),
+        P::CaptionSide => format!("{:?}", style.caption_side),
+        P::EmptyCells => format!("{:?}", style.empty_cells),
         P::Content => format!("{:?}", style.content),
         P::Color => format!("{:?}", style.text_color),
         P::TextFillColor => format!("{:?}", style.text_fill_color),
@@ -218,17 +225,17 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 109, 649, 63]);
-    assert_eq!(longhands.len(), 80);
+    assert_eq!(counts, [0, 116, 642, 63]);
+    assert_eq!(longhands.len(), 87);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 79);
+    assert_eq!(all.len(), 86);
     longhands.remove(&Property::Direction);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **108 partial**, **649 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **115 partial**, **642 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**80 longhands**, **28 shorthands**"));
+    assert!(report.contains("**87 longhands**, **28 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -318,6 +325,10 @@ fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule()
         &[
             "color",
             "-webkit-text-fill-color",
+            "border-collapse",
+            "border-spacing",
+            "caption-side",
+            "empty-cells",
             "text-align-all",
             "text-align-last",
             "white-space-collapse",

@@ -57,10 +57,10 @@ pub use cascade::{
     resolve_with_user_stylesheets_and_environment,
 };
 pub use computed::{
-    AlignKeyword, Alignment, BaselineShift, BaselineSource, BoxSizing, ComputedStyle,
-    ComputedStyles, Content, ContentItem, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
-    Overflow, Position, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
-    ZIndex,
+    AlignKeyword, Alignment, BaselineShift, BaselineSource, BorderCollapse, BoxSizing, CaptionSide,
+    Clear, ComputedStyle, ComputedStyles, Content, ContentItem, Direction, Display, EmptyCells,
+    FlexBasis, FlexDirection, FlexWrap, Float, Overflow, Position, TableLayout, TextAlign,
+    TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
 };
 pub use container::ContainerSnapshot;
 pub(crate) use stylesheets::report_css_errors;

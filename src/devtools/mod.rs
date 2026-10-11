@@ -51,6 +51,19 @@ fn grid_summary(style: &crate::style::ComputedStyle) -> String {
     )
 }
 
+fn table_summary(style: &crate::style::ComputedStyle) -> String {
+    format!(
+        "display={:?} table-layout={:?} border-collapse={:?} border-spacing={:?} caption-side={:?} empty-cells={:?} vertical-align={:?}",
+        style.display,
+        style.table_layout,
+        style.border_collapse,
+        style.border_spacing,
+        style.caption_side,
+        style.empty_cells,
+        style.vertical_align
+    )
+}
+
 /// Explicit length stages, with used/actual geometry from the laid-out tree.
 /// "Actual" here is unclipped rectangle quantization, not glyph rasterization.
 pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
@@ -98,6 +111,31 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
         )
         .unwrap();
         writeln!(output, "  computed width: {:?}", layout_box.style().width).unwrap();
+        writeln!(
+            output,
+            "  computed float: {:?} clear={:?}",
+            layout_box.style().float,
+            layout_box.style().clear
+        )
+        .unwrap();
+        if layout_box.style().display.is_table()
+            || layout_box.style().display.table_internal()
+            || layout_box.style().display == crate::style::Display::TableCaption
+        {
+            writeln!(
+                output,
+                "  computed table: {}",
+                table_summary(layout_box.style())
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  used table-grid: {:?} shared-borders={}",
+                layout_box.table_paint_rect(),
+                layout_box.table_border_segments().len()
+            )
+            .unwrap();
+        }
         if layout_box.style().display.is_flex() || layout_box.is_flex_item() {
             writeln!(
                 output,
@@ -751,6 +789,22 @@ fn dump_layout_box(tree: &LayoutTree, layout_box: &LayoutBox, depth: usize) {
         layout_box.style().overflow_x,
         layout_box.style().overflow_y
     );
+    println!(
+        "{indent}  float={:?} clear={:?}",
+        layout_box.style().float,
+        layout_box.style().clear
+    );
+    if layout_box.style().display.is_table()
+        || layout_box.style().display.table_internal()
+        || layout_box.style().display == crate::style::Display::TableCaption
+    {
+        println!(
+            "{indent}  {} table-grid={:?} shared-borders={}",
+            table_summary(layout_box.style()),
+            layout_box.table_paint_rect(),
+            layout_box.table_border_segments().len()
+        );
+    }
     if layout_box.style().display.is_flex() || layout_box.is_flex_item() {
         println!(
             "{indent}  flex-item={} {}",

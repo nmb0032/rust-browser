@@ -54,7 +54,7 @@ struct ChildrenFlow {
 #[derive(Clone, Copy)]
 enum BlockMode {
     Root(Option<f32>),
-    Flow(Option<f32>),
+    Flow(Option<f32>, f32),
     Positioned {
         width: f32,
         height: Option<f32>,
@@ -62,6 +62,7 @@ enum BlockMode {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_block(
     layout_box: &mut LayoutBox,
     x: f32,
@@ -70,28 +71,34 @@ fn layout_block(
     mode: BlockMode,
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
+    floats: &mut super::floats::FloatContext,
 ) -> BlockFlow {
-    layout_box.flow_width = available_width;
+    let reference_width = if let BlockMode::Flow(_, reference) = mode {
+        reference
+    } else {
+        available_width
+    };
+    layout_box.flow_width = reference_width;
     layout_box.definite_width = match mode {
         BlockMode::Positioned { definite, .. } => definite.0,
         _ => true,
     };
     let containing_height = match mode {
-        BlockMode::Root(height) | BlockMode::Flow(height) => height,
+        BlockMode::Root(height) | BlockMode::Flow(height, _) => height,
         BlockMode::Positioned { .. } => None,
     };
     let style = &layout_box.style;
-    let margins = resolve_margins(style, available_width, layout_box.node_id, diagnostics);
+    let margins = resolve_margins(style, reference_width, layout_box.node_id, diagnostics);
     let padding = resolve_edges(
         &style.padding,
         style.font_size,
-        available_width,
+        reference_width,
         layout_box.node_id,
         "padding",
         diagnostics,
     )
     .map(|value| value.max(0.0));
-    let border = style.border_width;
+    let border = layout_box.used_border.unwrap_or(style.border_width);
     let horizontal = finite_used(
         padding.left as f64 + padding.right as f64 + border.left as f64 + border.right as f64,
         layout_box.node_id,
@@ -109,7 +116,7 @@ fn layout_block(
             resolve_length(
                 length,
                 style.font_size,
-                available_width,
+                reference_width,
                 layout_box.node_id,
                 "width",
                 diagnostics,
@@ -117,6 +124,21 @@ fn layout_block(
             horizontal,
         )
     });
+    let explicit_width = if style.display.is_table()
+        && explicit_width.is_none()
+        && !matches!(mode, BlockMode::Positioned { .. })
+    {
+        let intrinsic =
+            super::table::intrinsic_widths(layout_box, available_width, font, diagnostics);
+        let available = (available_width
+            - horizontal
+            - margins.left.unwrap_or(0.0)
+            - margins.right.unwrap_or(0.0))
+        .max(0.0);
+        Some(available.max(intrinsic.0).min(intrinsic.1))
+    } else {
+        explicit_width
+    };
     let explicit_height = style
         .height
         .as_ref()
@@ -187,7 +209,7 @@ fn layout_block(
         let bounds = super::sizing::bounds(
             layout_box,
             true,
-            Some(available_width),
+            Some(reference_width),
             horizontal,
             0.0,
             diagnostics,
@@ -204,7 +226,34 @@ fn layout_block(
             );
         }
     }
+    if layout_box.style.display.is_table()
+        && (layout_box.style.table_layout != crate::style::TableLayout::Fixed
+            || layout_box.style.width.is_none())
+    {
+        let intrinsic_min =
+            super::table::intrinsic_widths(layout_box, reference_width, font, diagnostics).0;
+        if width < intrinsic_min as f64 {
+            if !matches!(mode, BlockMode::Positioned { .. }) {
+                (width, left, right) = solve_width(
+                    available_width as f64,
+                    horizontal as f64,
+                    Some(intrinsic_min as f64),
+                    margins.left.map(f64::from),
+                    margins.right.map(f64::from),
+                    containing_direction,
+                );
+            } else {
+                width = intrinsic_min as f64;
+            }
+        }
+    }
     let width = finite_used(width, layout_box.node_id, "width equation", diagnostics);
+    let width =
+        if layout_box.style.display.is_table() || layout_box.style.display == Display::TableCell {
+            super::table::bounded_extent(width, layout_box.node_id, diagnostics)
+        } else {
+            width
+        };
     if let Some(image) = &layout_box.image
         && explicit_height.is_none()
         && replaced_size.is_some_and(|size| size.0 != width)
@@ -268,13 +317,14 @@ fn layout_block(
     } else {
         explicit_height
     };
-    let collapse_children = matches!(mode, BlockMode::Flow(_))
+    let collapse_children = matches!(mode, BlockMode::Flow(..))
         && !layout_box.style.display.is_item_container()
         && !layout_box.is_layout_item()
         && layout_box.image.is_none()
         && layout_box.style.container_type == ContainerType::Normal
         && !layout_box.style.overflow_x.scroll_container()
         && !layout_box.style.overflow_y.scroll_container();
+    let collapse_children = collapse_children && !layout_box.establishes_bfc();
     let collapse_top = collapse_children && border.top == 0.0 && padding.top == 0.0;
     let collapse_bottom = collapse_children
         && explicit_height.is_none()
@@ -299,6 +349,14 @@ fn layout_block(
             layout_box.text_fragments.push(fragment);
         }
         height as f64
+    } else if layout_box.style.display.is_table() {
+        super::table::layout_table(
+            layout_box,
+            (content_x, content_y, width),
+            explicit_height,
+            font,
+            diagnostics,
+        ) as f64
     } else if layout_box.style.display.is_grid() {
         super::grid::layout_grid(
             layout_box,
@@ -319,24 +377,43 @@ fn layout_block(
             diagnostics,
         ) as f64
     } else {
+        let isolated = layout_box.establishes_bfc()
+            || matches!(mode, BlockMode::Root(_) | BlockMode::Positioned { .. });
+        let mut own_floats = super::floats::FloatContext::default();
+        let context = if isolated {
+            &mut own_floats
+        } else {
+            &mut *floats
+        };
         children_flow = flow_children(
             layout_box,
             (content_x, content_y, width),
             (collapse_top, collapse_bottom),
             font,
             diagnostics,
+            context,
         );
+        if isolated {
+            children_flow.height = children_flow
+                .height
+                .max(context.bottom() as f64 - content_y as f64);
+        }
         children_flow.height
     };
     // Size containment removes descendant intrinsic block-size contributions.
     // Children still lay out and may overflow this content box.
-    let height = explicit_height.map(f64::from).unwrap_or_else(|| {
-        if layout_box.image.is_none() && layout_box.style.container_type == ContainerType::Size {
-            0.0
-        } else {
-            natural_height.max(0.0)
-        }
-    });
+    let height = if layout_box.style.display.is_table() {
+        natural_height.max(explicit_height.unwrap_or(0.0) as f64)
+    } else {
+        explicit_height.map(f64::from).unwrap_or_else(|| {
+            if layout_box.image.is_none() && layout_box.style.container_type == ContainerType::Size
+            {
+                0.0
+            } else {
+                natural_height.max(0.0)
+            }
+        })
+    };
     let height = finite_used(height, layout_box.node_id, "height", diagnostics);
     let bounds = grid_height_bounds.unwrap_or_else(|| {
         super::sizing::bounds(
@@ -349,6 +426,12 @@ fn layout_block(
         )
     });
     let height = height.clamp(bounds.0, bounds.1);
+    let height =
+        if layout_box.style.display.is_table() || layout_box.style.display == Display::TableCell {
+            super::table::bounded_extent(height, layout_box.node_id, diagnostics)
+        } else {
+            height
+        };
     if !matches!(mode, BlockMode::Positioned { .. })
         && containing_height.is_none()
         && layout_box
@@ -436,6 +519,7 @@ pub(super) fn layout_sized(
         },
         font,
         diagnostics,
+        &mut super::floats::FloatContext::default(),
     );
     if layout_box.style.display == Display::ListItem {
         let text = layout_box
@@ -444,6 +528,25 @@ pub(super) fn layout_sized(
             .unwrap_or_else(|| "\u{2022}".into());
         assign_marker(layout_box, text, font, diagnostics);
     }
+}
+
+pub(super) fn layout_caption(
+    b: &mut LayoutBox,
+    x: f32,
+    width: f32,
+    font: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    layout_block(
+        b,
+        x,
+        width,
+        b.style.direction,
+        BlockMode::Root(None),
+        font,
+        diagnostics,
+        &mut super::floats::FloatContext::default(),
+    );
 }
 
 fn assign_marker(
@@ -519,9 +622,20 @@ pub(super) fn layout_children(
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> f32 {
-    let result = flow_children(layout_box, (x, y, width), (false, false), font, diagnostics);
+    let mut floats = super::floats::FloatContext::default();
+    let result = flow_children(
+        layout_box,
+        (x, y, width),
+        (false, false),
+        font,
+        diagnostics,
+        &mut floats,
+    );
     finite_used(
-        result.height.max(0.0),
+        result
+            .height
+            .max(floats.bottom() as f64 - y as f64)
+            .max(0.0),
         layout_box.node_id,
         "block flow height",
         diagnostics,
@@ -534,6 +648,7 @@ fn flow_children(
     (collapse_top, collapse_bottom): (bool, bool),
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
+    floats: &mut super::floats::FloatContext,
 ) -> ChildrenFlow {
     let mut cursor_y = y as f64;
     let mut pending = MarginStrut::default();
@@ -545,14 +660,10 @@ fn flow_children(
     let mut list_index = 0;
     let mut index = 0;
     while index < layout_box.children.len() {
-        if layout_box.children[index].kind != BoxKind::Block
-            || layout_box.children[index].style.position.out_of_flow()
-        {
+        if !layout_box.children[index].normal_block() {
             let end = layout_box.children[index..]
                 .iter()
-                .position(|child| {
-                    child.kind == BoxKind::Block && !child.style.position.out_of_flow()
-                })
+                .position(|child| child.normal_block())
                 .map_or(layout_box.children.len(), |offset| index + offset);
             let inline_y = finite_used(
                 cursor_y + pending.value(),
@@ -567,6 +678,7 @@ fn flow_children(
                 (x, inline_y, width, layout_box.definite_height),
                 font,
                 diagnostics,
+                Some(floats),
             );
             if !lines.is_empty() {
                 cursor_y += pending.value() + height;
@@ -580,30 +692,160 @@ fn flow_children(
         }
         let child = &mut layout_box.children[index];
         if child.kind == BoxKind::Block {
-            let child_flow = layout_block(
+            let initial_margin = match &child.style.margin.top {
+                crate::css::values::LengthOrAuto::Auto => 0.0,
+                crate::css::values::LengthOrAuto::Length(length) => {
+                    length.resolve_with_diagnostic(child.style.font_size, width, |_| {})
+                }
+            };
+            let candidate_y = if at_start && collapse_top {
+                y as f64
+            } else {
+                cursor_y + pending.merge(MarginStrut::new(initial_margin)).value()
+            };
+            let cleared_y = floats.clear_y(child.style.clear, candidate_y as f32 + floats.offset)
+                - floats.offset;
+            let clearance = cleared_y > candidate_y as f32;
+            let mut estimate_y = candidate_y.max(cleared_y as f64);
+            let outer_offset = floats.offset;
+            let base = floats.clone();
+            let mut child_x = x;
+            let mut child_width = width;
+            if child.establishes_bfc() && !floats.is_empty() {
+                loop {
+                    let band =
+                        floats.opportunity(x, estimate_y as f32 + outer_offset, width, 0.001);
+                    let padding = resolve_edges(
+                        &child.style.padding,
+                        child.style.font_size,
+                        width,
+                        child.node_id,
+                        "BFC padding",
+                        diagnostics,
+                    );
+                    let decor = padding.left
+                        + padding.right
+                        + child.style.border_width.left
+                        + child.style.border_width.right;
+                    let intrinsic = if child.style.display.is_table() {
+                        super::table::intrinsic_widths(child, width, font, diagnostics).0
+                    } else {
+                        0.0
+                    };
+                    let bounds =
+                        super::sizing::bounds(child, true, Some(width), decor, 0.0, diagnostics);
+                    let requested = super::sizing::definite_size(
+                        child,
+                        child.style.width.as_ref(),
+                        Some(width),
+                        decor,
+                        diagnostics,
+                    )
+                    .unwrap_or(intrinsic)
+                    .max(bounds.0)
+                        + decor;
+                    if requested <= band.1
+                        || floats
+                            .next_bottom(estimate_y as f32 + outer_offset)
+                            .is_none()
+                    {
+                        (child_x, child_width) = band;
+                        break;
+                    }
+                    estimate_y = (floats
+                        .next_bottom(estimate_y as f32 + outer_offset)
+                        .unwrap()
+                        - outer_offset) as f64;
+                }
+            }
+            floats.offset = outer_offset + estimate_y as f32;
+            let mut child_flow = layout_block(
                 child,
-                x,
-                width,
+                child_x,
+                child_width,
                 layout_box.style.direction,
                 if is_document && !child.is_anonymous() {
                     BlockMode::Root(layout_box.definite_height)
                 } else {
-                    BlockMode::Flow(layout_box.definite_height)
+                    BlockMode::Flow(layout_box.definite_height, width)
                 },
                 font,
                 diagnostics,
+                floats,
             );
-            pending = pending.merge(child_flow.before);
-            let child_y = if at_start && collapse_top {
-                y as f64
+            floats.offset = outer_offset;
+            if child.establishes_bfc() && !floats.is_empty() {
+                let minimum =
+                    super::positioning::intrinsic_content(child, width, font, diagnostics).0;
+                for _ in 0..4097 {
+                    let band = floats.opportunity(
+                        x,
+                        estimate_y as f32 + outer_offset,
+                        width,
+                        child.rect.height,
+                    );
+                    let fixed = child.style.width.is_some();
+                    let needed = if fixed { child.rect.width } else { minimum };
+                    if band.1 < needed
+                        && let Some(next) = floats.next_bottom(estimate_y as f32 + outer_offset)
+                    {
+                        estimate_y = (next - outer_offset) as f64;
+                    } else if (band.0 - child_x).abs() < 0.01 && (band.1 - child_width).abs() < 0.01
+                    {
+                        break;
+                    } else {
+                        (child_x, child_width) = band;
+                    }
+                    child.reset();
+                    floats.offset = outer_offset + estimate_y as f32;
+                    child_flow = layout_block(
+                        child,
+                        child_x,
+                        child_width,
+                        layout_box.style.direction,
+                        BlockMode::Flow(layout_box.definite_height, width),
+                        font,
+                        diagnostics,
+                        floats,
+                    );
+                    floats.offset = outer_offset;
+                }
+            }
+            let joined = pending.merge(child_flow.before);
+            let child_y = if clearance {
+                estimate_y.max(cursor_y + pending.value() + child_flow.before.value())
+            } else if at_start && collapse_top {
+                (y as f64).max(estimate_y)
             } else {
-                cursor_y + pending.value()
+                (cursor_y + joined.value()).max(estimate_y)
+            };
+            if !child.establishes_bfc() && !floats.is_empty() && (child_y - estimate_y).abs() > 0.01
+            {
+                *floats = base;
+                floats.offset = outer_offset + child_y as f32;
+                child.reset();
+                child_flow = layout_block(
+                    child,
+                    child_x,
+                    child_width,
+                    layout_box.style.direction,
+                    BlockMode::Flow(layout_box.definite_height, width),
+                    font,
+                    diagnostics,
+                    floats,
+                );
+                floats.offset = outer_offset;
+            }
+            pending = if clearance {
+                MarginStrut::default()
+            } else {
+                joined
             };
             place_block(child, child_y, diagnostics);
-            if child_flow.through {
+            if child_flow.through && !clearance {
                 pending = pending.merge(child_flow.after);
             } else {
-                if at_start && collapse_top {
+                if at_start && collapse_top && !clearance {
                     before = pending;
                 }
                 cursor_y = child_y + child.rect.height as f64;

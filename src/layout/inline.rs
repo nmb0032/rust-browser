@@ -92,6 +92,7 @@ enum Token {
     Image(usize),
     Break(usize),
     Positioned(usize),
+    Float(usize),
 }
 
 impl Token {
@@ -111,7 +112,11 @@ impl Token {
                 let b = &boxes[*id];
                 b.margin.left as f64 + b.rect.width as f64 + b.margin.right as f64
             }
-            Self::Break(_) | Self::Control(..) | Self::Omitted | Self::Positioned(_) => 0.0,
+            Self::Break(_)
+            | Self::Control(..)
+            | Self::Omitted
+            | Self::Positioned(_)
+            | Self::Float(_) => 0.0,
         }
     }
 
@@ -134,7 +139,7 @@ impl Token {
                 b.padding.right != 0.0 || b.border.right != 0.0 || b.margin.right != 0.0
             }
             Self::Space(_, _, _, preserved) => *preserved,
-            Self::Control(..) | Self::Omitted | Self::Positioned(_) => false,
+            Self::Control(..) | Self::Omitted | Self::Positioned(_) | Self::Float(_) => false,
         }
     }
 }
@@ -152,6 +157,13 @@ fn collect(
     let style = &layout.style;
     let metrics = font_metrics(font, style, layout.node_id, diagnostics);
     let is_inline = layout.kind == BoxKind::Inline;
+    if is_inline
+        && !layout.floating()
+        && style.vertical_align != crate::style::VerticalAlign::Baseline
+    {
+        diagnostics.push(Diagnostic { node_id: layout.node_id,
+            message: "non-baseline inline vertical-align is not implemented; using baseline (table-cell alignment is supported)".into() });
+    }
     let padding = if is_inline {
         layout.inline_edges(
             resolve_edges(
@@ -200,6 +212,20 @@ fn collect(
         static_after_line: false,
         inline_line: None,
     };
+    if layout.floating() {
+        let mut atomic = layout.clone();
+        atomic.reset();
+        super::floats::layout_float(&mut atomic, width, reference_height, font, diagnostics);
+        data.margin = atomic.margin;
+        data.padding = atomic.padding;
+        data.border = atomic.used_border.unwrap_or(atomic.style.border_width);
+        data.rect = atomic.rect;
+        data.content = atomic.content_rect;
+        data.atomic = Some(Box::new(atomic));
+        boxes.push(data);
+        tokens.push(Token::Float(id));
+        return;
+    }
     if let Some(image) = &layout.image {
         let horizontal = finite_used(
             padding.left as f64 + padding.right as f64 + border.left as f64 + border.right as f64,
@@ -382,9 +408,59 @@ struct Assembly<'a> {
     segments: Vec<Segment>,
     items: Vec<(Token, f32)>,
     lines: Vec<LineBox>,
+    floats: Option<&'a mut super::floats::FloatContext>,
+    full_origin: f32,
+    full_width: f32,
 }
 
 impl Assembly<'_> {
+    fn opportunity(&mut self, needed: f32, height: f32) {
+        let Some(floats) = self.floats.as_deref_mut() else {
+            return;
+        };
+        loop {
+            let band = floats.opportunity(
+                self.full_origin,
+                self.y + floats.offset,
+                self.full_width,
+                height,
+            );
+            if needed <= band.1 || floats.next_bottom(self.y + floats.offset).is_none() {
+                self.origin = band.0;
+                self.width = band.1;
+                self.x = self.origin;
+                // Continuing inline decorations begin at the new opportunity.
+                for segment in &mut self.segments {
+                    segment.border_start = self.origin;
+                    segment.content_start = self.origin;
+                }
+                break;
+            }
+            self.y = floats.next_bottom(self.y + floats.offset).unwrap() - floats.offset;
+        }
+    }
+    fn place_float(&mut self, id: usize, preceding: f32) {
+        let Some(floats) = self.floats.as_deref_mut() else {
+            return;
+        };
+        let b = self.boxes[id]
+            .atomic
+            .as_mut()
+            .expect("float formatting context");
+        floats.place(
+            b,
+            self.full_origin,
+            self.y,
+            self.full_width,
+            preceding,
+            (self.strut.above + self.strut.below).max(0.0),
+            self.diagnostics,
+        );
+        let (rect, content) = (b.rect, b.content_rect);
+        self.boxes[id].rect = rect;
+        self.boxes[id].content = content;
+        self.opportunity(0.0, (self.strut.above + self.strut.below).max(0.0));
+    }
     fn advance(&mut self, width: f64, node: Option<NodeId>) {
         self.x = finite_used(
             self.x as f64 + width,
@@ -543,7 +619,7 @@ impl Assembly<'_> {
                 self.contribute(self.boxes[id].metrics);
                 self.items.push((Token::Break(id), self.x));
             }
-            Token::Control(..) | Token::Omitted => {}
+            Token::Control(..) | Token::Omitted | Token::Float(_) => {}
         }
     }
 
@@ -829,6 +905,7 @@ impl Assembly<'_> {
                 last: false,
             });
         }
+        self.opportunity(0.0, (self.strut.above + self.strut.below).max(0.0));
     }
 }
 
@@ -839,6 +916,7 @@ pub(super) fn layout_inline_run(
     (x, y, width, reference_height): (f32, f32, f32, Option<f32>),
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
+    floats: Option<&mut super::floats::FloatContext>,
 ) -> (Vec<LineBox>, f64) {
     let strut = font_metrics(font, style, node, diagnostics);
     let mut boxes = Vec::new();
@@ -872,7 +950,11 @@ pub(super) fn layout_inline_run(
         segments: Vec::new(),
         items: Vec::new(),
         lines: Vec::new(),
+        floats,
+        full_origin: x,
+        full_width: width,
     };
+    assembly.opportunity(0.0, (strut.above + strut.below).max(0.0));
     breaking::layout(tokens, style, &mut assembly);
     let height = assembly.y as f64 - y as f64;
     let lines = std::mem::take(&mut assembly.lines);
@@ -924,6 +1006,9 @@ pub(super) fn intrinsic_inline(
         segments: Vec::new(),
         items: Vec::new(),
         lines: Vec::new(),
+        floats: None,
+        full_origin: 0.0,
+        full_width: width,
     };
     breaking::intrinsic(tokens, style, &mut assembly)
 }
@@ -936,6 +1021,10 @@ fn install(
 ) {
     let data = boxes.next().expect("inline preorder geometry");
     if let Some(mut atomic) = data.atomic {
+        if layout.floating() {
+            *layout = *atomic;
+            return;
+        }
         let dx = data.rect.x - atomic.rect.x;
         super::positioning::translate(&mut atomic, dx, 0.0, diagnostics);
         super::block::place_block(&mut atomic, data.rect.y as f64, diagnostics);

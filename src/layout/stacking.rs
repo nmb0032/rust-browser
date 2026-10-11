@@ -14,6 +14,7 @@ pub(crate) enum PaintPhase {
     Content,
     Text(usize),
     Scrollbars,
+    TableBorders,
 }
 
 struct Group<'a> {
@@ -66,6 +67,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
             if ancestor.style.position != Position::Static
                 || ancestor.atomic_inline()
                 || ancestor.is_layout_item()
+                || ancestor.floating()
             {
                 return id;
             }
@@ -93,6 +95,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                         && (ancestor.style.position != Position::Static
                             || ancestor.is_layout_item()
                             || ancestor.atomic_inline())
+                    || !real && owner.style.position == Position::Static && ancestor.floating()
                 {
                     context = id;
                     break;
@@ -153,6 +156,15 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         // Preserve line identity before visual offsets: sorting coordinates
         // would reverse overlapping lines or relatively moved inline fragments.
         // Within each source line, decorations and foreground interleave.
+        for (b, _, _) in &group.boxes {
+            if !b.table_borders.is_empty() {
+                list.push((b, PaintPhase::TableBorders));
+            }
+        }
+        let float_group = |g: &Group<'_>| g.boxes[0].0.floating() && g.level.is_none();
+        for (child, _) in children.iter().filter(|(_, g)| float_group(g)) {
+            paint(**child, root_element, groups, list);
+        }
         let mut foreground = Vec::new();
         for (b, flow, order) in &group.boxes {
             let order = *order;
@@ -227,7 +239,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         }
         for (child, _) in children
             .iter()
-            .filter(|(_, g)| g.level.unwrap_or(0) >= 0 && !inline_group(g))
+            .filter(|(_, g)| g.level.unwrap_or(0) >= 0 && !inline_group(g) && !float_group(g))
         {
             paint(**child, root_element, groups, list);
         }

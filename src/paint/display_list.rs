@@ -189,6 +189,19 @@ fn append_box_items(
     paint_background: bool,
     display_list: &mut Vec<DisplayItem>,
 ) {
+    if phase == PaintPhase::TableBorders {
+        for segment in layout_box.table_border_segments() {
+            let r = segment.rect;
+            append_border(
+                display_list,
+                (r.x, r.y, r.width, r.height),
+                segment.color,
+                segment.style,
+                r.width >= r.height,
+            );
+        }
+        return;
+    }
     if matches!(
         phase,
         PaintPhase::Decoration | PaintPhase::InlineDecoration(_)
@@ -264,9 +277,13 @@ fn append_box_items(
         selected: Option<usize>,
         display_list: &mut Vec<DisplayItem>,
     ) {
+        if layout_box.hides_empty_cell() {
+            return;
+        }
         if layout_box.kind() == BoxKind::Inline
             && !layout_box.is_replaced_image()
             && !layout_box.style().display.is_item_container()
+            && !layout_box.style().display.is_table()
         {
             for (index, fragment) in layout_box.inline_fragments().iter().enumerate() {
                 if selected.is_some_and(|selected| selected != index) {
@@ -290,8 +307,12 @@ fn append_box_items(
         } else {
             append_decoration_rect(
                 layout_box,
-                layout_box.rect(),
-                layout_box.inline_edges(layout_box.style().border_width),
+                layout_box.table_paint_rect().unwrap_or(layout_box.rect()),
+                if layout_box.suppresses_table_borders() {
+                    Edges::default()
+                } else {
+                    layout_box.inline_edges(layout_box.style().border_width)
+                },
                 paint_background,
                 display_list,
             );

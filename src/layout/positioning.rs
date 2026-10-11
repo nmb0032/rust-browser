@@ -47,6 +47,12 @@ fn translate_own(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diag
     }
     rect(&mut b.rect, dx, dy, id, diagnostics);
     rect(&mut b.content_rect, dx, dy, id, diagnostics);
+    if let Some(table) = &mut b.table_rect {
+        rect(table, dx, dy, id, diagnostics);
+    }
+    for border in &mut b.table_borders {
+        rect(&mut border.rect, dx, dy, id, diagnostics);
+    }
     if let Some(anchor) = &mut b.flex_static {
         rect(&mut anchor.area, dx, dy, id, diagnostics);
     }
@@ -80,6 +86,19 @@ pub(super) fn translate(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut V
     translate_own(b, dx, dy, diagnostics);
     for child in &mut b.children {
         translate(child, dx, dy, diagnostics);
+    }
+}
+
+/// A pre-finalization block is a local Y root; its descendants must not receive
+/// the same displacement again when the tree is absolutized.
+pub(super) fn translate_local_y(b: &mut LayoutBox, dy: f32, diagnostics: &mut Vec<Diagnostic>) {
+    if b.local_root() {
+        super::block::place_block(b, (b.rect.y + dy) as f64, diagnostics);
+    } else {
+        translate_own(b, 0.0, dy, diagnostics);
+        for child in &mut b.children {
+            translate_local_y(child, dy, diagnostics);
+        }
     }
 }
 
@@ -570,6 +589,9 @@ pub(super) fn intrinsic_content(
     }
     if b.style.display.is_grid() {
         return super::grid::intrinsic_widths(b, reference, font, diagnostics);
+    }
+    if b.style.display.is_table() {
+        return super::table::intrinsic_widths(b, reference, font, diagnostics);
     }
     if let Some(image) = &b.image {
         let metrics = super::inline::font_metrics(font, &b.style, b.node_id, diagnostics);
