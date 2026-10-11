@@ -1,0 +1,10 @@
+<!doctype html>
+<link rel="match" href="references/effects-mask-clip-ref.html">
+<style>
+html,body{margin:0}div{position:absolute}
+#mask{left:20px;top:20px;width:60px;height:20px;background:red;mask:linear-gradient(to right,black 0%,black 50%,transparent 50%,transparent 100%) 0 0 / 20px 20px repeat alpha}
+#clip{left:100px;top:20px;width:40px;height:40px;background:blue;clip-path:polygon(0 0,100% 0,100% 25%,25% 25%,25% 100%,0 100%)}
+#inset{left:160px;top:20px;width:40px;height:40px;background:green;clip-path:inset(10px)}
+#image{left:220px;top:20px;width:120px;height:60px;background:red;mask-image:url(support/stripes.png)}
+</style>
+<div id="mask"></div><div id="clip"></div><div id="inset"></div><div id="image"></div>

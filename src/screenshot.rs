@@ -213,6 +213,8 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
         return Err(io::Error::other("headless web fonts did not settle").into());
     }
     let mut tree = frame.layout_with_container_queries(&fonts);
+    frame.load_pending_effect_images(|_| Ok(()), || false)?;
+    tree.effect_images = frame.effect_images.clone();
     tree.set_viewport_scroll(options.scroll);
     for panel in &options.panels {
         let ids = frame
@@ -245,6 +247,8 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
     }
     frame.retain_scroll_state(&tree);
     let list = paint::build_display_list(&tree, options.width as f32, options.height as f32, false);
+    paint::compositor::validate(&list, width as usize, height as usize, options.scale)
+        .map_err(io::Error::other)?;
     let mut pixels = vec![0xffffff; width as usize * height as usize];
     paint::rasterize_display_list(
         &list,

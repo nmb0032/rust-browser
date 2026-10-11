@@ -85,8 +85,8 @@ impl Navigation {
         Ok(())
     }
 
-    /// Load newly active fonts without refetching HTML/CSS/images. The same
-    /// navigation cancellation/channel lifetime owns this resource worker.
+    /// Load newly active fonts/masks without refetching HTML/CSS or cached images. The same
+    /// navigation cancellation/channel lifetime owns this font/mask resource worker.
     pub fn start_font_load(&mut self, frame: Arc<Frame>) -> Result<(), Box<dyn Error>> {
         self.cancelled.store(true, Ordering::Relaxed);
         self.receiver = None;
@@ -94,25 +94,30 @@ impl Navigation {
         let worker_cancelled = Arc::clone(&cancelled);
         let (sender, receiver) = mpsc::sync_channel(1);
         thread::Builder::new()
-            .name("font-loader".into())
+            .name("style-resource-loader".into())
             .spawn(move || {
                 let mut frame = (*frame).clone();
-                let result = frame.load_pending_web_fonts(
-                    |frame| {
-                        sender
-                            .send(LoadEvent::Progress(Arc::new(frame.clone())))
-                            .map_err(|_| {
-                                io::Error::new(io::ErrorKind::BrokenPipe, "font receiver closed")
-                                    .into()
-                            })
-                    },
-                    || worker_cancelled.load(Ordering::Relaxed),
-                );
+                let mut publish = |frame: &Frame| {
+                    sender
+                        .send(LoadEvent::Progress(Arc::new(frame.clone())))
+                        .map_err(|_| {
+                            io::Error::new(io::ErrorKind::BrokenPipe, "font receiver closed").into()
+                        })
+                };
+                let result = frame
+                    .load_pending_web_fonts(&mut publish, || {
+                        worker_cancelled.load(Ordering::Relaxed)
+                    })
+                    .and_then(|_| {
+                        frame.load_pending_effect_images(&mut publish, || {
+                            worker_cancelled.load(Ordering::Relaxed)
+                        })
+                    });
                 if worker_cancelled.load(Ordering::Relaxed) {
                     return;
                 }
                 if let Err(error) = result {
-                    eprintln!("font resource phase failed: {error}");
+                    eprintln!("style resource phase failed: {error}");
                 }
                 let _ = sender.send(LoadEvent::Finished);
             })?;

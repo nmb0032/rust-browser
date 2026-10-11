@@ -25,6 +25,11 @@ pub struct Frame {
     pub styles: ComputedStyles,
     pub images: ImageMap,
     pub marker_images: ImageMap,
+    pub effect_images: HashMap<String, Arc<crate::media::DecodedImage>>,
+    pub(super) image_cache: HashMap<Url, Arc<crate::media::DecodedImage>>,
+    pub(super) image_resource_count: usize,
+    pub(super) image_resource_bytes: usize,
+    pub(super) failed_effect_images: std::collections::HashSet<String>,
     pub error: Option<String>,
     pub parse_errors: Vec<crate::html::tokenizer::ParseError>,
     pub dropped_parse_errors: usize,
@@ -70,6 +75,11 @@ impl Frame {
             styles: resolution.styles,
             images: ImageMap::new(),
             marker_images: ImageMap::new(),
+            effect_images: HashMap::new(),
+            image_cache: HashMap::new(),
+            image_resource_count: 0,
+            image_resource_bytes: 0,
+            failed_effect_images: std::collections::HashSet::new(),
             error: None,
             parse_errors: Vec::new(),
             dropped_parse_errors: 0,
@@ -174,11 +184,33 @@ impl Frame {
             &self.marker_images,
         );
         tree.restore_scroll_state(self.scroll_state.clone());
+        tree.effect_images = self.effect_images.clone();
         tree
     }
 
     pub fn scroll_state(&self) -> &layout::ScrollState {
         &self.scroll_state
+    }
+
+    pub fn has_pending_effect_images(&self) -> bool {
+        self.document.preorder().any(|id| {
+            let styles = self.styles.get(id).into_iter().chain(
+                style::PseudoElement::ALL
+                    .into_iter()
+                    .filter_map(|p| self.styles.pseudo(id, p)),
+            );
+            styles.flat_map(|s| s.effects.urls()).any(|u| {
+                !self.effect_images.contains_key(&u) && !self.failed_effect_images.contains(&u)
+            })
+        })
+    }
+
+    pub fn load_pending_effect_images(
+        &mut self,
+        mut on_progress: impl FnMut(&Frame) -> Result<(), Box<dyn std::error::Error>>,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        super::resources::load_effect_images(self, &mut on_progress, &cancelled)
     }
 
     /// Adopt input state from this document's latest laid-out snapshot.

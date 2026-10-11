@@ -1,0 +1,12 @@
+<!doctype html>
+<link rel="match" href="references/effects-blend-ref.html">
+<style>
+html,body{margin:0}div{position:absolute}
+#back{left:20px;top:20px;width:120px;height:30px;background:red}
+#multiply,#screen,#isolate{left:30px;top:25px;width:20px;height:20px}
+#multiply{background:blue;mix-blend-mode:multiply}
+#screen{left:60px;background:blue;mix-blend-mode:screen}
+#isolate{left:90px;isolation:isolate}
+#inner{left:0;top:0;width:20px;height:20px;background:blue;mix-blend-mode:multiply}
+</style>
+<div id="back"></div><div id="multiply"></div><div id="screen"></div><div id="isolate"><div id="inner"></div></div>

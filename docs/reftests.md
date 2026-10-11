@@ -1,4 +1,4 @@
-# Native headless reftests (milestones 8.13–8.16)
+# Native headless reftests (milestones 8.13–8.17)
 
 Run from the repository root:
 
@@ -21,7 +21,8 @@ unsupported readiness mechanism, or render/decode error.
 and `capture` combines loading and rendering. This uses **the production HTML
 byte parser, resource loader, CSS cascade, container-query convergence, font
 selection/rustybuzz shaping, layout, display-list builder and fontdue/software
-rasterizer, variable/CFF2 outline masks and native color/bitmap glyph composition**.
+rasterizer, variable/CFF2 outline masks, native color/bitmap glyph composition,
+finite transform projection and RGBA effect groups**.
 There is no screenshot proxy, character-based renderer, alternative
 layout engine, or UI capture path. Normal interactive loading remains unchanged.
 
@@ -53,6 +54,11 @@ layout engine, or UI capture path. Normal interactive loading remains unchanged.
 - The current engine's document inset and native scrollbar paint are retained,
   not removed for tests. References use body-relative geometry where appropriate,
   so they do not encode a private viewport inset into their expected positions.
+- Effects additionally bound padded framebuffers/primitive textures to 4,194,304
+  pixels, group buffers to 128 MiB and filter halos to 384 device pixels.
+  These failures reject screenshots before raster allocation, not produce a
+  successful blank/partially painted result. CSS pixels and device scales
+  remain distinct; Gaussian sigma is capped at 64 device pixels.
 
 ### Fonts and local resources
 
@@ -117,6 +123,24 @@ The fixtures intentionally cover only a small subset, not complete color-font
 formats/emoji sequences or browser typography parity. COLR v1, foreground
 palette entries, OpenType SVG and non-PNG bitmap strikes diagnose unsupported
 formats; the harness does not suppress these diagnostics.
+
+Milestone 8.17 adds **six** effects pairs (**twenty-nine total**):
+`effects-transform`, `effects-opacity`, `effects-filter`, `effects-blend`,
+`effects-mask-clip` and `effects-backdrop`. References use independently
+derived absolute rectangles and literal sRGB colors; none uses transforms,
+group opacity, filters, blending, masks or clip-path to recreate the assertion.
+The mask assertion reuses the original four-by-two RGBA stripes through the
+production image cache/policy and tests intrinsic repeat beyond one image.
+Numeric software tests exercise real nonzero Gaussian kernels, transparency
+edges and all blend formulas independently of these exact rectangle references.
+
+Effects remain finite plane projection: no intersecting preserve-3d surfaces,
+GPU or browser-quality resampling claim. Kernels run in projected device space;
+rotated/nonuniform/perspective filter-kernel equivalence is not asserted.
+The demonstration is `tests/pages/effects.html`. Render diagnostics, missing/
+restricted mask resources and oversize layer budgets fail through the same
+headless error contract. Conditional masks can refresh after viewport/font/
+container style convergence, retaining shared decoded-image Arcs in Frame clones.
 
 `--resource-root` defaults to the current directory. Every document, reference,
 CSS import, image and non-data font URL must resolve to an existing regular file

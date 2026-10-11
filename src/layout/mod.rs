@@ -67,7 +67,11 @@ mod overflow_tests;
 mod positioning_tests;
 #[cfg(test)]
 mod tests;
+mod transform;
 #[cfg(test)]
 mod width_tests;
 #[cfg(test)]
 mod writing_bidi_tests;
+pub use transform::Mat4;
+#[cfg(test)]
+mod effects_tests;

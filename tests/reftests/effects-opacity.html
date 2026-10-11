@@ -1,0 +1,12 @@
+<!doctype html>
+<link rel="match" href="references/effects-opacity-ref.html">
+<style>
+html,body{margin:0}div{position:absolute}
+#group{left:20px;top:20px;width:50px;height:30px;opacity:.5}
+#a,#b{left:0;top:0;width:30px;height:30px;background:red}
+#b{left:20px;z-index:100}
+#nested{left:100px;top:20px;width:30px;height:30px;opacity:.5}
+#inner{left:0;top:0;width:30px;height:30px;opacity:.5;background:blue}
+</style>
+<div id="group"><div id="a"></div><div id="b"></div></div>
+<div id="nested"><div id="inner"></div></div>

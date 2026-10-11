@@ -12,6 +12,8 @@ const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    BeginLayer(Box<super::compositor::Layer>),
+    EndLayer,
     TextDecoration {
         rect: Rect,
         horizontal: bool,
@@ -23,7 +25,7 @@ pub enum DisplayItem {
     /// Subsequent drawing commands use this coordinate space until changed.
     CoordinateSpace(CoordinateSpace),
     /// Complete state for the next flattened paint phase, never a DFS stack.
-    Spatial(crate::layout::SpatialState),
+    Spatial(Box<crate::layout::SpatialState>),
     ColorRect {
         x: f32,
         y: f32,
@@ -126,7 +128,57 @@ pub(crate) fn build_display_list(
     let scrollbars = layout.scrollbars();
     let mut space = CoordinateSpace::Document;
     let mut spatial = crate::layout::SpatialState::default();
+    let mut definitions = std::collections::HashMap::new();
+    fn collect<'a>(b: &'a LayoutBox, map: &mut std::collections::HashMap<usize, &'a LayoutBox>) {
+        map.entry(b.box_id).or_insert(b);
+        for c in b.children() {
+            collect(c, map);
+        }
+    }
+    collect(layout.root(), &mut definitions);
+    let mut groups: Vec<usize> = Vec::new();
     for (layout_box, phase) in crate::layout::paint_order(layout) {
+        let mut path = Vec::new();
+        let mut candidate = Some(layout_box.box_id);
+        while let Some(b) = candidate.and_then(|id| definitions.get(&id)) {
+            if b.style().effects.grouped() {
+                path.push(b.box_id);
+            }
+            candidate = b.semantic_parent();
+        }
+        path.reverse();
+        let common = groups.iter().zip(&path).take_while(|(a, b)| a == b).count();
+        for _ in common..groups.len() {
+            display_list.push(DisplayItem::EndLayer);
+        }
+        for id in &path[common..] {
+            let b = definitions[id];
+            display_list.push(DisplayItem::BeginLayer(Box::new(
+                super::compositor::Layer {
+                    effects: b.style().effects.clone(),
+                    rect: b.rect(),
+                    content: b.content_rect(),
+                    size: b.style().font_size,
+                    padding: Rect {
+                        x: b.rect().x + b.style().border_width.left,
+                        y: b.rect().y + b.style().border_width.top,
+                        width: (b.rect().width
+                            - b.style().border_width.left
+                            - b.style().border_width.right)
+                            .max(0.0),
+                        height: (b.rect().height
+                            - b.style().border_width.top
+                            - b.style().border_width.bottom)
+                            .max(0.0),
+                    },
+                    color: b.style().text_color,
+                    spatial: decoration[id],
+                    space: b.coordinate_space(),
+                    images: layout.effect_images.clone(),
+                },
+            )));
+        }
+        groups = path;
         if layout_box.coordinate_space() != space {
             space = layout_box.coordinate_space();
             display_list.push(DisplayItem::CoordinateSpace(space));
@@ -138,7 +190,7 @@ pub(crate) fn build_display_list(
         };
         if spatial != next {
             spatial = next;
-            display_list.push(DisplayItem::Spatial(spatial));
+            display_list.push(DisplayItem::Spatial(Box::new(spatial)));
         }
         if phase != PaintPhase::Scrollbars {
             append_box_items(
@@ -153,7 +205,7 @@ pub(crate) fn build_display_list(
                 .iter()
                 .filter(|bar| bar.owner == layout_box.box_id)
             {
-                display_list.push(DisplayItem::Spatial(bar.spatial));
+                display_list.push(DisplayItem::Spatial(Box::new(bar.spatial)));
                 spatial = bar.spatial;
                 for (rect, color) in [(bar.track, 0xd8d8d8), (bar.thumb, 0x737373)] {
                     display_list.push(DisplayItem::Rect {
@@ -167,6 +219,9 @@ pub(crate) fn build_display_list(
             }
         }
     }
+    for _ in groups {
+        display_list.push(DisplayItem::EndLayer);
+    }
     if show_outlines {
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
         fn outlines(
@@ -176,11 +231,13 @@ pub(crate) fn build_display_list(
             list: &mut Vec<DisplayItem>,
         ) {
             list.push(DisplayItem::CoordinateSpace(b.coordinate_space()));
-            list.push(DisplayItem::Spatial(if b.kind() == BoxKind::Text {
-                content[&b.box_id]
-            } else {
-                decoration[&b.box_id]
-            }));
+            list.push(DisplayItem::Spatial(Box::new(
+                if b.kind() == BoxKind::Text {
+                    content[&b.box_id]
+                } else {
+                    decoration[&b.box_id]
+                },
+            )));
             append_own_outline(b, content[&b.box_id], list);
             for child in b.children() {
                 outlines(child, decoration, content, list);
@@ -533,7 +590,7 @@ fn append_own_outline(
     } else {
         outline(layout_box.rect(), OUTLINE_COLOR);
     }
-    display_list.push(DisplayItem::Spatial(content));
+    display_list.push(DisplayItem::Spatial(Box::new(content)));
     for line in layout_box.line_boxes() {
         let rect = line.rect;
         if rect.width > 0.0 && rect.height > 0.0 {

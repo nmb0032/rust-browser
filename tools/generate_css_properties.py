@@ -149,6 +149,8 @@ def engine_registry(data, engine):
         rust_ids.add(details["rust"])
         if details["policy"] not in engine["policies"]:
             raise ValueError(f"missing support policy: {name}")
+        if details["policy"] == "effects" and not details["rust"].startswith("Effect(super::effects::Property::"):
+            raise ValueError(f"effect property must use the typed effects dispatcher: {name}")
         simple = engine["simple_values"].get(details["policy"])
         if simple and simple.get("color") and "<color>" not in (
                 part.strip() for part in prop["syntax"].split("|")):
@@ -260,7 +262,7 @@ def generate(data, engine, provenance):
         lines.append(syntax_record(entry) + ",")
     lines.extend([
         "];", "#[derive(Clone, Copy)]",
-        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place, Typography }",
+        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place, Typography, Mask }",
         "pub(super) fn parser(name: &str) -> Option<Parser> { Some(match name {",
     ])
     for name, details in sorted(supported.items()):

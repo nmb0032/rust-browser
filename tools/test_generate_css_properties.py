@@ -16,8 +16,8 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 152)
-        self.assertEqual(len(supported), 201)
+        self.assertEqual(len(longhands), 176)
+        self.assertEqual(len(supported), 226)
         for name in ("aspect-ratio", "object-fit", "object-position"):
             self.assertIn(name, supported)
         self.assertNotIn("display", self.engine["simple_values"])
@@ -77,6 +77,7 @@ class GenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "alias differs from spec"):
             generator.engine_registry(self.data, engine)
         engine = copy.deepcopy(self.engine)
+        del engine["longhands"]["transform"]
         engine["aliases"]["-webkit-transform"] = "transform"
         with self.assertRaisesRegex(ValueError, "no canonical handler"):
             generator.engine_registry(self.data, engine)

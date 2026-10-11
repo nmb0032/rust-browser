@@ -162,7 +162,7 @@ fn complete_native_suite_is_exact_and_mismatch_has_nonzero_pixels_at_two_scales(
             &options,
         )
         .unwrap();
-        assert_eq!(report.outcomes.len(), 23);
+        assert_eq!(report.outcomes.len(), 29);
         assert!(report.passed(), "{report:#?}");
         let mismatch = report
             .outcomes
@@ -184,6 +184,7 @@ fn complete_native_suite_is_exact_and_mismatch_has_nonzero_pixels_at_two_scales(
         assert!(multiple.comparisons[2].contains("=> PASS"));
         assert!(report.manifest.is_file());
     }
+
     let options = Options::default();
     let mut frame = screenshot::load(
         &root().join("tests/reftests/white-space-shaping.html"),
@@ -215,6 +216,83 @@ fn complete_native_suite_is_exact_and_mismatch_has_nonzero_pixels_at_two_scales(
         shaped.glyphs[0].face.italic,
         "must use the loaded static URL face, not bundled fallback"
     );
+}
+
+#[test]
+fn mask_resources_refresh_on_viewport_change_and_remain_shared_in_frame_clones() {
+    let workspace = Workspace::new("effects-refresh");
+    let url = Url::from_file_path(root().join("tests/reftests/support/stripes.png")).unwrap();
+    let path=workspace.write("page.html",&format!("<!doctype html><style>#a{{position:absolute;left:10px;top:10px;width:30px;height:30px;background:red}}@media(max-width:400px){{#a{{mask-image:url('{url}')}}}}</style><div id=a></div>"));
+    let options = Options::default();
+    let mut frame = screenshot::load(&path, &root(), &options).unwrap();
+    assert!(frame.effect_images.is_empty());
+    let options = Options {
+        width: 200,
+        height: 150,
+        ..Options::default()
+    };
+    frame.set_media_environment(options.environment());
+    assert!(frame.has_pending_effect_images());
+    let mut navigation = rust_browser::engine::Navigation::new(
+        frame.url.clone(),
+        rust_browser::engine::LoadOptions::default(),
+    );
+    navigation
+        .start_font_load(std::sync::Arc::new(frame.clone()))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut published = None;
+    loop {
+        match navigation.try_recv() {
+            Ok(rust_browser::engine::LoadEvent::Progress(frame)) => published = Some(frame),
+            Ok(rust_browser::engine::LoadEvent::Finished) => break,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "native mask worker did not finish"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(error) => panic!("native mask worker failed: {error}"),
+        }
+    }
+    frame = (*published.unwrap()).clone();
+    assert!(!frame.has_pending_effect_images());
+    let image = screenshot::render(&mut frame, &options).unwrap();
+    assert_eq!(
+        &image.rgba[(20 * 200 + 20) * 4..(20 * 200 + 20) * 4 + 4],
+        &[255, 0, 0, 255]
+    );
+    assert_eq!(frame.effect_images.len(), 1);
+    let clone = frame.clone();
+    assert!(std::sync::Arc::ptr_eq(
+        frame.effect_images.values().next().unwrap(),
+        clone.effect_images.values().next().unwrap()
+    ));
+    screenshot::render(&mut frame, &options).unwrap();
+    assert_eq!(frame.effect_images.len(), 1);
+}
+
+#[test]
+fn headless_effect_resource_and_surface_budget_failures_are_not_silent_noops() {
+    let workspace = Workspace::new("effects-limits");
+    let path=workspace.write("remote.html","<!doctype html><style>div{mask-image:url('https://invalid.invalid/mask.png')}</style><div>mask</div>");
+    let mut frame = screenshot::load(&path, &root(), &Options::default()).unwrap();
+    assert!(
+        !frame.has_pending_effect_images(),
+        "restricted sources must not retry every idle update"
+    );
+    assert!(screenshot::render(&mut frame, &Options::default()).is_err());
+    let path=workspace.write("large.html","<!doctype html><style>div{width:2000px;height:2000px;transform:rotate(5deg)}</style><div></div>");
+    let options = Options {
+        width: 4096,
+        height: 4096,
+        ..Options::default()
+    };
+    let error = screenshot::capture(&path, &root(), &options)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("effects framebuffer"), "{error}");
 }
 
 #[test]

@@ -223,8 +223,92 @@ pub(super) fn load_resources(
         sheets.diagnostics.extend(marker_diagnostics);
         frame.set_stylesheets(sheets);
     }
+    frame.image_cache = image_cache;
+    frame.image_resource_count = resource_count;
+    frame.image_resource_bytes = image_bytes + marker_bytes;
+    load_effect_images(frame, on_progress, cancelled)?;
     check_cancelled(cancelled)?;
     frame.web_fonts.ready = true;
+    Ok(())
+}
+
+pub(super) fn load_effect_images(
+    frame: &mut Frame,
+    on_progress: &mut impl FnMut(&Frame) -> Result<(), Box<dyn Error>>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), Box<dyn Error>> {
+    let base = document_base_url(&frame.document, &frame.url);
+    let mut effect_diagnostics = Vec::new();
+    for id in frame.document.preorder().collect::<Vec<_>>() {
+        let mut references = frame
+            .styles
+            .get(id)
+            .map(|s| s.effects.urls())
+            .unwrap_or_default();
+        for pseudo in style::PseudoElement::ALL {
+            if let Some(s) = frame.styles.pseudo(id, pseudo) {
+                references.extend(s.effects.urls());
+            }
+        }
+        for reference in references {
+            check_cancelled(cancelled)?;
+            if frame.effect_images.contains_key(&reference)
+                || frame.failed_effect_images.contains(&reference)
+            {
+                continue;
+            }
+            frame.image_resource_count += 1;
+            if frame.image_resource_count > MAX_RESOURCES {
+                frame.failed_effect_images.insert(reference);
+                diagnostic(
+                    &mut effect_diagnostics,
+                    id,
+                    "mask resource count exceeds 128; transparent mask fallback".into(),
+                );
+                break;
+            }
+            let result = (|| -> Result<Arc<DecodedImage>, Box<dyn Error>> {
+                let mut url = base.join(&reference)?;
+                check_page_reference(&frame.url, &url)?;
+                frame.resource_policy.check(&url)?;
+                url.set_fragment(None);
+                if let Some(image) = frame.image_cache.get(&url) {
+                    return Ok(Arc::clone(image));
+                }
+                let resource = net::fetch_resource(&url, net::MAX_IMAGE_BYTES)?;
+                frame.resource_policy.check(&resource.metadata.url)?;
+                check_page_reference(&frame.url, &resource.metadata.url)?;
+                let image = Arc::new(DecodedImage::decode(&resource.bytes)?);
+                frame.image_resource_bytes += image.rgba().len();
+                if frame.image_resource_bytes > MAX_PAGE_IMAGE_BYTES {
+                    return Err(io::Error::other("mask decoded image byte limit").into());
+                }
+                frame.image_cache.insert(url, image.clone());
+                Ok(image)
+            })();
+            match result {
+                Ok(image) => {
+                    frame.effect_images.insert(reference, image);
+                    on_progress(frame)?;
+                }
+                Err(error) => {
+                    frame.failed_effect_images.insert(reference);
+                    diagnostic(
+                        &mut effect_diagnostics,
+                        id,
+                        format!("mask image: {error}; transparent mask fallback"),
+                    );
+                }
+            }
+        }
+    }
+    if !effect_diagnostics.is_empty() {
+        let mut sheets = frame.stylesheets.clone();
+        sheets.diagnostics.extend(effect_diagnostics);
+        frame.set_stylesheets(sheets);
+        on_progress(frame)?;
+    }
+    check_cancelled(cancelled)?;
     Ok(())
 }
 

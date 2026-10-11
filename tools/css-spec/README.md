@@ -74,8 +74,8 @@ referenced productions and animation descriptors are **not executable**
 grammar/computation/animation implementations. No unsupported metadata entry
 enters a catch-all property parser or makes `@supports` succeed.
 
-Coverage is 0 fully implemented, 68 partial canonical properties (50 longhands
-and 18 shorthands), 689 unimplemented canonical properties and 64 legacy
+Coverage is 0 fully implemented, 225 partial canonical properties (176 longhands
+and 49 shorthands), 532 unimplemented canonical properties and 64 legacy
 aliases (1 accepted for a partial target, 63 unsupported). Partial requires
 an executable engine handler, but every
 partial row records parser, cascade, computed, used/layout/paint and animation
@@ -83,6 +83,10 @@ gaps. Shorthand missing expansion/reset targets are generated from the spec.
 Aliases do not count as independent grammar conformance. Unregistered custom
 properties and finite registrations are reported separately, outside the
 821-entry denominator. No external WPT or Chrome/Firefox parity gate is claimed.
+The effects family uses a dedicated typed dispatcher; the generator validates
+that mapping. Its mask shorthand has eight executable layer longhands and
+explicit missing mask-border resets. Projected finite 3D, device-space filter
+kernels and finite raster masks do not imply full Transforms/Filters/SVG support.
 Declaration-local quirks are selected from HTML document mode, not from the
 tokenizer or Webref metadata. Eligible declarations and `@supports` use the
 same context, including pending `var()` shorthands and imports; registered

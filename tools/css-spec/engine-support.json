@@ -1,5 +1,29 @@
 {
   "longhands": {
+    "transform": {"rust": "Effect(super::effects::Property::Transform)", "policy": "effects", "sample": "translate(10%, 2px) rotate(90deg)"},
+    "transform-origin": {"rust": "Effect(super::effects::Property::TransformOrigin)", "policy": "effects", "sample": "left top 2px"},
+    "transform-box": {"rust": "Effect(super::effects::Property::TransformBox)", "policy": "effects", "sample": "content-box"},
+    "translate": {"rust": "Effect(super::effects::Property::Translate)", "policy": "effects", "sample": "10% 4px 2px"},
+    "rotate": {"rust": "Effect(super::effects::Property::Rotate)", "policy": "effects", "sample": "y 30deg"},
+    "scale": {"rust": "Effect(super::effects::Property::Scale)", "policy": "effects", "sample": "2 1 1"},
+    "perspective": {"rust": "Effect(super::effects::Property::Perspective)", "policy": "effects", "sample": "200px"},
+    "perspective-origin": {"rust": "Effect(super::effects::Property::PerspectiveOrigin)", "policy": "effects", "sample": "left top"},
+    "transform-style": {"rust": "Effect(super::effects::Property::TransformStyle)", "policy": "effects", "sample": "preserve-3d"},
+    "backface-visibility": {"rust": "Effect(super::effects::Property::BackfaceVisibility)", "policy": "effects", "sample": "hidden"},
+    "opacity": {"rust": "Effect(super::effects::Property::Opacity)", "policy": "effects", "sample": ".5"},
+    "filter": {"rust": "Effect(super::effects::Property::Filter)", "policy": "effects", "sample": "blur(2px) contrast(150%)"},
+    "backdrop-filter": {"rust": "Effect(super::effects::Property::BackdropFilter)", "policy": "effects", "sample": "invert(1)"},
+    "mix-blend-mode": {"rust": "Effect(super::effects::Property::Blend)", "policy": "effects", "sample": "multiply"},
+    "isolation": {"rust": "Effect(super::effects::Property::Isolation)", "policy": "effects", "sample": "isolate"},
+    "clip-path": {"rust": "Effect(super::effects::Property::ClipPath)", "policy": "effects", "sample": "polygon(0 0, 100% 0, 0 100%)"},
+    "mask-image": {"rust": "Effect(super::effects::Property::MaskImage)", "policy": "effects", "sample": "linear-gradient(black, transparent)"},
+    "mask-mode": {"rust": "Effect(super::effects::Property::MaskMode)", "policy": "effects", "sample": "luminance"},
+    "mask-repeat": {"rust": "Effect(super::effects::Property::MaskRepeat)", "policy": "effects", "sample": "no-repeat"},
+    "mask-size": {"rust": "Effect(super::effects::Property::MaskSize)", "policy": "effects", "sample": "50% auto"},
+    "mask-position": {"rust": "Effect(super::effects::Property::MaskPosition)", "policy": "effects", "sample": "right bottom"},
+    "mask-origin": {"rust": "Effect(super::effects::Property::MaskOrigin)", "policy": "effects", "sample": "content-box"},
+    "mask-clip": {"rust": "Effect(super::effects::Property::MaskClip)", "policy": "effects", "sample": "padding-box"},
+    "mask-composite": {"rust": "Effect(super::effects::Property::MaskComposite)", "policy": "effects", "sample": "intersect"},
     "word-break": {"rust": "Typography(super::typography::Property::WordBreak)", "policy": "typography", "sample": "break-all"},
     "overflow-wrap": {"rust": "Typography(super::typography::Property::OverflowWrap)", "policy": "typography", "sample": "anywhere"},
     "line-break": {"rust": "Typography(super::typography::Property::LineBreak)", "policy": "typography", "sample": "strict"},
@@ -144,6 +168,7 @@
     "border-*-color": {"rust": "BorderColor", "policy": "border-color", "sample": "purple"}
   },
   "shorthands": {
+    "mask": {"parser": "Mask", "policy": "effects", "sample": "linear-gradient(black, transparent) center / 50% auto no-repeat border-box alpha"},
     "text-decoration": {"parser": "Typography", "policy": "typography", "sample": "underline double red", "order": ["text-decoration-line", "text-decoration-style", "text-decoration-color", "text-decoration-thickness"]},
     "list-style": {"parser": "Typography", "policy": "typography", "sample": "lower-roman inside", "order": ["list-style-type", "list-style-position", "list-style-image"]},
     "margin-inline": {"parser": "Pair", "policy": "margin", "sample": "2px auto"},
@@ -224,6 +249,7 @@
     "container-type": {"keywords": {"normal": "Value::ContainerType(ContainerType::Normal)", "inline-size": "Value::ContainerType(ContainerType::InlineSize)", "size": "Value::ContainerType(ContainerType::Size)"}}
   },
   "policies": {
+    "effects": {"parser": "Bounded typed 2D/3D functions, CSS box origins, numeric/filter lists, basic shapes, mask image/gradient and layer lists. SVG references/path()/rounded inset and extended gradients are rejected.", "cascade": "Generated longhands, CSS-wide rollback, all and pending variables use the normal cascade; effect-created stacking contexts stop z-index escape.", "computed": "Selected-font, viewport and container units computed with finite math; box percentages retained. Independent translate/rotate/scale precede transform.", "used": "Post-layout finite plane projection/inverse input; transparent RGBA effect groups, projected device-space filters/backdrop, W3C blend modes, local-policy masks and center-tested shapes with nearest source sampling. No intersecting preserve-3d surfaces, full backdrop-root/kernel-space/SVG masking or GPU/color-management claim."},
     "typography": {"parser": "Typed finite Text/Decoration/Fonts/Lists grammars; no text-wrap balance/pretty, reversed() counter-reset, speak-as or SVG font execution.", "cascade": "CSS-wide, variables and rollback through generated property dispatch; decorations establish independent non-inherited sources; counters are document-order scoped.", "computed": "Typed keywords, lengths, canonical sorted OpenType settings, counter operations and generated text; transformed text retains source mapping.", "used": "Grapheme-safe Text wrapping and justification, English-US licensed hyphenation, Unicode language casing, native decoration strokes, real variable/color font masks and scoped list markers/counter formats. Finite limits and unsupported formats diagnosed; no full spec/WPT claim."},
     "aspect-ratio": {"parser": "Finite nonnegative ratios, auto and auto ratio in either order; negative/duplicate/interleaved tokens rejected. Degenerate zero ratios behave as auto; ratio math and unrepresentable ratios are rejected.", "cascade": "Non-inherited typed preferred ratio; CSS-wide/var/rollback.", "computed": "Auto flag and finite preferred ratio.", "used": "Content/border-box auto-axis transfer, content-box auto-ratio transfer, replaced natural ratio precedence and non-scrollable ratio-dependent automatic content minimums; two explicit axes remain independent. Replaced fallback dimensions do not invent a natural ratio. Min/max clamps may break an impossible ratio; full bidirectional constraint transfer and advanced cyclic/fragmented sizing remain partial; no animation."},
     "object-fit": {"parser": "fill, contain, cover, none and scale-down.", "cascade": "Non-inherited typed enum; CSS-wide/var/rollback.", "computed": "Enum.", "used": "Actual decoded bitmap fitting, clipped to the replaced content box."},

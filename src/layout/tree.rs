@@ -194,6 +194,9 @@ impl LayoutBox {
     pub fn children(&self) -> &[LayoutBox] {
         &self.children
     }
+    pub(crate) fn semantic_parent(&self) -> Option<usize> {
+        self.parent_box
+    }
     pub(crate) fn text_fragments(&self) -> &[TextFragment] {
         &self.text_fragments
     }
@@ -408,6 +411,7 @@ impl LayoutBox {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutTree {
+    pub(crate) effect_images: std::collections::HashMap<String, Arc<DecodedImage>>,
     pub(super) root: LayoutBox,
     construction_diagnostics: Vec<Diagnostic>,
     pub(super) diagnostics: Vec<Diagnostic>,
@@ -492,16 +496,20 @@ impl LayoutTree {
                 && y >= rect.y
                 && y < rect.y + rect.height
         }
+        if !self.effect_hit(layout_box, x, y, scroll) {
+            return false;
+        }
         let y = y + if layout_box.coordinate_space == CoordinateSpace::Document {
             scroll
         } else {
             0.0
         };
-        if !x.is_finite() || !y.is_finite() || !state.clip.contains(x, y) {
+        if !x.is_finite() || !y.is_finite() {
             return false;
         }
-        let x = x - state.offset.x;
-        let y = y - state.offset.y;
+        let Some((x, y)) = state.point(x, y) else {
+            return false;
+        };
         let text_hit = |fragment: &TextFragment| {
             contains(fragment.ink_rect, x, y)
                 || fragment.text.chars().all(|c| matches!(c, ' ' | '\t'))
@@ -841,6 +849,7 @@ pub(crate) fn build_layout_tree_with_marker_resources(
     )
     .expect("the document root must have a computed style and layout box");
     LayoutTree {
+        effect_images: std::collections::HashMap::new(),
         root,
         construction_diagnostics: diagnostics.clone(),
         diagnostics,
@@ -1128,12 +1137,19 @@ fn build_box(
             return None;
         }
     };
+    if matches!(style.display, Display::Inline | Display::InlineListItem)
+        && node
+            .as_element()
+            .is_some_and(|e| !matches!(e.tag_name(), "img" | "video" | "canvas" | "iframe"))
+    {
+        style.effects.non_transformable();
+    }
     let box_id = identity.allocate();
     let parent_box = identity.parent.replace(box_id);
     let flex_parent = std::mem::replace(&mut identity.flex_parent, style.display.is_flex());
     let grid_parent = std::mem::replace(&mut identity.grid_parent, style.display.is_grid());
     let position_parent = identity.positioned;
-    if style.position != style::Position::Static {
+    if style.position != style::Position::Static || style.effects.containing_block() {
         identity.positioned = Some(box_id);
     }
     let mut children: Vec<_> = if node
@@ -1505,7 +1521,9 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         orthogonal_inline: false,
         box_id: identity.allocate(),
         parent_box: Some(parent.box_id),
-        position_parent: if parent.style.position == style::Position::Static {
+        position_parent: if parent.style.position == style::Position::Static
+            && !parent.style.effects.containing_block()
+        {
             parent.position_parent
         } else {
             Some(parent.box_id)
@@ -1649,7 +1667,9 @@ fn generated_box(
         orthogonal_inline: false,
         box_id: identity.allocate(),
         parent_box: Some(box_id),
-        position_parent: if style.position == style::Position::Static {
+        position_parent: if style.position == style::Position::Static
+            && !style.effects.containing_block()
+        {
             identity.positioned
         } else {
             Some(box_id)

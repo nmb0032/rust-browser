@@ -23,6 +23,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum Property {
+    Effect(super::effects::Property),
     Typography(super::typography::Property),
     Content,
     Color,
@@ -263,6 +264,7 @@ pub(super) enum WideKeyword {
 
 #[derive(Clone, Debug)]
 pub(super) enum Value {
+    Effect(super::effects::Value),
     Typography(super::typography::Value),
     Content(Content),
     ContainerType(crate::css::container::ContainerType),
@@ -556,6 +558,19 @@ pub(super) fn parse_tokens_with_context(
                 value(Property::OverflowY, std::slice::from_ref(y))?,
             ])
         }
+        Parser::Mask => {
+            let keys = properties
+                .iter()
+                .map(|p| {
+                    if let Property::Effect(p) = p {
+                        Some(*p)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Option<Vec<_>>>()?;
+            super::effects::mask(&tokens, &keys).map(|v| v.into_iter().map(Value::Effect).collect())
+        }
         Parser::Longhand => value(properties[0], &tokens).map(|value| vec![value]),
         Parser::TextAlign => Some(vec![
             value(Property::TextAlignAll, &tokens)?,
@@ -738,6 +753,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     }
     use Property as P;
     match property {
+        P::Effect(p) => return super::effects::parse(p, tokens).map(Value::Effect),
         P::Typography(p) => return super::typography::parse(p, tokens).map(Value::Typography),
         P::Display => return super::box_values::display(tokens).map(Value::Display),
         P::AspectRatio => return super::box_values::ratio(tokens).map(Value::AspectRatio),
@@ -801,7 +817,8 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     };
     let lower = token.ident().unwrap_or("").to_ascii_lowercase();
     match property {
-        P::Typography(_)
+        P::Effect(_)
+        | P::Typography(_)
         | P::Content
         | P::Color
         | P::TextFillColor

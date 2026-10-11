@@ -65,6 +65,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 return root;
             }
             if ancestor.style.position != Position::Static
+                || ancestor.style.effects.context()
                 || ancestor.atomic_inline()
                 || ancestor.is_layout_item()
                 || ancestor.floating()
@@ -79,8 +80,9 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         let id = group_id(b);
         if id != root && !groups.contains_key(&id) {
             let owner = definitions[&id];
-            let real = matches!(owner.style.z_index, ZIndex::Integer(_))
-                && (owner.style.position != Position::Static || owner.is_layout_item());
+            let real = owner.style.effects.context()
+                || matches!(owner.style.z_index, ZIndex::Integer(_))
+                    && (owner.style.position != Position::Static || owner.is_layout_item());
             let mut parent = owner.parent_box;
             let mut context = root;
             while let Some(id) = parent {
@@ -88,8 +90,9 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 if Some(id) == root_element || id == root {
                     break;
                 }
-                if (ancestor.style.position != Position::Static || ancestor.is_layout_item())
-                    && matches!(ancestor.style.z_index, ZIndex::Integer(_))
+                if ancestor.style.effects.context()
+                    || (ancestor.style.position != Position::Static || ancestor.is_layout_item())
+                        && matches!(ancestor.style.z_index, ZIndex::Integer(_))
                     || !real
                         && owner.style.position == Position::Static
                         && (ancestor.style.position != Position::Static
@@ -103,6 +106,7 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                 parent = ancestor.parent_box;
             }
             let level = match owner.style.z_index {
+                ZIndex::Auto if real => Some(0),
                 ZIndex::Auto => None,
                 ZIndex::Integer(z) if real => Some(z),
                 ZIndex::Integer(_) => None,
@@ -209,7 +213,8 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         }
         let inline_group = |g: &Group<'_>| {
             let owner = g.boxes[0].0;
-            owner.atomic_inline()
+            g.level.is_none()
+                && owner.atomic_inline()
                 && owner.style.position == Position::Static
                 && !owner.is_layout_item()
         };

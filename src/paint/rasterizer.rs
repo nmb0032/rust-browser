@@ -35,6 +35,51 @@ struct TextRun<'a> {
 
 pub(crate) fn rasterize_display_list(
     display_list: &[DisplayItem],
+    font: &crate::text::FontContext,
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+    scale_factor: f64,
+    scroll_offset: f32,
+) {
+    if display_list.iter().any(|item| match item {
+        DisplayItem::BeginLayer(_) => true,
+        DisplayItem::Spatial(s) => {
+            s.matrix != crate::layout::Mat4::translation(s.offset.x as f64, s.offset.y as f64, 0.0)
+                || s.hidden
+        }
+        _ => false,
+    }) {
+        super::compositor::rasterize(
+            display_list,
+            font,
+            pixels,
+            width,
+            height,
+            scale_factor,
+            scroll_offset,
+        );
+        return;
+    }
+    for p in pixels.iter_mut() {
+        *p |= 0xff000000;
+    }
+    rasterize_rgba(
+        display_list,
+        font,
+        pixels,
+        width,
+        height,
+        scale_factor,
+        scroll_offset,
+    );
+    for p in pixels.iter_mut() {
+        *p &= 0x00ffffff;
+    }
+}
+
+pub(crate) fn rasterize_rgba(
+    display_list: &[DisplayItem],
     _font: &crate::text::FontContext,
     pixels: &mut [u32],
     width: usize,
@@ -75,6 +120,7 @@ pub(crate) fn rasterize_display_list(
         .intersect(framebuffer);
         let clip = object_clip.map_or(clip, |object| clip.intersect(object));
         match item {
+            DisplayItem::BeginLayer(_) | DisplayItem::EndLayer => {}
             DisplayItem::TextDecoration {
                 rect,
                 horizontal,
@@ -110,7 +156,7 @@ pub(crate) fn rasterize_display_list(
             }
 
             DisplayItem::ObjectClipEnd => object_clip = None,
-            DisplayItem::Spatial(state) => spatial = *state,
+            DisplayItem::Spatial(state) => spatial = **state,
             DisplayItem::CoordinateSpace(space) => {
                 item_scroll = if *space == crate::layout::CoordinateSpace::Document {
                     scroll_offset
@@ -406,7 +452,7 @@ fn draw_rect(
     for y in start_y..end_y {
         let row = &mut pixels[y * width + start_x..y * width + end_x];
         if alpha == 255 {
-            row.fill(color);
+            row.fill(color | 0xff000000);
         } else {
             for pixel in row {
                 *pixel = blend(*pixel, color, alpha);
@@ -513,7 +559,20 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
     }
 }
 
-fn blend(background: u32, foreground: u32, coverage: u32) -> u32 {
+pub(crate) fn blend(background: u32, foreground: u32, coverage: u32) -> u32 {
+    let background_alpha = background >> 24;
+    if background_alpha != 255 {
+        let alpha = coverage + background_alpha * (255 - coverage) / 255;
+        if alpha == 0 {
+            return 0;
+        }
+        let channel = |shift: u32| {
+            (((foreground >> shift) & 255u32) * coverage
+                + ((background >> shift) & 255u32) * background_alpha * (255 - coverage) / 255)
+                / alpha
+        };
+        return (alpha << 24) | (channel(16) << 16) | (channel(8) << 8) | channel(0);
+    }
     let inverse_coverage = 255 - coverage;
     let red = (((foreground >> 16) & 0xFF) * coverage
         + ((background >> 16) & 0xFF) * inverse_coverage)
@@ -523,7 +582,7 @@ fn blend(background: u32, foreground: u32, coverage: u32) -> u32 {
         / 255;
     let blue = ((foreground & 0xFF) * coverage + (background & 0xFF) * inverse_coverage) / 255;
 
-    (red << 16) | (green << 8) | blue
+    0xff000000 | (red << 16) | (green << 8) | blue
 }
 
 #[cfg(test)]

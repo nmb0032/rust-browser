@@ -107,6 +107,33 @@ pub struct SpatialState {
     /// Translation from layout to visual coordinates, before viewport Y scroll.
     pub offset: ScrollOffset,
     pub clip: ClipRect,
+    pub matrix: super::Mat4,
+    pub plane_clips: [Option<PlaneClip>; 32],
+    pub hidden: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaneClip {
+    pub matrix: super::Mat4,
+    pub clip: ClipRect,
+}
+
+impl SpatialState {
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        !self.hidden
+            && self.clip.contains(x, y)
+            && self.plane_clips.iter().flatten().all(|c| {
+                c.matrix
+                    .unproject(x, y)
+                    .is_some_and(|(x, y)| c.clip.contains(x, y))
+            })
+    }
+    pub fn point(self, x: f32, y: f32) -> Option<(f32, f32)> {
+        if !self.contains(x, y) {
+            return None;
+        }
+        self.matrix.unproject(x, y)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -132,7 +159,10 @@ impl Scrollbar {
         } else {
             0.0
         };
-        (x - self.spatial.offset.x, y - self.spatial.offset.y)
+        self.spatial
+            .matrix
+            .unproject(x, y)
+            .unwrap_or((f32::NAN, f32::NAN))
     }
 
     fn contains(self, x: f32, y: f32, root_scroll: f32) -> bool {
@@ -142,7 +172,7 @@ impl Scrollbar {
             0.0
         };
         let (x_local, y_local) = self.point(x, y, root_scroll);
-        self.spatial.clip.contains(x, doc_y)
+        self.spatial.contains(x, doc_y)
             && x_local >= self.track.x
             && x_local < self.track.x + self.track.width
             && y_local >= self.track.y
@@ -178,7 +208,8 @@ fn definitions(root: &LayoutBox) -> Definitions<'_> {
 
 fn next(b: &LayoutBox) -> Option<usize> {
     match b.style.position {
-        Position::Fixed => None,
+        Position::Fixed if b.coordinate_space == CoordinateSpace::Viewport => None,
+        Position::Fixed => b.position_parent,
         Position::Absolute => b.position_parent,
         _ => b.parent_box,
     }
@@ -386,10 +417,11 @@ impl LayoutTree {
                 0.0
             };
             if phase == PaintPhase::Scrollbars
-                && let Some(bar) = bars
-                    .iter()
-                    .rev()
-                    .find(|bar| bar.owner == b.box_id && bar.contains(x, y, root_scroll))
+                && let Some(bar) = bars.iter().rev().find(|bar| {
+                    bar.owner == b.box_id
+                        && bar.contains(x, y, root_scroll)
+                        && self.effect_hit(b, x, y, root_scroll)
+                })
             {
                 return Some(*bar);
             }
@@ -408,6 +440,9 @@ impl LayoutTree {
     /// Distance into the thumb, or center the thumb for a track click.
     pub fn scrollbar_grab(&self, bar: Scrollbar, x: f32, y: f32) -> f32 {
         let (x, y) = bar.point(x, y, self.viewport_scroll().y);
+        if !x.is_finite() || !y.is_finite() {
+            return 0.0;
+        }
         let (point, start, length) = if bar.vertical {
             (y, bar.thumb.y, bar.thumb.height)
         } else {
@@ -429,6 +464,9 @@ impl LayoutTree {
             return false;
         };
         let (x, y) = bar.point(x, y, self.viewport_scroll().y);
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
         let (point, start, track, thumb, min, max) = if bar.vertical {
             (
                 y,
@@ -610,6 +648,70 @@ impl LayoutTree {
         }
         state.offset.x = metric(dx, "scroll translation x");
         state.offset.y = metric(dy, "scroll translation y");
+        state.matrix = super::Mat4::translation(dx, dy, 0.0);
+        let path = lineage(b, map, true);
+        if path.iter().any(|a| a.style.effects.containing_block()) {
+            use crate::style::effects::{Keyword, Property};
+            state.clip = ClipRect::default();
+            let mut matrix = super::Mat4::translation(
+                if b.coordinate_space == CoordinateSpace::Document {
+                    -self.scroll_state.viewport.x as f64
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+            );
+            let mut count = 0;
+            for ancestor in path {
+                let effects = &ancestor.style.effects;
+                matrix = matrix.then(effects.matrix(
+                    ancestor.rect,
+                    ancestor.content_rect,
+                    ancestor.style.font_size,
+                ));
+                if effects.keyword(Property::BackfaceVisibility) == Keyword::Hidden
+                    && matrix.back_facing()
+                {
+                    state.hidden = true;
+                }
+                if (own || ancestor.box_id != b.box_id)
+                    && let Some(container) = self.overflow.get(&ancestor.box_id)
+                {
+                    if count == state.plane_clips.len() {
+                        state.hidden = true;
+                        metric(
+                            f64::INFINITY,
+                            "effects transformed clip ancestry exceeds 32",
+                        );
+                        break;
+                    }
+                    state.plane_clips[count] = Some(PlaneClip {
+                        matrix,
+                        clip: clip(*container, ScrollOffset::default()),
+                    });
+                    count += 1;
+                    let offset =
+                        key(ancestor).map_or(ScrollOffset::default(), |id| self.offset_for(id));
+                    matrix = matrix.then(super::Mat4::translation(
+                        -offset.x as f64,
+                        -offset.y as f64,
+                        0.0,
+                    ));
+                }
+                if ancestor.box_id != b.box_id {
+                    if effects.keyword(Property::TransformStyle) != Keyword::Preserve3d
+                        || effects.grouped()
+                    {
+                        matrix = matrix.then(super::Mat4::scale(1.0, 1.0, 0.0));
+                    }
+                    matrix =
+                        matrix.then(effects.perspective(ancestor.rect, ancestor.style.font_size));
+                }
+            }
+            state.matrix = matrix;
+            state.hidden |= !matrix.finite();
+        }
         for rect in [b.rect, b.content_rect] {
             metric(rect.x as f64 + dx, "scrolled box x");
             metric(rect.y as f64 + dy, "scrolled box y");
@@ -655,11 +757,10 @@ impl LayoutTree {
             .filter(|b| b.node_id == Some(node) && b.pseudo.is_none())
             .filter_map(|b| {
                 let state = self.spatial(b, false, &map);
-                let rect = Rect {
-                    x: b.rect.x + state.offset.x,
-                    y: b.rect.y + state.offset.y,
-                    ..b.rect
-                };
+                if state.hidden {
+                    return None;
+                }
+                let rect = state.matrix.bounds(b.rect)?;
                 state
                     .clip
                     .apply(rect)
@@ -728,6 +829,7 @@ impl LayoutTree {
             changed |= old != next;
             self.scroll_state.nodes.insert(id, next);
         }
+
         let old = self.viewport_scroll();
         let next = consume(
             old,
@@ -740,6 +842,38 @@ impl LayoutTree {
         self.scroll_state.viewport = next;
         self.report_spatial_failures();
         changed
+    }
+
+    pub(super) fn effect_hit(&self, b: &LayoutBox, x: f32, y: f32, scroll: f32) -> bool {
+        use crate::style::effects::{Keyword, Property, Value};
+        let map = definitions(&self.root);
+        let mut candidate = Some(b.box_id);
+        while let Some(a) = candidate.and_then(|id| map.get(&id)) {
+            candidate = a.parent_box;
+            let state = self.spatial(a, false, &map);
+            if state.hidden {
+                return false;
+            }
+            if a.style.effects.keyword(Property::BackfaceVisibility) == Keyword::Hidden
+                && state.matrix.back_facing()
+            {
+                return false;
+            }
+            if let Value::Shape(Some(shape)) = a.style.effects.get(Property::ClipPath) {
+                let y = y + if a.coordinate_space == CoordinateSpace::Document {
+                    scroll
+                } else {
+                    0.0
+                };
+                let Some((x, y)) = state.matrix.unproject(x, y) else {
+                    return false;
+                };
+                if !shape.contains(a.rect, a.style.font_size, x, y) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     pub(super) fn finalize_overflow(&mut self, viewport: Rect) {
@@ -793,8 +927,27 @@ impl LayoutTree {
         for b in boxes(&self.root) {
             for (geometry, own) in [(Some(b.rect), false), (content_ink(b), true)] {
                 let path = lineage(b, &map, own);
-                let mut rect = geometry;
+                let mut rect = geometry.map(|r| {
+                    if own {
+                        r
+                    } else {
+                        b.style
+                            .effects
+                            .matrix(b.rect, b.content_rect, b.style.font_size)
+                            .bounds(b.style.effects.ink_bounds(r, b.style.font_size))
+                            .map_or(r, |visual| r.union(visual))
+                    }
+                });
                 for ancestor in path.into_iter().rev() {
+                    if ancestor.box_id != b.box_id {
+                        rect = rect.and_then(|r| {
+                            ancestor
+                                .style
+                                .effects
+                                .perspective(ancestor.rect, ancestor.style.font_size)
+                                .bounds(r)
+                        });
+                    }
                     if let Some(container) = self.overflow.get(&ancestor.box_id)
                         && let Some(r) = rect
                     {
@@ -803,6 +956,23 @@ impl LayoutTree {
                             .and_modify(|extent| *extent = extent.union(r));
                         rect = clip(*container, ScrollOffset::default()).apply(r);
                     }
+                    rect = rect.map(|r| {
+                        ancestor
+                            .style
+                            .effects
+                            .matrix(
+                                ancestor.rect,
+                                ancestor.content_rect,
+                                ancestor.style.font_size,
+                            )
+                            .bounds(
+                                ancestor
+                                    .style
+                                    .effects
+                                    .ink_bounds(r, ancestor.style.font_size),
+                            )
+                            .map_or(r, |visual| r.union(visual))
+                    });
                 }
                 if b.coordinate_space == CoordinateSpace::Document
                     && let Some(r) = rect

@@ -34,6 +34,9 @@ mod container;
 mod control;
 mod declarations;
 mod directionality;
+pub mod effects;
+#[cfg(test)]
+mod effects_tests;
 mod generated_properties;
 pub(crate) mod grid;
 mod matching;

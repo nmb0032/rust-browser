@@ -261,7 +261,7 @@ fn collect_containing(
     if b.style.position.out_of_flow() && !include_self {
         return;
     }
-    if b.style.position != Position::Static {
+    if b.style.position != Position::Static || b.style.effects.containing_block() {
         let border = b.style.border_width;
         let padding_rect = |rect: Rect| Rect {
             x: rect.x + border.left,
@@ -332,19 +332,54 @@ pub(super) fn position_tree(
     // Parents are constructed before descendants, including generated boxes.
     // Anonymous wrappers and split inline continuations do not alter this order.
     ids.sort_unstable();
+    fn fixed_parent(root: &LayoutBox, b: &LayoutBox) -> Option<usize> {
+        fn find(root: &LayoutBox, id: usize) -> Option<&LayoutBox> {
+            if root.box_id == id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|b| find(b, id))
+        }
+        let mut parent = b.parent_box;
+        while let Some(p) = parent.and_then(|id| find(root, id)) {
+            if p.style.effects.containing_block() {
+                return Some(p.box_id);
+            }
+            parent = p.parent_box;
+        }
+        None
+    }
     for id in ids {
+        let fixed = {
+            fn find(root: &LayoutBox, id: usize) -> Option<&LayoutBox> {
+                if root.box_id == id {
+                    return Some(root);
+                }
+                root.children.iter().find_map(|b| find(b, id))
+            }
+            let b = find(root, id).unwrap();
+            if b.style.position == Position::Fixed {
+                fixed_parent(root, b)
+            } else {
+                None
+            }
+        };
         let b = find_mut(root, id).expect("positioned construction identity");
         let mut cb = if b.style.position == Position::Fixed {
-            ContainingBlock {
-                rect: viewport,
-                space: CoordinateSpace::Viewport,
-                direction,
-            }
+            fixed
+                .and_then(|id| blocks.get(&id).copied())
+                .unwrap_or(ContainingBlock {
+                    rect: viewport,
+                    space: CoordinateSpace::Viewport,
+                    direction,
+                })
         } else {
             b.position_parent
                 .and_then(|id| blocks.get(&id).copied())
                 .unwrap_or(initial)
         };
+        if b.style.position == Position::Fixed {
+            b.position_parent = fixed;
+        }
         if b.style.position != Position::Fixed
             && let Some((owner, area)) = b.grid_area
             && b.position_parent == Some(owner)

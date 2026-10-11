@@ -1415,6 +1415,11 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
     ) {
         let mut pending_bases = HashMap::new();
         for declaration in &mut declarations {
+            if let Value::Effect(v) = &mut declaration.value
+                && let Some(base) = &self.url
+            {
+                super::effects::resolve_urls(v, base);
+            }
             if let Value::Pending(pending) = &mut declaration.value
                 && self.url.is_some()
             {
@@ -1858,6 +1863,11 @@ fn substitute_winners(
                             )
                             .map(|mut values| {
                                 for value in &mut values {
+                                    if let Value::Effect(v) = value
+                                        && let Some(base) = &declaration.base_url
+                                    {
+                                        super::effects::resolve_urls(v, base);
+                                    }
                                     if let Value::Typography(typography::Value::Image(Some(
                                         reference,
                                     ))) = value
@@ -2413,6 +2423,9 @@ fn compute_color_value(
     property: Property,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Value> {
+    if let Value::Effect(v) = value {
+        return super::effects::compute_colors(v, current).map(Value::Effect);
+    }
     if let Value::Typography(typography::Value::Color(color)) = value {
         return compute_color_value(Value::Color(color), current, node_id, property, diagnostics)
             .map(|value| {
@@ -2468,6 +2481,7 @@ fn absolutize(
             position.y.offset = position.y.offset.computed(context)?.0;
             Some(Value::ObjectPosition(position))
         }
+        Value::Effect(v) => super::effects::compute(v, context).map(Value::Effect),
         Value::Length(length) => {
             let mut computed = length.computed(context)?.0;
             if matches!(
@@ -2557,6 +2571,7 @@ fn computed_value(
     use Property as P;
     match property {
         P::Logical(_) => computed_value(value, property.physical(style), parent, initial),
+        P::Effect(p) => Value::Effect(style.effects.get(p)),
         P::Typography(p) => Value::Typography(style.typography.get(p)),
         P::Content => Value::Content(style.content.clone()),
         P::Color => Value::Color(Color::Absolute(style.text_color)),
@@ -2684,6 +2699,7 @@ fn computed_value(
 fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, value: Value) {
     use Property as P;
     match (property, value) {
+        (P::Effect(p), Value::Effect(v)) => style.effects.set(p, v),
         (P::Typography(p), Value::Typography(v)) => {
             style
                 .typography

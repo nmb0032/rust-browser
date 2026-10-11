@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Native software effects</title>
+<style>
+body{font-family:sans-serif;color:#162238;background:#edf1f5;margin:24px}
+h1{font-size:28px;margin:0 0 12px}
+p{margin:0 0 18px}
+.row{display:flex;gap:24px;margin-bottom:24px}
+.card{width:140px;height:100px;position:relative;background:#275bd6;color:white;padding:12px}
+.turn{transform:rotate(-8deg);transform-origin:center;filter:drop-shadow(4px 5px 2px #334455)}
+.plane{transform:perspective(400px) rotateY(25deg);backface-visibility:hidden}
+.fade{opacity:.5}
+.badge{position:absolute;left:60px;top:40px;width:90px;height:60px;background:#e94c37}
+.masked{mask:linear-gradient(to right,black,transparent) center / 100% 100% no-repeat alpha}
+.shape{clip-path:polygon(0 0,100% 0,100% 70%,70% 100%,0 100%)}
+.back{background:#e94c37}
+.glass{position:absolute;left:20px;top:30px;width:100px;height:60px;backdrop-filter:invert(1)}
+.blend{position:absolute;left:40px;top:40px;width:80px;height:60px;background:#275bd6;mix-blend-mode:multiply}
+.scroll{width:180px;height:80px;overflow:auto;transform:rotate(5deg);background:white}
+.long{width:260px;height:200px;background:#b9cdfa}
+</style>
+<h1>Transforms, effects &amp; compositing</h1>
+<p>Real layout, immutable glyphs, RGBA groups and inverse-projected input.</p>
+<div class="row">
+<div class="card turn">2D transform</div>
+<div class="card plane">Projected 3D plane</div>
+<div class="card fade">One group alpha<div class="badge"></div></div>
+</div>
+<div class="row">
+<div class="card masked">Gradient mask</div>
+<div class="card shape">Polygon clip</div>
+<div class="card back"><div class="glass"></div></div>
+<div class="card back"><div class="blend"></div></div>
+</div>
+<div class="scroll"><div class="long">Transformed scroll port</div></div>
+</html>

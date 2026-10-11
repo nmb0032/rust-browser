@@ -760,7 +760,7 @@ impl ApplicationHandler for BrowserWindow {
         self.receive_load_events();
         if !self.is_loading
             && !self.navigation.is_font_loading()
-            && self.frame.has_pending_web_fonts()
+            && (self.frame.has_pending_web_fonts() || self.frame.has_pending_effect_images())
             && let Err(error) = self.navigation.start_font_load(Arc::clone(&self.frame))
         {
             eprintln!("Could not start font loader: {error}");

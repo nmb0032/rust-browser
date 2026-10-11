@@ -2399,8 +2399,8 @@ and the CSSOM parts covered here meet the conformance gate.
   are supplied by 8.12; paragraph bidi, native writing axes and logical insets
   are supplied by 8.14. Complex orthogonal inline static positions remain partial.
   General intrinsic sizing, anchors,
-  transforms/effect-created containing blocks/contexts, integer math/animation,
-  and paged media remain absent. Fixed auto follows CSS2 (not the modern rule
+  transforms/effect-created containing blocks/contexts are added in 8.17 below;
+  integer math/animation and paged media remain absent. Fixed auto follows CSS2 (not the modern rule
   that fixed unconditionally creates a context). Overflow clips/nested scroll
   containers are supplied by 8.9, sticky remains 8.19, and broader fragment hit testing
   remains milestone 9. No WPT or full browser parity is claimed.
@@ -2453,7 +2453,7 @@ and the CSSOM parts covered here meet the conformance gate.
   clipping ancestor when their containing block is outside it, but move and
   clip when their containing block is inside. Fixed descendants bypass ordinary
   ancestor overflow and document scrolling; their own viewport-space nested
-  containers still work. Transform-created containing blocks remain 8.17.
+  containers still work. Transform-created containing blocks are recorded in 8.17.
   Rectangles, images, indexed glyphs (including synthetic slant/bold), and debug
   outlines use the same clips. Rasterization tests cover fractional CSS
   offsets and 1/1.25/1.5/2 device scales; clipping never changes glyph indices,
@@ -2973,7 +2973,7 @@ and the CSSOM parts covered here meet the conformance gate.
   cyclic/orthogonal percentage feedback, advanced baseline
   groups and fragmentation remain explicitly unsupported or finite partial
   behavior in generated coverage. Later typography work is recorded in 8.16
-  below; transforms/effects and subsequent steps remain untouched.
+  below; transforms/effects are recorded in 8.17.
 
   **Validated:** `cargo test --all-features` passes **812 tests** (713 library
   plus 99 integration tests, including 26 new rendered-layout contracts).
@@ -3126,11 +3126,121 @@ and the CSSOM parts covered here meet the conformance gate.
   Arabic, Hebrew and Japanese faces, with no render diagnostics.
   This checkbox records the bounded implemented step; **the milestone exit
   criteria and external/full-WPT typography conformance gate remain unmet**.
-  **8.17 and later work are untouched.**
-- [ ] **8.17 Add transforms, effects, and compositing.** Implement 2D and 3D
+  **8.18 and later work remain untouched.**
+- [x] **8.17 Add transforms, effects, and compositing.** Implement 2D and 3D
   transforms, `opacity`, filters, `backdrop-filter`, Compositing and Blending,
   masking, `clip-path`, and the stacking contexts they create.
   *You'll see:* transformed and filtered content matches reference images.
+
+  **Typed CSS:** Twenty-four effect longhands and the atomic finite `mask`
+  shorthand use the normal generated property registry, initial/inherit/unset/
+  rollback/all rules, pending variables, selected-face length computation and
+  retained box percentages. Matrix/matrix3d, translate XYZ/3d, scale XYZ/3d,
+  rotate XYZ/axis/3d, skew XY and perspective functions are executable.
+  Independent translate → rotate → scale → transform order is distinct from
+  function-list order. Origins accept physical keywords/length-percentages and
+  a non-percentage Z component. CSS content/border reference boxes are used;
+  fill-box maps to CSS content and stroke/view-box to CSS border pending SVG.
+  Non-replaced inline transforms are ignored at used-value time, not applied to
+  glyph offsets. The computed declaration remains inspectable.
+
+  **Geometry/input:** Central column-vector Mat4 composition, homogeneous quad
+  near-eye clipping, plane projection and inverse homography are shared with
+  raster, box/text/image hits and scrollbar input. Singular planes and
+  behind-eye samples cannot be painted or hit. Normal-flow allocations,
+  immutable glyph source offsets, font/color instances and line identities do
+  not change. Transform/filter/perspective containing blocks include static
+  boxes and semantic ancestry through anonymous/contents formatting; fixed
+  descendants of those blocks use document space rather than escaping ordinary
+  viewport/root scroll. Independent complete spatial states retain each
+  overflow clip's **own** transform frame. Scroll ranges conservatively union
+  pre-transform allocations and transformed/filter-expanded ink; repeat layout,
+  panel wheel/drag and Frame document scroll identity remain stable.
+
+  **Stacking/RGBA:** Effect contexts stop positioned-auto descendant escape in
+  the shared Appendix E paint order and reverse hit order. Transparent software
+  groups include background, borders, glyphs/images, descendants and scrollbars.
+  Opacity is applied once to the completed group, including overlapping opaque
+  children and nested opacity. Source-over preserves intermediate alpha instead
+  of introducing a white backdrop. Non-normal blending sees prior effective
+  paint; isolation establishes an explicitly transparent backdrop rather than
+  silently isolating every opacity/filter group.
+
+  Blur uses a normalized, transparent-edge separable Gaussian in premultiplied
+  RGBA. Brightness, contrast, grayscale, sepia, invert, opacity, saturate,
+  hue-rotate and alpha-derived colored drop-shadow lists have actual pixel
+  consumers. Backdrop-filter captures already painted pixels at group entry,
+  filters the capture, bounds it to the transformed border box and composites
+  it with the element's content once. All sixteen blend modes use the W3C
+  straight-sRGB separable/nonseparable formulas followed by alpha composition.
+  The final native screenshot/window buffer remains opaque RGB over the normal
+  canvas; only intermediate groups are RGBA.
+
+  **Masks/shapes/resources:** Bounded raster URL images and finite linear/
+  radial gradients support alpha/match-source/luminance modes, repeated
+  layer lists, auto/intrinsic/contain/cover or length-percent sizes, existing
+  object-position grammar, repeat/no-repeat/space/round, content/padding/border
+  origins/clips/no-clip and add/subtract/intersect/exclude composition. Auto
+  gradients cover the positioning area; raster images repeat at intrinsic
+  size rather than leaving an intrinsic-bounds hole. Images share the production
+  decoded-image cache, CSS stylesheet URL bases, cancellation, local reference
+  policy and page byte/count budgets. Frame clones retain immutable image Arcs;
+  `load_pending_effect_images` refreshes newly active conditional masks without
+  reloading other resources. The native window reuses its cancellable
+  font/style-resource worker and publication/scroll contract; failed URLs are
+  remembered rather than retried every idle update. Native screenshots invoke
+  that phase after style/container convergence. Inset, circle, ellipse and bounded polygon (including
+  concave/nonzero/evenodd) clipping use shared point geometry at pixel centers.
+  Clip-path constrains input, including absolute descendants whose overflow
+  lineage escapes a static ancestor. CSS masks deliberately do **not** change
+  hit testing.
+
+  **Explicit finite limits:** This is projected finite plane rendering, **not
+  full preserve-3d surface sorting/intersection or browser parity**. Flat/grouping
+  boundaries discard propagated Z; preserve-3d retains matrix-chain Z only.
+  There is no depth-buffer/intersecting-surface claim. Primitive glyph/image
+  textures use nearest inverse sampling; shape edges use center membership,
+  not browser-quality multisample antialiasing. Filters operate on device-space
+  projected group pixels, so rotated/nonuniform/perspective filter-kernel
+  equivalence is not claimed. Full backdrop-root algorithms, transformed
+  group-space filter kernels and filter color-interpolation remain finite gaps.
+  SVG filter/mask/clip references, path(), rounded inset(), geometry-box
+  clip-path suffixes, circle/positioned/extended/repeating/conic gradients,
+  mask-border and full SVG transform-box geometry remain rejected/unimplemented.
+  CSS mask shorthand resets only its eight executable longhands; generated
+  coverage explicitly records absent mask-border reset targets.
+
+  Numeric transform factors are finite and bounded to ±1,000,000; angle units
+  deg/rad/turn/grad and unitless zero are accepted. Matrix functions cap at 64,
+  filter/mask lists at 16 and polygons at 64 vertices. Clip ancestry caps at 32.
+  Gaussian sigma caps at 64 device pixels with a 3-sigma kernel. Filter halos
+  exceeding 384 device pixels, individual projected source textures or padded
+  framebuffers exceeding 4,194,304 pixels, and group buffers exceeding 128 MiB
+  diagnose/reject native screenshots. Gaussian scratch is one bounded
+  premultiplied float plane. Mask tile geometry/color stops are prepared once
+  per group; pixel mask and polygon membership do not allocate. Projection
+  bounds clamp near-eye extremes to
+  ±10,000,000; hidden/singular input is disabled explicitly.
+
+  **Verification:** Independent exact native rectangles test 2D/3D corners,
+  transform order, overlapping/nested group opacity, colored filter shadows,
+  constant color filters, blending/isolation, masks/real image repeat,
+  concave/inset clips and clipped/grouped backdrop capture. Numeric tests
+  additionally assert nonzero Gaussian coefficients/transparent red edges,
+  every blend formula and alpha, color filter matrices, grammar rejection/
+  rollback/units, inverse text hits, fixed containing blocks, rotated overflow,
+  transformed wheel/scrollbar drag outside a track and resource refresh/limits.
+  Twenty-nine assertion pages compare exactly at device scales 1/2, without
+  fuzzy tolerance, network, script, system font or using the tested effects
+  in their reference. `tests/pages/effects.html` is the native demonstration.
+  `cargo test --all-features` passes **849 tests** (748 library plus 101
+  integration tests). Formatting, all-target/all-feature strict Clippy,
+  all-feature benchmark compilation, seven offline CSS-generator tests, CSS
+  metadata/replaced-fixture deterministic checks and `git diff --check` pass.
+  Native CLI evidence and demonstration PNGs are retained in
+  `target/reftests/m817-scale1` and `target/reftests/m817-scale2`.
+  This checkbox records the **bounded implemented step**, not external/full-WPT
+  effects conformance. **Milestone 8 is not complete; 8.18 is not started.**
 - [ ] **8.18 Add animations.** Implement CSS Transitions, CSS Animations, the
   Web Animations model, and scroll-driven animations. Integrate their timing
   with the HTML rendering update steps in 10.11.
