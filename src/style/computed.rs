@@ -75,12 +75,14 @@ pub enum TextAlign {
     Left,
     Right,
     Center,
+    Justify,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TextAlignLast {
     #[default]
     Auto,
+    Align(TextAlign),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -183,6 +185,11 @@ pub enum BaselineSource {
 pub enum ContentItem {
     Text(String),
     Attribute(String),
+    Counter {
+        name: String,
+        style: String,
+        separator: Option<String>,
+    },
 }
 
 pub(crate) const MAX_GENERATED_TEXT_BYTES: usize = 65_536;
@@ -208,6 +215,10 @@ impl Content {
             let part = match item {
                 ContentItem::Text(text) => text.as_str(),
                 ContentItem::Attribute(name) => element.attribute(name).unwrap_or(""),
+                ContentItem::Counter { .. } => {
+                    report("counter content requires document-order counter resolution".into());
+                    return None;
+                }
             };
             if text
                 .len()
@@ -605,6 +616,8 @@ pub struct ComputedStyle {
     pub text_orientation: TextOrientation,
     pub text_align: TextAlign,
     pub text_align_last: TextAlignLast,
+    pub typography: super::typography::Typography,
+    pub decoration_sources: Vec<super::typography::Decoration>,
     pub white_space_collapse: WhiteSpaceCollapse,
     pub text_wrap_mode: TextWrapMode,
     pub vertical_align: VerticalAlign,
@@ -705,6 +718,8 @@ impl Default for ComputedStyle {
             text_orientation: TextOrientation::Mixed,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
+            typography: super::typography::Typography::default(),
+            decoration_sources: Vec::new(),
             white_space_collapse: WhiteSpaceCollapse::Collapse,
             text_wrap_mode: TextWrapMode::Wrap,
             vertical_align: VerticalAlign::Baseline,
@@ -791,6 +806,8 @@ impl ComputedStyle {
             object_position: parent.object_position.clone(),
             text_align: parent.text_align,
             text_align_last: parent.text_align_last,
+            typography: parent.typography.inherit(),
+            decoration_sources: parent.decoration_sources.clone(),
             white_space_collapse: parent.white_space_collapse,
             text_wrap_mode: parent.text_wrap_mode,
             color: parent.color,
@@ -826,6 +843,7 @@ impl ComputedStyle {
 pub struct ComputedStyles {
     pub(super) nodes: HashMap<NodeId, ComputedStyle>,
     pub(super) pseudos: HashMap<(NodeId, PseudoElement), ComputedStyle>,
+    pub(crate) counter_styles: Arc<crate::css::counter_style::CounterStyles>,
 }
 
 impl ComputedStyles {

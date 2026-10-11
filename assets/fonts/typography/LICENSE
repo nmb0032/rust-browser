@@ -1,0 +1,11 @@
+The Geometry Color, Geometry Variable, Geometry Bitmap and Geometry CFF2
+font fixtures and their generating
+source (tools/generate_typography_fonts.py) are original geometric test data.
+No glyph outlines were copied from an existing font.
+
+To the extent possible under law, the authors have waived all copyright and
+related or neighboring rights to these fixtures under CC0 1.0 Universal:
+https://creativecommons.org/publicdomain/zero/1.0/
+
+You may copy, modify, distribute and use them for any purpose, without
+permission or attribution. The fixtures are provided without any warranty.

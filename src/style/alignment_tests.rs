@@ -71,7 +71,7 @@ fn pinned_shorthands_expand_and_reset_atomically_with_typed_properties() {
 }
 
 #[test]
-fn invalid_alignment_and_justification_are_rejected_without_claiming_support() {
+fn justification_is_accepted_but_unimplemented_alignment_is_rejected() {
     let document = parser::parse(
         "<style>#host{text-align:right}#target{text-align:left;text-align:justify;vertical-align:top}\
          @supports (text-align:justify){#target{color:red}}\
@@ -80,15 +80,15 @@ fn invalid_alignment_and_justification_are_rejected_without_claiming_support() {
     ).unwrap();
     let result = resolve(&document);
     let target = result.styles.get(id(&document, "target")).unwrap();
-    assert_eq!(target.text_align, TextAlign::Left);
-    assert_eq!(target.color, Some(0));
+    assert_eq!(target.text_align, TextAlign::Justify);
+    assert_eq!(target.color, Some(0xff0000));
     assert_eq!(target.background_color, Some(0x0000ff));
     assert!(
         result
             .stylesheets
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("text-align: justify"))
+            .all(|d| !d.message.contains("text-align: justify"))
     );
     assert_eq!(target.vertical_align, VerticalAlign::Top);
     assert_eq!(
@@ -100,14 +100,14 @@ fn invalid_alignment_and_justification_are_rejected_without_claiming_support() {
         metadata::Support::Partial
     );
     assert!(
-        !matches!(metadata::property("text-align-all").unwrap().grammar, metadata::Grammar::Keywords(words) if words.contains(&"justify"))
+        matches!(metadata::property("text-align-all").unwrap().grammar, metadata::Grammar::Keywords(words) if words.contains(&"justify"))
     );
 }
 
 #[test]
 fn variables_invalid_shorthands_inherit_atomically_and_wide_rules_use_initials() {
     let document = parser::parse(
-        "<style>#host{text-align:right;direction:rtl;--align:center;--bad:justify;--baseline:baseline}\
+        "<style>#host{text-align:right;direction:rtl;--align:center;--bad:match-parent;--baseline:baseline}\
          #valid{text-align:var(--align);vertical-align:var(--baseline)}\
          #invalid{text-align:left;text-align:var(--bad)}\
          #initial{text-align:initial}#inherit{text-align:inherit}#unset{text-align:unset}\

@@ -1,3 +1,4 @@
+use super::typography;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{Arc, OnceLock},
@@ -59,6 +60,7 @@ struct StyledSheet {
     index: RuleIndex,
     registrations: Vec<RegisteredRule>,
     fonts: Vec<FontRule>,
+    counters: Vec<(css::counter_style::CounterStyle, usize, usize)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -926,8 +928,26 @@ fn resolve_internal_fonts<const MODE: u8>(
         pending.extend(node.children().iter().rev().map(|&id| (id, false)));
     }
     stylesheets.diagnostics.extend(matching.diagnostics.entries);
+    let mut counter_styles = css::counter_style::CounterStyles::default();
+    for sheets in [&user_rules, &author_rules] {
+        let mut candidates = sheets
+            .iter()
+            .enumerate()
+            .flat_map(|(sheet, s)| {
+                s.counters
+                    .iter()
+                    .enumerate()
+                    .map(move |(order, (c, _, rank))| ((*rank, sheet, order), c))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(priority, _)| *priority);
+        for (_, c) in candidates {
+            counter_styles.insert(c.clone());
+        }
+    }
     StyleResolution {
         styles: ComputedStyles {
+            counter_styles: Arc::new(counter_styles),
             pseudos,
             nodes: nodes
                 .into_iter()
@@ -991,6 +1011,9 @@ fn rank_layers(mut sheets: Vec<StyledSheet>, layers: &Layers) -> Vec<StyledSheet
         }
         for font in &mut sheet.fonts {
             font.rank = ranks[font.layer];
+        }
+        for (_, layer, rank) in &mut sheet.counters {
+            *rank = ranks[*layer];
         }
     }
     sheets
@@ -1189,6 +1212,28 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
                 let mut next_scopes = scopes.to_vec();
                 let mut next_active = active;
                 match name.as_str() {
+                    "counter-style" => {
+                        if parent.is_some() || !self.containers.is_empty() || !scopes.is_empty() {
+                            self.diagnostic(
+                                "@counter-style inside style/scope/container rules is unsupported",
+                            );
+                            return;
+                        }
+                        match css::counter_style::CounterStyle::parse(rule) {
+                            Ok((style, messages)) => {
+                                for message in messages {
+                                    self.diagnostic(message);
+                                }
+                                if active && self.result.counters.len() < 256 {
+                                    self.result.counters.push((style, layer, 0));
+                                } else if active {
+                                    self.diagnostic("@counter-style rule count exceeds 256");
+                                }
+                            }
+                            Err(message) => self.diagnostic(message),
+                        }
+                        return;
+                    }
                     "font-face" => {
                         if parent.is_some() || !self.containers.is_empty() || !scopes.is_empty() {
                             self.diagnostic("@font-face is not supported inside style, scope or container rules");
@@ -1363,11 +1408,32 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
     fn emit(
         &mut self,
         selectors: &[Selector],
-        declarations: Vec<StyledDeclaration>,
+        mut declarations: Vec<StyledDeclaration>,
         active: bool,
         layer: usize,
         scopes: &[Scope],
     ) {
+        let mut pending_bases = HashMap::new();
+        for declaration in &mut declarations {
+            if let Value::Pending(pending) = &mut declaration.value
+                && self.url.is_some()
+            {
+                let updated = pending_bases
+                    .entry(Arc::as_ptr(pending))
+                    .or_insert_with(|| {
+                        let mut value = pending.as_ref().clone();
+                        value.base_url.clone_from(&self.url);
+                        Arc::new(value)
+                    });
+                *pending = updated.clone();
+            } else if let Value::Typography(typography::Value::Image(Some(reference))) =
+                &mut declaration.value
+                && let Some(base) = &self.url
+                && let Ok(url) = base.join(reference)
+            {
+                *reference = url.into();
+            }
+        }
         for pseudo in PseudoElement::ALL {
             if matches!(
                 pseudo,
@@ -1385,7 +1451,7 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
             }
         }
         if selectors.iter().any(|s| s.pseudo_element() == Some(PseudoElement::Marker))
-            && declarations.iter().any(|d| matches!(d.property, DeclarationProperty::Longhand(property) if             !matches!(property, Property::Color | Property::TextFillColor | Property::Content | Property::FontSize | Property::FontFamily | Property::FontWeight | Property::FontStyle | Property::LineHeight)))
+            && declarations.iter().any(|d| matches!(d.property, DeclarationProperty::Longhand(property) if             !matches!(property, Property::Color | Property::TextFillColor | Property::Content | Property::FontSize | Property::FontFamily | Property::FontWeight | Property::FontStyle | Property::LineHeight | Property::Typography(typography::Property::FontFeatures | typography::Property::FontVariations | typography::Property::FontOpticalSizing | typography::Property::FontKerning | typography::Property::FontLigatures | typography::Property::FontWidth | typography::Property::LetterSpacing | typography::Property::WordSpacing))))
         {
             self.diagnostic("::marker renders only content, color, and the supported font properties; other effects are not implemented");
         }
@@ -1786,11 +1852,24 @@ fn substitute_winners(
                     .substitute(environment, budget)
                     .and_then(|tokens| {
                         declarations::parse_tokens_with_context(
-                            &declaration.name,
-                            &tokens,
-                            declaration.context,
-                        )
-                        .ok_or(Failure::Grammar)
+                                &declaration.name,
+                                &tokens,
+                                declaration.context,
+                            )
+                            .map(|mut values| {
+                                for value in &mut values {
+                                    if let Value::Typography(typography::Value::Image(Some(
+                                        reference,
+                                    ))) = value
+                                        && let Some(base) = &declaration.base_url
+                                        && let Ok(url) = base.join(reference)
+                                    {
+                                        *reference = url.into();
+                                    }
+                                }
+                                values
+                            })
+                            .ok_or(Failure::Grammar)
                     });
                 if let Err(failure) = result {
                     variables::report(diagnostics, node_id, &declaration.name, failure);
@@ -2138,6 +2217,24 @@ fn compute_with_context(
             }
         }
     }
+    for p in [
+        super::typography::Property::FontWidth,
+        super::typography::Property::FontFeatures,
+        super::typography::Property::FontVariations,
+        super::typography::Property::FontOpticalSizing,
+        super::typography::Property::FontKerning,
+        super::typography::Property::FontLigatures,
+    ] {
+        let property = Property::Typography(p);
+        if let Some((_, value)) = winners.get(&property) {
+            apply(
+                &mut style,
+                &parent.style,
+                property,
+                computed_value(value, property, parent, &initial),
+            );
+        }
+    }
     style.font_face = fonts.select(&style);
     set_selected_metrics(&mut context, &style);
     if is_root {
@@ -2280,6 +2377,32 @@ fn compute_with_context(
     if parent.style.display.is_item_container() && !style.position.out_of_flow() {
         style.display = style.display.blockified();
     }
+    if matches!(
+        style.display,
+        Display::InlineBlock
+            | Display::InlineFlowRootListItem
+            | Display::InlineFlex
+            | Display::InlineGrid
+            | Display::InlineTable
+    ) || style.position.out_of_flow()
+        || style.float != super::Float::None
+    {
+        style.decoration_sources.clear();
+    }
+    if style.typography.lines() != 0 {
+        if style.decoration_sources.len() < 32 {
+            style
+                .decoration_sources
+                .push(super::typography::Decoration::from_style(&style));
+        } else {
+            diagnostics.push(Diagnostic {
+                node_id: Some(node_id),
+                message:
+                    "text decoration propagation exceeds 32 sources; additional decoration omitted"
+                        .into(),
+            });
+        }
+    }
     ComputedNode { style, colors }
 }
 
@@ -2290,6 +2413,15 @@ fn compute_color_value(
     property: Property,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Value> {
+    if let Value::Typography(typography::Value::Color(color)) = value {
+        return compute_color_value(Value::Color(color), current, node_id, property, diagnostics)
+            .map(|value| {
+                let Value::Color(color) = value else {
+                    unreachable!()
+                };
+                Value::Typography(typography::Value::Color(color))
+            });
+    }
     let Value::Color(color) = value else {
         return Some(value);
     };
@@ -2321,6 +2453,9 @@ fn absolutize(
     reference: f32,
 ) -> Option<Value> {
     match value {
+        Value::Typography(typography::Value::Length(length)) => Some(Value::Typography(
+            typography::Value::Length(length.computed(context)?.0),
+        )),
         Value::BorderSpacing(x, y) => Some(Value::BorderSpacing(
             Length::Px(x.used(context, 0.0)?.0.max(0.0)),
             Length::Px(y.used(context, 0.0)?.0.max(0.0)),
@@ -2422,6 +2557,7 @@ fn computed_value(
     use Property as P;
     match property {
         P::Logical(_) => computed_value(value, property.physical(style), parent, initial),
+        P::Typography(p) => Value::Typography(style.typography.get(p)),
         P::Content => Value::Content(style.content.clone()),
         P::Color => Value::Color(Color::Absolute(style.text_color)),
         P::TextFillColor => Value::Color(parent.colors.fill.clone()),
@@ -2548,6 +2684,11 @@ fn computed_value(
 fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, value: Value) {
     use Property as P;
     match (property, value) {
+        (P::Typography(p), Value::Typography(v)) => {
+            style
+                .typography
+                .set(p, v, style.font_size, style.text_color)
+        }
         (P::Position, Value::Position(position)) => style.position = position,
         (P::ZIndex, Value::ZIndex(index)) => style.z_index = index,
         (P::OverflowX, Value::Overflow(value)) => style.overflow_x = value,

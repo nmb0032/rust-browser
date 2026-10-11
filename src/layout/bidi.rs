@@ -58,7 +58,7 @@ impl Paragraph {
                         active.pop();
                     }
                 }
-                Token::Text(id, s, _) | Token::Glyphs(id, s, _) => {
+                Token::Text(id, s, _, _) | Token::Glyphs(id, s, _) => {
                     if boxes[*id].style.writing_mode.vertical()
                         && boxes[*id].style.text_orientation
                             == crate::style::TextOrientation::Upright

@@ -12,6 +12,12 @@ const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    TextDecoration {
+        rect: Rect,
+        horizontal: bool,
+        style: crate::style::typography::Keyword,
+        color: ResolvedColor,
+    },
     ObjectClip(Rect),
     ObjectClipEnd,
     /// Subsequent drawing commands use this coordinate space until changed.
@@ -237,17 +243,28 @@ fn append_box_items(
         && marker.style.text_fill_color.alpha > 0.0
         && marker.style.font_size > 0.0
     {
-        display_list.push(text_item(DisplayItem::ColorText {
-            x: marker.x,
-            y: marker.y,
-            baseline: marker.baseline,
-            text: marker.text.clone(),
-            glyphs: marker.glyphs.clone(),
-            size: marker.style.font_size,
-            color: marker.style.text_fill_color,
-            bold: marker.style.bold,
-            italic: marker.style.italic,
-        }));
+        if let Some(image) = &marker.image {
+            display_list.push(DisplayItem::Image {
+                x: marker.x,
+                y: marker.y,
+                w: image.width() as f32,
+                h: image.height() as f32,
+                image: image.clone(),
+            });
+        }
+        if marker.image.is_none() {
+            display_list.push(text_item(DisplayItem::ColorText {
+                x: marker.x,
+                y: marker.y,
+                baseline: marker.baseline,
+                text: marker.text.clone(),
+                glyphs: marker.glyphs.clone(),
+                size: marker.style.font_size,
+                color: marker.style.text_fill_color,
+                bold: marker.style.bold,
+                italic: marker.style.italic,
+            }));
+        }
     }
 
     let fragments = if let PaintPhase::Text(index) = phase {
@@ -256,6 +273,7 @@ fn append_box_items(
         layout_box.text_fragments()
     };
     for fragment in fragments {
+        super::decoration::append(layout_box, fragment, display_list);
         if fragment.text_color.alpha == 0.0 {
             continue;
         }

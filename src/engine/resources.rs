@@ -139,6 +139,7 @@ pub(super) fn load_resources(
                     }
                     let resource = net::fetch_resource(&url, net::MAX_IMAGE_BYTES)?;
                     let image = Arc::new(DecodedImage::decode(&resource.bytes)?);
+                    check_cancelled(cancelled)?;
                     let next_bytes = image_bytes + image.rgba().len();
                     if next_bytes > MAX_PAGE_IMAGE_BYTES {
                         return Err(io::Error::other("page decoded images exceed 128 MiB").into());
@@ -169,6 +170,60 @@ pub(super) fn load_resources(
     stylesheets.diagnostics.extend(diagnostics);
     frame.set_stylesheets(stylesheets);
     super::web_fonts::load(frame, on_progress, cancelled)?;
+    let mut marker_diagnostics = Vec::new();
+    let mut marker_bytes = 0usize;
+    for id in frame.document.preorder().collect::<Vec<_>>() {
+        check_cancelled(cancelled)?;
+        let Some(style) = frame.styles.get(id).filter(|s| s.display.is_list_item()) else {
+            continue;
+        };
+        let style::typography::Value::Image(Some(reference)) =
+            style.typography.get(style::typography::Property::ListImage)
+        else {
+            continue;
+        };
+        resource_count += 1;
+        if resource_count > MAX_RESOURCES {
+            diagnostic(
+                &mut marker_diagnostics,
+                id,
+                "marker image resource count exceeds 128; text fallback".into(),
+            );
+            break;
+        }
+        let result = (|| -> Result<Arc<DecodedImage>, Box<dyn Error>> {
+            let url = base.join(&reference)?;
+            check_page_reference(&frame.url, &url)?;
+            frame.resource_policy.check(&url)?;
+            let resource = net::fetch_resource(&url, net::MAX_IMAGE_BYTES)?;
+            frame.resource_policy.check(&resource.metadata.url)?;
+            check_page_reference(&frame.url, &resource.metadata.url)?;
+            let image = Arc::new(DecodedImage::decode(&resource.bytes)?);
+            marker_bytes += image.rgba().len();
+            if image_bytes + marker_bytes > MAX_PAGE_IMAGE_BYTES {
+                return Err(io::Error::other("marker decoded image byte limit").into());
+            }
+            Ok(image)
+        })();
+        check_cancelled(cancelled)?;
+        match result {
+            Ok(image) => {
+                frame.marker_images.insert(id, image);
+                on_progress(frame)?;
+            }
+            Err(error) => diagnostic(
+                &mut marker_diagnostics,
+                id,
+                format!("marker image: {error}; text fallback"),
+            ),
+        }
+    }
+    if !marker_diagnostics.is_empty() {
+        let mut sheets = frame.stylesheets.clone();
+        sheets.diagnostics.extend(marker_diagnostics);
+        frame.set_stylesheets(sheets);
+    }
+    check_cancelled(cancelled)?;
     frame.web_fonts.ready = true;
     Ok(())
 }

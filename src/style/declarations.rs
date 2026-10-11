@@ -23,6 +23,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum Property {
+    Typography(super::typography::Property),
     Content,
     Color,
     TextFillColor,
@@ -262,6 +263,7 @@ pub(super) enum WideKeyword {
 
 #[derive(Clone, Debug)]
 pub(super) enum Value {
+    Typography(super::typography::Value),
     Content(Content),
     ContainerType(crate::css::container::ContainerType),
     ContainerNames(Vec<String>),
@@ -325,6 +327,7 @@ pub(super) struct PendingDeclaration {
     pub name: String,
     pub value: Arc<TokenValue>,
     pub context: DeclarationContext,
+    pub base_url: Option<url::Url>,
 }
 
 #[derive(Clone, Debug)]
@@ -378,6 +381,7 @@ pub(super) fn parse_with_context(
                 name: name.clone(),
                 value: Arc::new(value),
                 context,
+                base_url: None,
             }));
             properties.len()
         ]
@@ -423,6 +427,54 @@ pub(super) fn parse_tokens_with_context(
         return Some(vec![Value::Wide(wide); properties.len()]);
     }
     match parser {
+        Parser::Typography => {
+            let mut values = properties
+                .iter()
+                .map(|p| initial_value(*p))
+                .collect::<Vec<_>>();
+            let mut seen = vec![false; properties.len()];
+            let mut lines = 0;
+            for token in &tokens {
+                if name == "text-decoration"
+                    && let Some(Value::Typography(super::typography::Value::Lines(bits))) =
+                        value(properties[0], std::slice::from_ref(token))
+                {
+                    if bits == 0 && (lines != 0 || seen[0])
+                        || bits != 0 && (lines & bits != 0 || seen[0] && lines == 0)
+                    {
+                        return None;
+                    }
+                    lines |= bits;
+                    seen[0] = true;
+                    values[0] = Value::Typography(super::typography::Value::Lines(lines));
+                    continue;
+                }
+                let mut matched = false;
+                // Position/image precede the custom-ident list type.
+                let order: &[usize] = if name == "list-style" {
+                    &[1, 2, 0]
+                } else {
+                    &[1, 2, 3]
+                };
+                for &i in order {
+                    if !seen[i]
+                        && let Some(v) = value(properties[i], std::slice::from_ref(token))
+                    {
+                        values[i] = v;
+                        seen[i] = true;
+                        matched = true;
+                        break;
+                    }
+                }
+                if !matched {
+                    return None;
+                }
+            }
+            if name == "list-style" && tokens.iter().any(|t| t.is_ident("none")) && !seen[0] {
+                values[0] = Value::Typography(super::typography::Value::Name("none".into()));
+            }
+            (!tokens.is_empty()).then_some(values)
+        }
         Parser::GridPlacement => super::grid::placement(&tokens, properties.len())
             .map(|values| values.into_iter().map(Value::GridLine).collect()),
         Parser::Place => {
@@ -546,7 +598,26 @@ pub(super) fn parse_tokens_with_context(
                 .map(|(index, _)| values[index % 3].clone())
                 .collect()
         }),
-        Parser::Font => font(&tokens),
+        Parser::Font => {
+            let old = font(&tokens)?;
+            let keys = [
+                Property::FontStyle,
+                Property::FontWeight,
+                Property::FontSize,
+                Property::LineHeight,
+                Property::FontFamily,
+            ];
+            Some(
+                properties
+                    .iter()
+                    .map(|p| {
+                        keys.iter()
+                            .position(|k| k == p)
+                            .map_or_else(|| initial_value(*p), |i| old[i].clone())
+                    })
+                    .collect(),
+            )
+        }
         Parser::Background => background(&tokens),
         Parser::Four => tokens
             .iter()
@@ -667,6 +738,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     }
     use Property as P;
     match property {
+        P::Typography(p) => return super::typography::parse(p, tokens).map(Value::Typography),
         P::Display => return super::box_values::display(tokens).map(Value::Display),
         P::AspectRatio => return super::box_values::ratio(tokens).map(Value::AspectRatio),
         P::ObjectFit => return super::box_values::fit(tokens).map(Value::ObjectFit),
@@ -729,7 +801,8 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     };
     let lower = token.ident().unwrap_or("").to_ascii_lowercase();
     match property {
-        P::Content
+        P::Typography(_)
+        | P::Content
         | P::Color
         | P::TextFillColor
         | P::BackgroundColor
@@ -1107,6 +1180,47 @@ fn content(tokens: &[Component]) -> Option<Content> {
                     [TokenKind::Ident(name)] => Some(ContentItem::Attribute(name.clone())),
                     _ => None,
                 }
+            }
+            Component::Function(function, args)
+                if function.eq_ignore_ascii_case("counter")
+                    || function.eq_ignore_ascii_case("counters") =>
+            {
+                let significant = args
+                    .iter()
+                    .filter(|t| !matches!(t, TokenKind::Whitespace))
+                    .collect::<Vec<_>>();
+                let (name, separator, style) = match significant.as_slice() {
+                    [TokenKind::Ident(name)] if function.eq_ignore_ascii_case("counter") => {
+                        (name, None, "decimal")
+                    }
+                    [
+                        TokenKind::Ident(name),
+                        TokenKind::Comma,
+                        TokenKind::Ident(style),
+                    ] if function.eq_ignore_ascii_case("counter") => (name, None, style.as_str()),
+                    [
+                        TokenKind::Ident(name),
+                        TokenKind::Comma,
+                        TokenKind::String(separator),
+                    ] if function.eq_ignore_ascii_case("counters") => {
+                        (name, Some(separator.clone()), "decimal")
+                    }
+                    [
+                        TokenKind::Ident(name),
+                        TokenKind::Comma,
+                        TokenKind::String(separator),
+                        TokenKind::Comma,
+                        TokenKind::Ident(style),
+                    ] if function.eq_ignore_ascii_case("counters") => {
+                        (name, Some(separator.clone()), style.as_str())
+                    }
+                    _ => return None,
+                };
+                Some(ContentItem::Counter {
+                    name: name.clone(),
+                    style: style.to_owned(),
+                    separator,
+                })
             }
             _ => None,
         })

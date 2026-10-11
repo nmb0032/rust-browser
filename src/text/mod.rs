@@ -1,7 +1,7 @@
 //! Shared font selection, shaping and indexed raster sources. Positions are
 //! CSS pixels, relative to an explicit baseline; clusters are UTF-8 byte offsets.
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt, fs,
     ops::Deref,
     sync::{Arc, Mutex, OnceLock},
@@ -17,6 +17,7 @@ use crate::{
     layout::Rect,
     style::ComputedStyle,
 };
+pub(crate) mod transform;
 
 const BUNDLED: &[u8] = include_bytes!("../../assets/fonts/noto-sans/NotoSans.ttf");
 pub const MAX_TEXT_BYTES: usize = 65_536;
@@ -34,8 +35,13 @@ pub struct FontFace {
     pub italic: bool,
     pub default_instance_only: bool,
     bytes: Arc<[u8]>,
-    raster: fontdue::Font,
-    bitmaps: Mutex<HashMap<(u16, u32), Arc<GlyphBitmap>>>,
+    raster: Option<fontdue::Font>,
+    color: bool,
+    scaler: Mutex<swash::scale::ScaleContext>,
+    scaler_key: swash::CacheKey,
+    bitmaps: Mutex<HashMap<BitmapKey, Arc<GlyphBitmap>>>,
+    glyph_count: u16,
+    axes: Vec<rustybuzz::ttf_parser::VariationAxis>,
     units_per_em: f32,
     x_height: Option<i16>,
     cap_height: Option<i16>,
@@ -44,7 +50,9 @@ pub struct FontFace {
 pub struct GlyphBitmap {
     pub metrics: fontdue::Metrics,
     pub pixels: Vec<u8>,
+    pub color: bool,
 }
+type BitmapKey = (u16, u32, Vec<(u32, u32)>);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FontUnits {
@@ -75,11 +83,66 @@ impl PartialEq for FontFace {
 impl Deref for FontFace {
     type Target = fontdue::Font;
     fn deref(&self) -> &Self::Target {
-        &self.raster
+        self.raster.as_ref().unwrap_or_else(|| {
+            static FALLBACK: OnceLock<fontdue::Font> = OnceLock::new();
+            FALLBACK.get_or_init(|| {
+                fontdue::Font::from_bytes(BUNDLED, fontdue::FontSettings::default())
+                    .expect("bundled raster")
+            })
+        })
     }
 }
 
 impl FontFace {
+    pub(crate) fn format_diagnostics(&self) -> Vec<String> {
+        let face = self.shaper();
+        let mut messages = Vec::new();
+        if let Some(colr) = face
+            .raw_face()
+            .table(rustybuzz::ttf_parser::Tag::from_bytes(b"COLR"))
+            && colr.get(..2).is_some_and(|b| b != [0, 0])
+        {
+            messages.push("COLR v1 paint graphs are unsupported; only COLR v0 layers or an available outline are rendered".into());
+        }
+        if let Some(colr) = face
+            .raw_face()
+            .table(rustybuzz::ttf_parser::Tag::from_bytes(b"COLR"))
+            && colr.get(..2) == Some(&[0, 0])
+        {
+            let layers = colr
+                .get(8..12)
+                .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                .map(u32::from_be_bytes)
+                .unwrap_or(0) as usize;
+            let count = colr
+                .get(12..14)
+                .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
+                .map(u16::from_be_bytes)
+                .unwrap_or(0) as usize;
+            if (0..count)
+                .any(|i| colr.get(layers + i * 4 + 2..layers + i * 4 + 4) == Some(&[255, 255]))
+            {
+                messages.push("COLR foreground-palette entries are unsupported; fixed palette entries render, foreground entries use black".into());
+            }
+        }
+        if face.tables().svg.is_some() {
+            messages.push("OpenType SVG glyph documents are unsupported and never executed; available outline/bitmap fallback used".into());
+        }
+        if face.tables().cbdt.is_some() || face.tables().sbix.is_some() {
+            for glyph in 0..face.number_of_glyphs() {
+                if face
+                    .glyph_raster_image(rustybuzz::ttf_parser::GlyphId(glyph), 20)
+                    .is_some_and(|image| {
+                        image.format != rustybuzz::ttf_parser::RasterImageFormat::PNG
+                    })
+                {
+                    messages.push("bitmap font strike encoding is unsupported; only bounded PNG CBDT/sbix strikes are decoded".into());
+                    break;
+                }
+            }
+        }
+        messages
+    }
     pub(crate) fn has_source(&self, bytes: &Arc<[u8]>) -> bool {
         Arc::ptr_eq(&self.bytes, bytes)
     }
@@ -122,11 +185,42 @@ impl FontFace {
 
     pub(crate) fn units_for_style(&self, style: &ComputedStyle) -> FontUnits {
         let mut units = self.units(style.font_size);
+        let coordinates = self.coordinates(style);
+        let varied = coordinates.iter().any(|&(tag, value)| {
+            self.axes
+                .iter()
+                .find(|axis| axis.tag.to_bytes() == tag)
+                .is_some_and(|axis| axis.def_value != value)
+        });
+        if !varied && !style.writing_mode.vertical() {
+            return units;
+        }
+        let mut instance = self.shaper();
+        instance.set_variations(
+            &coordinates
+                .iter()
+                .map(|&(tag, value)| rustybuzz::Variation {
+                    tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
+                    value,
+                })
+                .collect::<Vec<_>>(),
+        );
+        if instance.is_variable() {
+            let scale = style.font_size / self.units_per_em;
+            units.ch = instance
+                .glyph_index('0')
+                .and_then(|g| instance.glyph_hor_advance(g))
+                .map_or(units.ch, |a| a as f32 * scale);
+            units.ex = instance.x_height().map_or(units.ex, |h| h as f32 * scale);
+            units.cap = instance
+                .capital_height()
+                .map_or(units.cap, |h| h as f32 * scale);
+        }
         if style.writing_mode.vertical() {
-            let face = self.shaper();
             let advance = |c| {
-                face.glyph_index(c)
-                    .and_then(|id| face.glyph_ver_advance(id))
+                instance
+                    .glyph_index(c)
+                    .and_then(|id| instance.glyph_ver_advance(id))
                     .map_or(style.font_size, |a| {
                         a as f32 * style.font_size / self.units_per_em
                     })
@@ -150,27 +244,39 @@ impl FontFace {
             return Err(format!("font exceeds {MAX_FONT_BYTES}-byte limit"));
         }
         let face = rustybuzz::Face::from_slice(&bytes, index).ok_or("invalid OpenType face")?;
-        let default_instance_only = face.is_variable();
+        let default_instance_only = false;
         let units_per_em = face.units_per_em() as f32;
         let x_height = face.x_height();
         let cap_height = face.capital_height();
-        if face.tables().glyf.is_none() && face.tables().cff.is_none() {
+        let glyph_count = face.number_of_glyphs();
+        let axes = face.variation_axes().into_iter().collect();
+        let color = face.tables().colr.is_some()
+            || face.tables().cbdt.is_some()
+            || face.tables().sbix.is_some();
+        if face.tables().glyf.is_none()
+            && face.tables().cff.is_none()
+            && face.tables().cff2.is_none()
+            && !color
+        {
             return Err(
-                "unsupported raster format (color/bitmap-only or CFF2); outline fallback required"
-                    .into(),
+                "unsupported raster format (SVG-only font; font SVG execution is disabled)".into(),
             );
         }
-        let raster = fontdue::Font::from_bytes(
-            bytes.as_ref(),
-            fontdue::FontSettings {
-                collection_index: index,
-                ..fontdue::FontSettings::default()
-            },
-        )
-        .map_err(str::to_owned)?;
-        if raster.horizontal_line_metrics(16.0).is_none() {
-            return Err("font has no horizontal metrics".into());
-        }
+        let raster = face
+            .tables()
+            .cff2
+            .is_none()
+            .then(|| {
+                fontdue::Font::from_bytes(
+                    bytes.as_ref(),
+                    fontdue::FontSettings {
+                        collection_index: index,
+                        ..fontdue::FontSettings::default()
+                    },
+                )
+                .ok()
+            })
+            .flatten();
         Ok(Self {
             name,
             index,
@@ -179,7 +285,12 @@ impl FontFace {
             default_instance_only,
             bytes,
             raster,
+            color,
+            scaler: Mutex::new(swash::scale::ScaleContext::new()),
+            scaler_key: swash::CacheKey::new(),
             bitmaps: Mutex::new(HashMap::new()),
+            glyph_count,
+            axes,
             units_per_em,
             x_height,
             cap_height,
@@ -197,32 +308,406 @@ impl FontFace {
     }
 
     pub fn rasterized(&self, id: u16, size: f32) -> Option<Arc<GlyphBitmap>> {
-        if !size.is_finite() || !(0.0..=2048.0).contains(&size) || id >= self.glyph_count() {
+        self.instance_bitmap(id, size, &[])
+    }
+
+    pub fn lookup_glyph_index(&self, c: char) -> u16 {
+        self.raster.as_ref().map_or_else(
+            || self.shaper().glyph_index(c).map_or(0, |g| g.0),
+            |raster| raster.lookup_glyph_index(c),
+        )
+    }
+
+    pub fn glyph_count(&self) -> u16 {
+        self.glyph_count
+    }
+
+    pub fn metrics(&self, c: char, size: f32) -> fontdue::Metrics {
+        self.metrics_indexed(self.lookup_glyph_index(c), size)
+    }
+
+    pub fn metrics_indexed(&self, id: u16, size: f32) -> fontdue::Metrics {
+        if let Some(raster) = &self.raster {
+            raster.metrics_indexed(id, size)
+        } else {
+            self.rasterized(id, size)
+                .map_or_else(fontdue::Metrics::default, |b| b.metrics)
+        }
+    }
+
+    pub fn horizontal_line_metrics(&self, size: f32) -> Option<fontdue::LineMetrics> {
+        if let Some(raster) = &self.raster {
+            return raster.horizontal_line_metrics(size);
+        }
+        let face = self.shaper();
+        let scale = size / self.units_per_em;
+        let ascent = face.ascender() as f32 * scale;
+        let descent = face.descender() as f32 * scale;
+        let line_gap = face.line_gap() as f32 * scale;
+        Some(fontdue::LineMetrics {
+            ascent,
+            descent,
+            line_gap,
+            new_line_size: ascent - descent + line_gap,
+        })
+    }
+
+    pub(crate) fn coordinates(&self, style: &ComputedStyle) -> Vec<([u8; 4], f32)> {
+        use crate::style::typography::{Keyword, Property, Value};
+        let explicit = style.typography.settings(Property::FontVariations);
+        let mut coordinates: Vec<_> = self
+            .axes
+            .iter()
+            .map(|axis| {
+                let tag = axis.tag.to_bytes();
+                let value = explicit.get(&tag).copied().unwrap_or_else(|| match &tag {
+                    b"wght" => style.font_weight.0,
+                    b"wdth" => match style.typography.get(Property::FontWidth) {
+                        Value::Width(w) => w,
+                        _ => 100.0,
+                    },
+                    b"ital" => f32::from(style.italic),
+                    b"slnt" if style.font_style == FontStyle::Oblique => -14.0,
+                    b"opsz"
+                        if style.typography.keyword(Property::FontOpticalSizing)
+                            == Keyword::Auto =>
+                    {
+                        style.font_size * 0.75
+                    }
+                    _ => axis.def_value,
+                });
+                (tag, value.clamp(axis.min_value, axis.max_value))
+            })
+            .collect();
+        coordinates.sort_by_key(|&(tag, _)| tag);
+        coordinates
+    }
+
+    pub fn instance_bitmap(
+        &self,
+        id: u16,
+        size: f32,
+        coordinates: &[([u8; 4], f32)],
+    ) -> Option<Arc<GlyphBitmap>> {
+        if !size.is_finite()
+            || !(0.0..=2048.0).contains(&size)
+            || id >= self.glyph_count()
+            || coordinates.len() > 64
+            || coordinates.iter().any(|&(_, value)| !value.is_finite())
+        {
             return None;
         }
-        let key = (id, size.to_bits());
+        let mut cache_coordinates: Vec<_> = coordinates
+            .iter()
+            .map(|(tag, value)| (u32::from_be_bytes(*tag), value.to_bits()))
+            .collect();
+        cache_coordinates.sort_unstable();
+        let key = (id, size.to_bits(), cache_coordinates);
         let mut cache = self.bitmaps.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bitmap) = cache.get(&key) {
             return Some(bitmap.clone());
         }
-        let metrics = self.metrics_indexed(id, size);
-        if metrics
-            .width
-            .checked_mul(metrics.height)
-            .is_none_or(|area| area > 1_048_576)
-        {
-            return None;
+        let varied = coordinates.iter().any(|&(tag, value)| {
+            self.axes
+                .iter()
+                .find(|a| a.tag.to_bytes() == tag)
+                .is_some_and(|a| a.def_value != value)
+        });
+        let mut bounded = self.shaper();
+        bounded.set_variations(
+            &coordinates
+                .iter()
+                .map(|&(tag, value)| rustybuzz::Variation {
+                    tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
+                    value,
+                })
+                .collect::<Vec<_>>(),
+        );
+        if let Some(boxes) = bounded.glyph_bounding_box(rustybuzz::ttf_parser::GlyphId(id)) {
+            let scale = size / self.units_per_em;
+            let width = (i32::from(boxes.x_max) - i32::from(boxes.x_min)) as f32 * scale;
+            let height = (i32::from(boxes.y_max) - i32::from(boxes.y_min)) as f32 * scale;
+            if width.ceil() * height.ceil() > 1_048_576.0 {
+                return None;
+            }
         }
-        let (metrics, pixels) = self.rasterize_indexed(id, size);
-        let bitmap = Arc::new(GlyphBitmap { metrics, pixels });
+        let colr_v0 = bounded
+            .raw_face()
+            .table(rustybuzz::ttf_parser::Tag::from_bytes(b"COLR"))
+            .is_some_and(|table| table.get(..2) == Some(&[0, 0]));
+        let bitmap = if colr_v0 && bounded.is_color_glyph(rustybuzz::ttf_parser::GlyphId(id)) {
+            Arc::new(self.colr_bitmap(id, size, coordinates, &bounded)?)
+        } else if let Some(image) =
+            bounded.glyph_raster_image(rustybuzz::ttf_parser::GlyphId(id), size.ceil() as u16)
+        {
+            Arc::new(self.png_bitmap(id, size, &bounded, image)?)
+        } else if !self.color
+            && !varied
+            && let Some(raster) = &self.raster
+        {
+            let metrics = raster.metrics_indexed(id, size);
+            if metrics
+                .width
+                .checked_mul(metrics.height)
+                .is_none_or(|n| n > 1_048_576)
+            {
+                return None;
+            }
+            let (metrics, pixels) = raster.rasterize_indexed(id, size);
+            Arc::new(GlyphBitmap {
+                metrics,
+                pixels,
+                color: false,
+            })
+        } else {
+            let mut font = swash::FontRef::from_index(&self.bytes, self.index as usize)?;
+            font.key = self.scaler_key;
+            let mut context = self.scaler.lock().unwrap_or_else(|e| e.into_inner());
+            let mut scaler = context
+                .builder(font)
+                .size(size)
+                .variations(
+                    coordinates
+                        .iter()
+                        .map(|&(tag, value)| (u32::from_be_bytes(tag), value)),
+                )
+                .build();
+            let outline = scaler.scale_outline(id)?;
+            let bounds = outline.bounds();
+            if !bounds.width().is_finite()
+                || !bounds.height().is_finite()
+                || (bounds.width().ceil() + 2.0) * (bounds.height().ceil() + 2.0) > 1_048_576.0
+            {
+                return None;
+            }
+            let image = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                swash::scale::Render::new(&[swash::scale::Source::Outline])
+                    .format(swash::zeno::Format::Alpha)
+                    .render(&mut scaler, id)
+            }))
+            .ok()??;
+            let p = image.placement;
+            if p.width.checked_mul(p.height).is_none_or(|n| n > 1_048_576) {
+                return None;
+            }
+            let metrics = fontdue::Metrics {
+                xmin: p.left,
+                ymin: p.top - p.height as i32,
+                width: p.width as usize,
+                height: p.height as usize,
+                advance_width: bounded
+                    .glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(id))
+                    .unwrap_or(0) as f32
+                    * size
+                    / self.units_per_em,
+                advance_height: 0.0,
+                ..fontdue::Metrics::default()
+            };
+            Arc::new(GlyphBitmap {
+                metrics,
+                pixels: image.data,
+                color: image.content == swash::scale::image::Content::Color,
+            })
+        };
         if cache.len() >= 1024
             || cache.values().map(|b| b.pixels.len()).sum::<usize>() + bitmap.pixels.len()
                 > 2_097_152
         {
             cache.clear();
         }
-        cache.insert(key, bitmap.clone());
+        if bitmap.pixels.len() <= 2_097_152 {
+            cache.insert(key, bitmap.clone());
+        }
         Some(bitmap)
+    }
+
+    fn png_bitmap(
+        &self,
+        id: u16,
+        size: f32,
+        face: &rustybuzz::Face<'_>,
+        image: rustybuzz::ttf_parser::RasterGlyphImage<'_>,
+    ) -> Option<GlyphBitmap> {
+        if image.format != rustybuzz::ttf_parser::RasterImageFormat::PNG
+            || image.data.len() > 4_194_304
+            || image.pixels_per_em == 0
+            || image.data.get(..8)? != b"\x89PNG\r\n\x1a\n"
+        {
+            return None;
+        }
+        let w = u32::from_be_bytes(image.data.get(16..20)?.try_into().ok()?);
+        let h = u32::from_be_bytes(image.data.get(20..24)?.try_into().ok()?);
+        if w == 0 || h == 0 || w.checked_mul(h).is_none_or(|area| area > 1_048_576) {
+            return None;
+        }
+        let ratio = size / f32::from(image.pixels_per_em);
+        let width = (w as f32 * ratio).ceil() as usize;
+        let height = (h as f32 * ratio).ceil() as usize;
+        let area = width.checked_mul(height)?;
+        if area > 1_048_576 {
+            return None;
+        }
+        let decoded = crate::media::DecodedImage::decode(image.data).ok()?;
+        if decoded.width() != w || decoded.height() != h {
+            return None;
+        }
+        let mut pixels = vec![0u8; area.checked_mul(4)?];
+        for y in 0..height {
+            for x in 0..width {
+                let sx = ((x as f32 / ratio) as u32).min(w.saturating_sub(1));
+                let sy = ((y as f32 / ratio) as u32).min(h.saturating_sub(1));
+                pixels[(y * width + x) * 4..][..4]
+                    .copy_from_slice(&decoded.rgba()[((sy * w + sx) * 4) as usize..][..4]);
+            }
+        }
+        Some(GlyphBitmap {
+            metrics: fontdue::Metrics {
+                xmin: (f32::from(image.x) * ratio).floor() as i32,
+                ymin: (f32::from(image.y) * ratio).floor() as i32,
+                width,
+                height,
+                advance_width: face.glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(id))? as f32
+                    * size
+                    / self.units_per_em,
+                ..Default::default()
+            },
+            pixels,
+            color: true,
+        })
+    }
+
+    fn colr_bitmap(
+        &self,
+        id: u16,
+        size: f32,
+        coordinates: &[([u8; 4], f32)],
+        face: &rustybuzz::Face<'_>,
+    ) -> Option<GlyphBitmap> {
+        let table = face
+            .raw_face()
+            .table(rustybuzz::ttf_parser::Tag::from_bytes(b"COLR"))?;
+        let word = |data: &[u8], at: usize| {
+            Some(u16::from_be_bytes(
+                data.get(at..at.checked_add(2)?)?.try_into().ok()?,
+            ))
+        };
+        let long = |data: &[u8], at: usize| {
+            Some(u32::from_be_bytes(data.get(at..at.checked_add(4)?)?.try_into().ok()?) as usize)
+        };
+        if word(table, 0)? != 0 {
+            return None;
+        }
+        let records = long(table, 4)?;
+        let layers = long(table, 8)?;
+        let count = usize::from(word(table, 2)?);
+        let record = (0..count)
+            .map(|i| records + i * 6)
+            .find(|&at| word(table, at) == Some(id))?;
+        let first = usize::from(word(table, record + 2)?);
+        let count = usize::from(word(table, record + 4)?);
+        if count == 0 || count > 256 {
+            return None;
+        }
+        let palette = face
+            .raw_face()
+            .table(rustybuzz::ttf_parser::Tag::from_bytes(b"CPAL"))?;
+        let colors = long(palette, 8)?;
+        let palette_first = usize::from(word(palette, 12)?);
+        let mut commands = Vec::new();
+        let mut bounds: Option<(i32, i32, i32, i32)> = None;
+        for i in 0..count {
+            let at = layers.checked_add((first + i).checked_mul(4)?)?;
+            let glyph = word(table, at)?;
+            let color = word(table, at + 2)?;
+            let color = if color == u16::MAX {
+                [0, 0, 0, 255]
+            } else {
+                if color >= word(palette, 2)? {
+                    return None;
+                }
+                let at =
+                    colors.checked_add((palette_first + usize::from(color)).checked_mul(4)?)?;
+                let bgra = palette.get(at..at + 4)?;
+                [bgra[2], bgra[1], bgra[0], bgra[3]]
+            };
+            let bbox = face.glyph_bounding_box(rustybuzz::ttf_parser::GlyphId(glyph))?;
+            let scale = size / self.units_per_em;
+            let b = (
+                (f32::from(bbox.x_min) * scale).floor() as i32,
+                (f32::from(bbox.y_min) * scale).floor() as i32,
+                (f32::from(bbox.x_max) * scale).ceil() as i32,
+                (f32::from(bbox.y_max) * scale).ceil() as i32,
+            );
+            bounds = Some(bounds.map_or(b, |p| {
+                (p.0.min(b.0), p.1.min(b.1), p.2.max(b.2), p.3.max(b.3))
+            }));
+            commands.push((glyph, color));
+        }
+        let (left, bottom, right, top) = bounds?;
+        let width = usize::try_from(right.checked_sub(left)?).ok()?;
+        let height = usize::try_from(top.checked_sub(bottom)?).ok()?;
+        let area = width.checked_mul(height)?;
+        if area > 1_048_576 {
+            return None;
+        }
+        let mut pixels = vec![0u8; area.checked_mul(4)?];
+        let mut font = swash::FontRef::from_index(&self.bytes, self.index as usize)?;
+        font.key = self.scaler_key;
+        let mut context = self.scaler.lock().unwrap_or_else(|e| e.into_inner());
+        let mut scaler = context
+            .builder(font)
+            .size(size)
+            .variations(
+                coordinates
+                    .iter()
+                    .map(|&(tag, value)| (u32::from_be_bytes(tag), value)),
+            )
+            .build();
+        for (glyph, color) in commands {
+            let image = swash::scale::Render::new(&[swash::scale::Source::Outline])
+                .format(swash::zeno::Format::Alpha)
+                .render(&mut scaler, glyph)?;
+            for y in 0..image.placement.height as usize {
+                for x in 0..image.placement.width as usize {
+                    let px = image.placement.left - left + x as i32;
+                    let py = top - image.placement.top + y as i32;
+                    if px < 0 || py < 0 || px as usize >= width || py as usize >= height {
+                        continue;
+                    }
+                    let alpha = (u32::from(image.data[y * image.placement.width as usize + x])
+                        * u32::from(color[3])
+                        + 127)
+                        / 255;
+                    let p = &mut pixels[(py as usize * width + px as usize) * 4..][..4];
+                    let old = u32::from(p[3]);
+                    let combined = alpha + (old * (255 - alpha) + 127) / 255;
+                    if combined == 0 {
+                        continue;
+                    }
+                    for c in 0..3 {
+                        p[c] = ((u32::from(color[c]) * alpha * 255
+                            + u32::from(p[c]) * old * (255 - alpha)
+                            + combined * 127)
+                            / (combined * 255)) as u8;
+                    }
+                    p[3] = combined as u8;
+                }
+            }
+        }
+        Some(GlyphBitmap {
+            metrics: fontdue::Metrics {
+                xmin: left,
+                ymin: bottom,
+                width,
+                height,
+                advance_width: face.glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(id))? as f32
+                    * size
+                    / self.units_per_em,
+                ..Default::default()
+            },
+            pixels,
+            color: true,
+        })
     }
 }
 
@@ -281,7 +766,7 @@ impl fmt::Debug for FontContext {
 impl Deref for FontContext {
     type Target = fontdue::Font;
     fn deref(&self) -> &Self::Target {
-        &self.0.bundled.raster
+        &self.0.bundled
     }
 }
 
@@ -573,6 +1058,9 @@ impl FontContext {
                 return Err("font glyph cache limit".into());
             }
             cache.glyphs += face.glyph_count() as usize;
+            for message in face.format_diagnostics() {
+                Self::report(&mut cache, format!("{}: {message}", face.name));
+            }
             if face.default_instance_only {
                 Self::report(
                     &mut cache,
@@ -621,11 +1109,24 @@ impl FontContext {
                     .filter(|f| f.descriptor.family.eq_ignore_ascii_case(name));
                 let defined = candidates.clone().next().is_some();
                 let selected = candidates
-                    .filter(|f| text.is_none_or(|t| f.descriptor.covers(t) && f.face.covers(t)))
+                    .filter(|f| {
+                        // Metric selection respects declared ranges without
+                        // requiring a sparse face to contain the probe glyph.
+                        text.map_or_else(
+                            || f.descriptor.covers("0"),
+                            |t| f.descriptor.covers(t) && f.face.covers(t),
+                        )
+                    })
                     .min_by_key(|f| {
                         (
                             style_distance(style.font_style, f.descriptor.style),
-                            weight_distance(style.font_weight.0 as u16, f.descriptor.weight),
+                            weight_distance(
+                                style.font_weight.0 as u16,
+                                (style.font_weight.0 as u16).clamp(
+                                    f.descriptor.weight_range.0,
+                                    f.descriptor.weight_range.1,
+                                ),
+                            ),
                         )
                     })
                     .map(|f| f.face.clone());
@@ -688,7 +1189,7 @@ impl FontContext {
             .0
             .iter()
             .take(32)
-            .find_map(|name| self.query_text(style, Self::family(name), Some("0")))
+            .find_map(|name| self.query_text(style, Self::family(name), None))
             .unwrap_or_else(|| self.0.bundled.clone());
         let mut cache = self.0.cache.lock().unwrap_or_else(|e| e.into_inner());
         if cache.requests.len() < MAX_REQUESTS
@@ -1019,6 +1520,28 @@ pub struct ShapedGlyph {
     /// Optional horizontal paint slice, relative to the glyph's positioned x.
     /// Mandatory clusters crossing paint owners retain one shaping result.
     pub clip: Option<(f32, f32)>,
+    pub coordinates: Arc<[([u8; 4], f32)]>,
+    pub source_spans: Arc<[SourceSpan]>,
+}
+
+/// Original decoded DOM text and byte ranges. A mandatory cluster can span
+/// multiple DOM owners; transformed display bytes never become DOM offsets.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SourceSpan {
+    pub node_id: Option<crate::dom::NodeId>,
+    pub source: Arc<str>,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl fmt::Debug for SourceSpan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SourceSpan")
+            .field("node_id", &self.node_id)
+            .field("range", &(self.start..self.end))
+            .field("source_bytes", &self.source.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1080,8 +1603,8 @@ fn style_key(style: &ComputedStyle) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{}:{}:{:?}",
-        style.font_family, style.font_weight.0, style.font_style
+        "{}:{}:{:?}:{:?}",
+        style.font_family, style.font_weight.0, style.font_style, style.typography
     ))
 }
 
@@ -1093,10 +1616,13 @@ pub struct ShapedText {
     pub descent: f32,
     pub unsafe_after: bool,
     pub line_extents: Option<(f32, f32)>,
+    pub(crate) logical_text: String,
+    pub(crate) logical_span: Option<SourceSpan>,
 }
 
 impl ShapedText {
     pub fn append(&mut self, other: &Self) {
+        self.logical_text.push_str(&other.logical_text);
         let origin = self.width;
         self.glyphs
             .extend(other.glyphs.iter().cloned().map(|mut glyph| {
@@ -1116,7 +1642,13 @@ impl ShapedText {
     pub fn ink_bounds(&self, _size: f32, x: f32, baseline: f32) -> Rect {
         let mut bounds = Rect::default();
         for glyph in &self.glyphs {
-            let metrics = glyph.face.metrics_indexed(glyph.id, glyph.size);
+            let Some(bitmap) = glyph
+                .face
+                .instance_bitmap(glyph.id, glyph.size, &glyph.coordinates)
+            else {
+                continue;
+            };
+            let metrics = bitmap.metrics;
             if metrics.width != 0 && metrics.height != 0 {
                 let mut local = Rect {
                     x: metrics.xmin as f32,
@@ -1158,7 +1690,17 @@ fn shape_face(
     paint_boundaries: &[usize],
     resolved_rtl: Option<bool>,
 ) -> ShapedText {
-    let shaper = face.shaper();
+    let mut shaper = face.shaper();
+    let coordinates: Arc<[([u8; 4], f32)]> = face.coordinates(style).into();
+    shaper.set_variations(
+        &coordinates
+            .iter()
+            .map(|&(tag, value)| rustybuzz::Variation {
+                tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
+                value,
+            })
+            .collect::<Vec<_>>(),
+    );
     let mut buffer = UnicodeBuffer::new();
     for (offset, c) in text.char_indices() {
         if paint_boundaries.contains(&(base + offset))
@@ -1204,6 +1746,49 @@ fn shape_face(
     }
     let rtl = !upright && buffer.direction() == rustybuzz::Direction::RightToLeft;
     let mut features = Vec::new();
+    use crate::style::typography::{Keyword, Property, Value};
+    let mut settings = style.typography.settings(Property::FontFeatures);
+    let mut defaults = BTreeMap::new();
+    if style.typography.keyword(Property::FontKerning) == Keyword::None {
+        defaults.insert(*b"kern", 0.0);
+    }
+    if let Value::Ligatures {
+        common,
+        discretionary,
+        historical,
+        contextual,
+    } = style.typography.get(Property::FontLigatures)
+    {
+        for (tag, value) in [
+            (*b"liga", common),
+            (*b"clig", common),
+            (*b"dlig", discretionary),
+            (*b"hlig", historical),
+            (*b"calt", contextual),
+        ] {
+            defaults.insert(tag, f32::from(value));
+        }
+        if style.typography.length(Property::LetterSpacing, size) != 0.0
+            || style.typography.keyword(Property::WordBreak) == Keyword::BreakAll
+            || matches!(
+                style.typography.keyword(Property::OverflowWrap),
+                Keyword::Anywhere | Keyword::BreakWord
+            )
+            || style.typography.keyword(Property::LineBreak) == Keyword::Anywhere
+        {
+            defaults.insert(*b"liga", 0.0);
+            defaults.insert(*b"clig", 0.0);
+        }
+    }
+    defaults.append(&mut settings);
+    for (tag, value) in defaults {
+        features.push(rustybuzz::Feature {
+            tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
+            value: value as u32,
+            start: 0,
+            end: u32::MAX,
+        });
+    }
     for &boundary in paint_boundaries {
         if boundary > base && boundary < base + text.len() {
             let end = boundary - base;
@@ -1246,7 +1831,25 @@ fn shape_face(
         );
     }
     let scale = size / shaper.units_per_em() as f32;
-    let metrics = face.horizontal_line_metrics(size);
+    let varied = coordinates.iter().any(|&(tag, value)| {
+        face.axes
+            .iter()
+            .find(|axis| axis.tag.to_bytes() == tag)
+            .is_some_and(|axis| axis.def_value != value)
+    });
+    let metrics = if varied {
+        let ascent = shaper.ascender() as f32 * scale;
+        let descent = shaper.descender() as f32 * scale;
+        let line_gap = shaper.line_gap() as f32 * scale;
+        Some(fontdue::LineMetrics {
+            ascent,
+            descent,
+            line_gap,
+            new_line_size: ascent - descent + line_gap,
+        })
+    } else {
+        face.horizontal_line_metrics(size)
+    };
     let line_extents = metrics.map(|m| {
         let height = if style.line_height == crate::css::values::LineHeight::Normal {
             m.new_line_size
@@ -1318,13 +1921,49 @@ fn shape_face(
             y_offset: if upright { pos.x_offset } else { pos.y_offset } as f32 * scale,
             unsafe_to_break: info.unsafe_to_break(),
             rtl,
-            bold: style.bold && face.weight < 600,
-            italic: style.italic && !face.italic,
+            bold: style.bold
+                && face.weight < 600
+                && !coordinates.iter().any(|(tag, _)| {
+                    tag == b"wght"
+                        && (style.font_weight.0 >= 600.0
+                            || style
+                                .typography
+                                .settings(Property::FontVariations)
+                                .contains_key(b"wght"))
+                }),
+            italic: style.italic
+                && !face.italic
+                && !coordinates.iter().any(|(tag, _)| {
+                    matches!(tag, b"ital" | b"slnt")
+                        && (style.font_style != FontStyle::Normal
+                            || style
+                                .typography
+                                .settings(Property::FontVariations)
+                                .contains_key(tag))
+                }),
             rotation: GlyphRotation::None,
             upright,
             clip: None,
+            coordinates: coordinates.clone(),
+            source_spans: Arc::from([]),
         });
         result.width += advance;
+    }
+    let spacing = style.typography.length(Property::LetterSpacing, size);
+    if spacing != 0.0 {
+        let mut shift = 0.0;
+        let count = result.glyphs.len();
+        for i in 0..count {
+            let glyph = &mut result.glyphs[i];
+            glyph.x += shift;
+            if i + 1 == count
+                || output.glyph_infos()[i + 1].cluster != output.glyph_infos()[i].cluster
+            {
+                glyph.advance += spacing;
+                shift += spacing;
+            }
+        }
+        result.width += shift;
     }
 
     result

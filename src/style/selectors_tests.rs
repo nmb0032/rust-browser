@@ -292,7 +292,11 @@ fn content_grammar_invalid_computed_values_and_element_only_inline_styles() {
             .pseudo(id, PseudoElement::Before)
             .unwrap()
             .content,
-        Content::Items(vec![ContentItem::Text("good".into())])
+        Content::Items(vec![ContentItem::Counter {
+            name: "item".into(),
+            style: "decimal".into(),
+            separator: None
+        }])
     );
     assert_eq!(
         result
@@ -326,7 +330,7 @@ fn content_grammar_invalid_computed_values_and_element_only_inline_styles() {
             .content,
         Content::Normal
     );
-    assert!(result.stylesheets.diagnostics.len() >= 4);
+    assert!(result.stylesheets.diagnostics.len() >= 3);
 }
 
 #[test]

@@ -787,7 +787,7 @@ pub(super) fn assign_marker(
 ) {
     let style = child.marker_style.as_ref().unwrap_or(&child.style).clone();
     let metrics = font_metrics(font, &style, child.node_id, diagnostics);
-    let glyphs = font.shape(&style, &text);
+    let mut glyphs = font.shape(&style, &text);
     let baseline = (if child.local_root() {
         child.first_local_baseline()
     } else {
@@ -800,13 +800,51 @@ pub(super) fn assign_marker(
             baseline
         }
     });
+    let image = child.marker_image.clone();
+    let width = image
+        .as_ref()
+        .map_or(glyphs.width, |image| image.width() as f32);
+    let mut x = child.content_rect.x - width - style.font_size * 0.5;
+    let mut y = baseline - metrics.ascent;
+    let mut baseline = baseline;
+    if style.writing_mode.vertical() {
+        x = child.content_rect.x
+            + if style.writing_mode.block_reverse() {
+                child.content_rect.width - style.font_size * 0.5
+            } else {
+                style.font_size * 0.5
+            };
+        baseline = child.content_rect.y - glyphs.width - style.font_size * 0.5;
+        y = baseline;
+        let run = std::sync::Arc::make_mut(&mut glyphs);
+        for g in &mut run.glyphs {
+            let (gx, gy) = (g.x, g.y);
+            if style.writing_mode == crate::style::WritingMode::SidewaysLr {
+                g.x = -gy;
+                g.y = gx;
+                g.rotation = crate::text::GlyphRotation::CounterClockwise;
+            } else {
+                g.x = gy;
+                g.y = -gx;
+                g.rotation = if g.upright {
+                    crate::text::GlyphRotation::None
+                } else {
+                    crate::text::GlyphRotation::Clockwise
+                };
+            }
+        }
+    }
+    if let Some(image) = &image {
+        y = baseline - image.height() as f32;
+    }
     child.list_marker = Some(ListMarker {
-        x: child.content_rect.x - glyphs.width - style.font_size * 0.5,
-        y: baseline - metrics.ascent,
+        x,
+        y,
         baseline,
         text,
         glyphs,
         style,
+        image,
     });
 }
 

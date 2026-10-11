@@ -1,4 +1,4 @@
-# Native headless reftests (milestones 8.13–8.15)
+# Native headless reftests (milestones 8.13–8.16)
 
 Run from the repository root:
 
@@ -21,7 +21,8 @@ unsupported readiness mechanism, or render/decode error.
 and `capture` combines loading and rendering. This uses **the production HTML
 byte parser, resource loader, CSS cascade, container-query convergence, font
 selection/rustybuzz shaping, layout, display-list builder and fontdue/software
-rasterizer**. There is no screenshot proxy, character-based renderer, alternative
+rasterizer, variable/CFF2 outline masks and native color/bitmap glyph composition**.
+There is no screenshot proxy, character-based renderer, alternative
 layout engine, or UI capture path. Normal interactive loading remains unchanged.
 
 - Default viewport: **800×600 CSS pixels**, device scale **1**, light color scheme,
@@ -59,8 +60,9 @@ The harness always uses `FontContext::bundled()` (licensed Noto Sans bytes in
 `assets/fonts/noto-sans/NotoSans.ttf`, default font instance). No system font
 discovery occurs. Author `@font-face` URL sources still go through the production
 loader and affect both geometry and rasterization. `local()` is explicitly
-rejected; it cannot introduce platform-dependent fonts. Use static URL fonts:
-unsupported variable-font settings and fallback diagnostics fail visibly.
+rejected; it cannot introduce platform-dependent fonts. Static and variable URL
+fonts use the shared immutable glyph-instance pipeline. Unsupported format and
+fallback diagnostics fail visibly; available system emoji are never substituted.
 
 The shaping fixture loads the existing **static Noto Sans Italic** WOFF2 subset
 through an external stylesheet, CSS import and escaped CSS URL. Its independent
@@ -96,6 +98,25 @@ python3 tools/generate_replaced_fixture.py --check
 ```
 
 Both scales remain exact, without scripts, fuzzy tolerances or a full WPT claim.
+
+Milestone 8.16 adds **seven** typography pairs (**twenty-three total**):
+`typography-word-break`, `typography-justification`, `typography-decoration`,
+`typography-variable-font`, `typography-color-emoji`, `typography-lists` and
+`typography-text-transform`. Independently authored references use explicit
+breaks/positions, literal transformed/counter strings and geometric rectangles.
+The lists pair also loads an image marker through an external stylesheet-relative
+URL and compares it to original red/blue rectangles.
+
+`assets/fonts/typography/` contains original CC0 fonts with genuine variable
+TrueType gvar/HVAR, CFF2 blend/variation-store, COLR v0/CPAL layers/emoji GSUB
+and sbix PNG data. The color reference proves half-alpha palette composition;
+the same pair also checks actual font bitmap and CFF2 outlines at both scales.
+No assertion uses CSS images in place of a font glyph. See its `PROVENANCE.txt`
+for exact hashes, design-unit derivations and pinned FontTools reproduction.
+The fixtures intentionally cover only a small subset, not complete color-font
+formats/emoji sequences or browser typography parity. COLR v1, foreground
+palette entries, OpenType SVG and non-PNG bitmap strikes diagnose unsupported
+formats; the harness does not suppress these diagnostics.
 
 `--resource-root` defaults to the current directory. Every document, reference,
 CSS import, image and non-data font URL must resolve to an existing regular file

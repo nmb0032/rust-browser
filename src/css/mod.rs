@@ -15,6 +15,7 @@
 mod ast;
 pub mod container;
 pub(crate) mod control;
+pub mod counter_style;
 pub(crate) mod font_face;
 pub mod media;
 mod parser;

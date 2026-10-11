@@ -42,6 +42,7 @@ fn style(source: &str) -> ComputedStyle {
 fn projection(style: &ComputedStyle, property: Property) -> String {
     use Property as P;
     match property {
+        P::Typography(p) => format!("{:?}", style.typography.get(p)),
         P::Logical(_) => projection(style, property.physical(style)),
         P::Float => format!("{:?}", style.float),
         P::Clear => format!("{:?}", style.clear),
@@ -146,7 +147,7 @@ fn every_generated_property_field_matches_the_frozen_public_snapshot() {
             meta.inherited,
             match entry["inherited"].as_str() {
                 Some("yes") => Some(true),
-                Some("no") => Some(false),
+                Some("no" | "no (but see prose, above)") => Some(false),
                 _ => None,
             },
             "{name}"
@@ -232,18 +233,18 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 172, 586, 63]);
-    assert_eq!(longhands.len(), 125);
+    assert_eq!(counts, [0, 201, 557, 63]);
+    assert_eq!(longhands.len(), 152);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 123);
+    assert_eq!(all.len(), 150);
     longhands.remove(&Property::Direction);
     longhands.remove(&Property::UnicodeBidi);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **171 partial**, **586 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **200 partial**, **557 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**125 longhands**, **46 shorthands**"));
+    assert!(report.contains("**152 longhands**, **48 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -322,7 +323,7 @@ fn representative_spec_rules_remain_distinct_from_engine_policy_and_support() {
 #[test]
 fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule() {
     assert_eq!(style(""), ComputedStyle::default());
-    let inherited: Vec<_> = declarations::properties("all")
+    let inherited: BTreeSet<_> = declarations::properties("all")
         .unwrap()
         .into_iter()
         .filter(|property| property.inherited())
@@ -330,7 +331,7 @@ fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule()
         .collect();
     assert_eq!(
         inherited,
-        &[
+        [
             "color",
             "-webkit-text-fill-color",
             "border-collapse",
@@ -347,8 +348,30 @@ fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule()
             "font-family",
             "font-weight",
             "font-style",
-            "line-height"
+            "line-height",
+            "word-break",
+            "overflow-wrap",
+            "line-break",
+            "hyphens",
+            "text-transform",
+            "text-justify",
+            "letter-spacing",
+            "word-spacing",
+            "text-underline-offset",
+            "text-underline-position",
+            "text-decoration-skip-ink",
+            "font-feature-settings",
+            "font-variation-settings",
+            "font-optical-sizing",
+            "font-kerning",
+            "font-variant-ligatures",
+            "font-width",
+            "list-style-type",
+            "list-style-position",
+            "list-style-image"
         ]
+        .into_iter()
+        .collect()
     );
     for &(name, sample) in generated_properties::SAMPLES {
         let properties = declarations::properties(name).unwrap();

@@ -1,0 +1,28 @@
+Original geometric test fonts, CC0-1.0 (see LICENSE).
+No system fonts, upstream outlines or downloaded artwork are used.
+
+Reproduction:
+  Python 3 with fonttools==4.60.1
+  python3 tools/generate_typography_fonts.py
+The generator pins OpenType timestamps and removes its project-local masters.
+FontTools is MIT-licensed; no FontTools source is embedded in these fonts.
+
+SHA-256:
+GeometryVariable.ttf 0fe826ac459ba5f1ef567d9d37541602528e57242146636f0365ad32191c7b54
+GeometryColor.ttf ed3ebef9007e1a8c193c72f5d9c0828f2ecd7971fbac07d0353665c1ea5c0eec
+GeometryBitmap.ttf 45154fce1ef48ab63638a8eff5fffc67ca9b22def57d0e88b4251a31f4e02b94
+GeometryCFF2.otf 40a2a3010dca0fcdc698ad888457b4eae01826e04f3b0baec973098f25e95aaf
+
+All use 1000 units/em, ascent 800, descent -200, with rectangular test outlines.
+Geometry Variable has wght 100/400/900: widths 300/500/800, advances 400/600/900.
+It contains real gvar/HVAR data, not three static faces.
+Geometry CFF2 has a real CFF2 blend and variation store: width 500 at weight
+400, width 800 at weight 900; advance remains 600 by design.
+Geometry Color uses COLR v0 layers and CPAL red and half-alpha blue. Its GSUB
+maps family ZWJ, US regional flag and skin modifier sequences to single glyphs.
+Geometry Bitmap has an actual 20ppem sbix PNG strike: 10x14 red/purple pixels,
+no CSS image substitution. The PNG is generated solely with Python's stdlib.
+
+The fonts intentionally provide tiny test coverage, not usable typefaces.
+Independent reftest rectangles derive from these documented design units,
+not screenshots produced by the engine.

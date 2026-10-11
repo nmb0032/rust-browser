@@ -1,0 +1,11 @@
+<!doctype html>
+<link rel=match href="references/typography-lists-ref.html">
+<link rel=stylesheet href="support/typography.css">
+<style>
+@counter-style binary-letters { system:alphabetic; symbols:"A" "B"; suffix:" "; }
+main { counter-reset:section; }
+div { counter-increment:section; }
+div::before { content:counter(section,binary-letters) " "; }
+ol { margin:0;padding:0;list-style:binary-letters inside; }
+</style>
+<main class=geometry><div>A</div><div>B</div><ol start=3><li>A</li><li>B</li></ol><ul class=image-list><li>A</li></ul></main>

@@ -94,7 +94,7 @@ pub(super) struct BoxData {
 pub(super) enum Token {
     Begin(usize),
     End(usize),
-    Text(usize, String, f32),
+    Text(usize, String, f32, Option<crate::text::SourceSpan>),
     Glyphs(usize, String, std::sync::Arc<crate::text::ShapedText>),
     Space(usize, char, f32, bool),
     Control(usize, char),
@@ -116,7 +116,7 @@ impl Token {
                 let b = &boxes[*id];
                 b.padding.right as f64 + b.border.right as f64 + b.margin.right as f64
             }
-            Self::Text(_, _, width) | Self::Space(_, _, width, _) => *width as f64,
+            Self::Text(_, _, width, _) | Self::Space(_, _, width, _) => *width as f64,
             Self::Glyphs(_, _, run) => run.width as f64,
             Self::Image(id) => {
                 let b = &boxes[*id];
@@ -548,7 +548,17 @@ fn collect(
                     ),
                 });
             } else {
-                tokens.push(Token::Text(id, text.clone(), 0.0));
+                tokens.push(Token::Text(
+                    id,
+                    text.clone(),
+                    0.0,
+                    Some(crate::text::SourceSpan {
+                        node_id: layout.node_id,
+                        source: std::sync::Arc::from(text.as_str()),
+                        start: 0,
+                        end: text.len(),
+                    }),
+                ));
             }
         }
     } else {
@@ -587,6 +597,8 @@ struct Assembly<'a> {
     x: f32,
     width: f32,
     align: TextAlign,
+    last_align: crate::style::TextAlignLast,
+    justify: crate::style::typography::Keyword,
     direction: Direction,
     strut: FontMetrics,
     above: f32,
@@ -783,10 +795,12 @@ impl Assembly<'_> {
                 self.items.push((Token::Image(id), self.x));
                 self.advance(advance, self.boxes[id].node);
             }
-            Token::Text(id, text, width) => {
+            Token::Text(id, text, width, source) => {
                 self.contribute(self.boxes[id].metrics);
-                if let Some((Token::Text(previous_id, previous_text, previous_width), previous_x)) =
-                    self.items.last_mut()
+                if let Some((
+                    Token::Text(previous_id, previous_text, previous_width, _),
+                    previous_x,
+                )) = self.items.last_mut()
                     && !self.bidi
                     && *previous_id == id
                     && (*previous_x + *previous_width - self.x).abs() < 0.001
@@ -794,7 +808,8 @@ impl Assembly<'_> {
                     previous_text.push_str(&text);
                     *previous_width += width;
                 } else {
-                    self.items.push((Token::Text(id, text, width), self.x));
+                    self.items
+                        .push((Token::Text(id, text, width, source), self.x));
                 }
                 self.advance(width as f64, self.boxes[id].node);
             }
@@ -1268,6 +1283,10 @@ pub(super) fn layout_inline_run(
         y,
         width,
         align: style.text_align,
+        last_align: style.text_align_last,
+        justify: style
+            .typography
+            .keyword(crate::style::typography::Property::TextJustify),
         direction: style.direction,
         strut,
         above: strut.above,
@@ -1325,6 +1344,10 @@ pub(super) fn intrinsic_inline(
         x: 0.0,
         width,
         align: style.text_align,
+        last_align: style.text_align_last,
+        justify: style
+            .typography
+            .keyword(crate::style::typography::Property::TextJustify),
         direction: style.direction,
         strut,
         above: strut.above,

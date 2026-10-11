@@ -4,7 +4,7 @@ use crate::{
     css::values::{Edges, Length, LengthOrAuto, LineHeight, ResolvedColor, UsedLength},
     dom::{Document, NodeId, NodeKind},
     media::{DecodedImage, ImageMap},
-    style::{self, ComputedStyle, ComputedStyles, Content, Diagnostic, Display, PseudoElement},
+    style::{self, ComputedStyle, ComputedStyles, Diagnostic, Display, PseudoElement},
 };
 
 use super::{Rect, block::layout_children, replaced::ImageContent};
@@ -58,6 +58,7 @@ pub struct ListMarker {
     pub text: String,
     pub glyphs: Arc<crate::text::ShapedText>,
     pub style: ComputedStyle,
+    pub image: Option<Arc<DecodedImage>>,
 }
 
 /// Line extent includes the parent strut and baseline-aligned participants'
@@ -122,6 +123,7 @@ pub struct LayoutBox {
     pub(super) pseudo: Option<PseudoElement>,
     pub(super) marker_style: Option<ComputedStyle>,
     pub(super) marker_text: Option<String>,
+    pub(super) marker_image: Option<Arc<DecodedImage>>,
     pub(super) inline_start: bool,
     pub(super) inline_end: bool,
     pub(super) table_span: (usize, usize),
@@ -814,8 +816,21 @@ pub fn build_layout_tree_with_resources(
     styles: &ComputedStyles,
     images: &ImageMap,
 ) -> LayoutTree {
+    build_layout_tree_with_marker_resources(document, styles, images, &ImageMap::new())
+}
+
+pub(crate) fn build_layout_tree_with_marker_resources(
+    document: &Document,
+    styles: &ComputedStyles,
+    images: &ImageMap,
+    markers: &ImageMap,
+) -> LayoutTree {
     let mut diagnostics = Vec::new();
-    let mut identity = Construction::default();
+    let mut identity = Construction {
+        generated: super::counters::evaluate(document, styles, &mut diagnostics),
+        images: markers.clone(),
+        ..Default::default()
+    };
     let root = build_box(
         document,
         document.root_id(),
@@ -848,6 +863,8 @@ struct Construction {
     positioned: Option<usize>,
     flex_parent: bool,
     grid_parent: bool,
+    generated: super::counters::Generated,
+    images: ImageMap,
 }
 
 impl Construction {
@@ -1225,35 +1242,45 @@ fn finish_box(
         }
         if let Some(marker) = styles.pseudo(node_id, PseudoElement::Marker) {
             marker_style = Some(marker.clone());
-            marker_text = match &marker.content {
-                Content::Normal => None,
-                Content::None => Some(String::new()),
-                _ => generated_text(
-                    &marker.content,
-                    element,
-                    node_id,
-                    PseudoElement::Marker,
-                    diagnostics,
-                )
-                .or_else(|| Some(String::new())),
-            };
         }
     }
-    if style.display.is_list_item()
-        && marker_text.is_none()
-        && let Some(parent) = node.parent().and_then(|id| document.node(id))
-        && parent
-            .as_element()
-            .is_some_and(|e| e.tag_name().eq_ignore_ascii_case("ol"))
-    {
-        let ordinal = 1 + parent
-            .children()
-            .iter()
-            .take_while(|&&id| id != node_id)
-            .filter(|&&id| styles.get(id).is_some_and(|s| s.display.is_list_item()))
-            .count();
-        marker_text = Some(format!("{ordinal}."));
+    if style.display.is_list_item() {
+        marker_text = identity.generated.markers.get(&node_id).cloned();
+        if style
+            .typography
+            .keyword(style::typography::Property::ListPosition)
+            == style::typography::Keyword::Outside
+            && let Some(text) = &mut marker_text
+        {
+            text.truncate(text.trim_end_matches(' ').len());
+        }
+        if style
+            .typography
+            .keyword(style::typography::Property::ListPosition)
+            == style::typography::Keyword::Inside
+            && let Some(element) = node.as_element()
+            && let Some(marker) = generated_box(
+                node_id,
+                element,
+                styles,
+                PseudoElement::Marker,
+                diagnostics,
+                identity,
+            )
+        {
+            children.insert(0, marker);
+            marker_text = Some(String::new());
+        }
     }
+    let marker_image = if style.display.is_list_item()
+        && matches!(
+            style.typography.get(style::typography::Property::ListImage),
+            style::typography::Value::Image(Some(_))
+        ) {
+        identity.images.get(&node_id).cloned()
+    } else {
+        None
+    };
     let mut layout_box = LayoutBox {
         box_id,
         parent_box,
@@ -1291,6 +1318,7 @@ fn finish_box(
         pseudo: None,
         marker_style,
         marker_text,
+        marker_image,
         inline_start: true,
         inline_end: true,
         table_span: node.as_element().map_or((1, 1), |e| {
@@ -1383,6 +1411,7 @@ fn finish_box(
             pseudo: None,
             marker_style: None,
             marker_text: None,
+            marker_image: None,
             inline_start: true,
             inline_end: true,
             table_span: (1, 1),
@@ -1510,6 +1539,7 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         pseudo: None,
         marker_style: None,
         marker_text: None,
+        marker_image: None,
         inline_start: true,
         inline_end: true,
         table_span: (1, 1),
@@ -1574,17 +1604,46 @@ fn generated_box(
     element: &crate::dom::ElementData,
     styles: &ComputedStyles,
     pseudo: PseudoElement,
-    diagnostics: &mut Vec<Diagnostic>,
+    _diagnostics: &mut Vec<Diagnostic>,
     identity: &mut Construction,
 ) -> Option<LayoutBox> {
-    let mut style = Box::new(styles.pseudo(node_id, pseudo)?.clone());
+    let mut style = Box::new(if pseudo == PseudoElement::Marker {
+        styles.pseudo(node_id, pseudo).cloned().unwrap_or_else(|| {
+            ComputedStyle::inherit(styles.get(node_id).expect("list item style"))
+        })
+    } else {
+        styles.pseudo(node_id, pseudo)?.clone()
+    });
+    if pseudo == PseudoElement::Marker {
+        style.display = Display::Inline;
+    }
     if (identity.flex_parent || identity.grid_parent) && !style.position.out_of_flow() {
         style.display = style.display.blockified();
     }
     if style.display == Display::None {
         return None;
     }
-    let text = generated_text(&style.content, element, node_id, pseudo, diagnostics)?;
+    let mut text = if pseudo == PseudoElement::Marker {
+        identity.generated.markers.get(&node_id).cloned()?
+    } else {
+        identity.generated.text.get(&(node_id, pseudo)).cloned()?
+    };
+    let mut marker_text = identity
+        .generated
+        .pseudo_markers
+        .get(&(node_id, pseudo))
+        .cloned();
+    if style.display.is_list_item()
+        && style
+            .typography
+            .keyword(style::typography::Property::ListPosition)
+            == style::typography::Keyword::Inside
+    {
+        text.insert_str(0, marker_text.as_deref().unwrap_or(""));
+        marker_text = Some(String::new());
+    } else if let Some(marker) = &mut marker_text {
+        marker.truncate(marker.trim_end_matches(' ').len());
+    }
     let box_id = identity.allocate();
     let text_box = LayoutBox {
         orthogonal_inline: false,
@@ -1620,10 +1679,18 @@ fn generated_box(
         inline_fragments: Vec::new(),
         line_boxes: Vec::new(),
         list_marker: None,
-        image: None,
+        image: if pseudo == PseudoElement::Marker {
+            identity
+                .images
+                .get(&node_id)
+                .map(|image| ImageContent::new(element, Some(image.clone())))
+        } else {
+            None
+        },
         pseudo: Some(pseudo),
         marker_style: None,
         marker_text: None,
+        marker_image: None,
         inline_start: true,
         inline_end: true,
         table_span: (1, 1),
@@ -1680,7 +1747,8 @@ fn generated_box(
         image: None,
         pseudo: Some(pseudo),
         marker_style: None,
-        marker_text: None,
+        marker_text,
+        marker_image: None,
         inline_start: true,
         inline_end: true,
         table_span: (1, 1),
@@ -1694,21 +1762,4 @@ fn generated_box(
         normalize_item_children(&mut generated, identity);
     }
     Some(generated)
-}
-
-fn generated_text(
-    content: &Content,
-    element: &crate::dom::ElementData,
-    node_id: NodeId,
-    pseudo: PseudoElement,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<String> {
-    content.text_with_diagnostic(element, |message| {
-        report_used_failure(
-            diagnostics,
-            Some(node_id),
-            &format!("content::{}", pseudo.name()),
-            message,
-        );
-    })
 }

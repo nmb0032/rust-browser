@@ -16,8 +16,8 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 125)
-        self.assertEqual(len(supported), 172)
+        self.assertEqual(len(longhands), 152)
+        self.assertEqual(len(supported), 201)
         for name in ("aspect-ratio", "object-fit", "object-position"):
             self.assertIn(name, supported)
         self.assertNotIn("display", self.engine["simple_values"])
@@ -48,7 +48,8 @@ class GenerationTests(unittest.TestCase):
                           "border-block-end-style", "border-block-end-color"])
         self.assertEqual(supported["background"]["targets"],
                          ["background-color", "background-image"])
-        self.assertIn("font-variant-ligatures", supported["font"]["missing"])
+        self.assertIn("font-variant-ligatures", supported["font"]["targets"])
+        self.assertIn("font-variant-caps", supported["font"]["missing"])
         self.assertIn("border-image-source", supported["border"]["missing_reset"])
         self.assertIn("background-blend-mode", supported["background"]["missing_reset"])
 

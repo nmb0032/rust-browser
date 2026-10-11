@@ -2972,7 +2972,8 @@ and the CSSOM parts covered here meet the conformance gate.
   ratio math, full bidirectional ratio constraint transfer and
   cyclic/orthogonal percentage feedback, advanced baseline
   groups and fragmentation remain explicitly unsupported or finite partial
-  behavior in generated coverage. **8.16 and subsequent steps are untouched.**
+  behavior in generated coverage. Later typography work is recorded in 8.16
+  below; transforms/effects and subsequent steps remain untouched.
 
   **Validated:** `cargo test --all-features` passes **812 tests** (713 library
   plus 99 integration tests, including 26 new rendered-layout contracts).
@@ -2982,11 +2983,150 @@ and the CSSOM parts covered here meet the conformance gate.
   all sixteen assertion pages with `--device-scale 1` and `--device-scale 2`;
   native PNG/manifest evidence is under
   `target/reftests/m815-scale1` and `target/reftests/m815-scale2`.
-- [ ] **8.16 Complete text and fonts.** Implement CSS Text 3 and 4 (including
+- [x] **8.16 Complete text and fonts.** Implement CSS Text 3 and 4 (including
   justification, hyphenation, `word-break`, and `text-transform`), Text
   Decoration 4, CSS Fonts 4 (including variable, color, and emoji fonts),
   Unicode text segmentation (UAX #29), CSS Lists 3, and Counter Styles 3.
   *You'll see:* text-heavy multilingual pages match browser rendering.
+
+  **Implemented finite production pipeline, not full-spec/browser parity:**
+  typed CSS Text/Decoration/Fonts/Lists values participate in the existing
+  generated property registry, CSS-wide keywords, variables, origins, layers,
+  rollback and inheritance. The registry exposes **152 longhands and 48
+  shorthands**, with all supported fields reset by `all` and the supported font
+  reset targets reset by `font`. Entries remain **partial**, not “implemented”
+  conformance claims. `tests/pages/typography.html` is the multilingual,
+  text-heavy local demonstration; its resources use the normal loader.
+
+  **Text and segmentation:** UAX #29 extended graphemes and word boundaries,
+  UAX #14 opportunities and paragraph/selected-line UAX #9 ordering share the
+  logical token stream and immutable shaped glyphs. `word-break` normal,
+  keep-all and break-all; `overflow-wrap` normal, anywhere and break-word; and
+  `line-break` auto/normal/strict/loose/anywhere affect actual line fitting.
+  Emergency breaks retain whole graphemes and mandatory shaping clusters.
+  Anywhere contributes emergency opportunities to min-content; break-word
+  does not. Strict/loose tailoring is a finite Japanese punctuation subset,
+  not the complete East Asian line-breaking tables.
+
+  Hyphens none/manual and English-US auto use embedded licensed Knuth–Liang
+  patterns, not a hand-written word dictionary. Auto requires inherited
+  `lang=en` or `en-US`; other/missing languages diagnose manual fallback.
+  Words are bounded to 128 UTF-8 bytes, with minimum prefix 2/suffix 3, and
+  paragraph word work is bounded. Provenance, input hashes and redistribution
+  notices are in `assets/hyphenation/NOTICE`. Discretionary glyph insertion
+  continues to use selected-line contextual shaping and the existing work
+  budget; relayout never modifies source DOM text.
+
+  Unicode upper/lower/capitalize expansions, Turkish/Azeri dotted/dotless I,
+  contextual Greek final sigma and Lithuanian combining-dot cases use inherited
+  language. Capitalize uses Unicode word boundaries. Full-width supports ASCII
+  letters/digits/punctuation and ideographic space advance; full-size-kana
+  covers the implemented hiragana, katakana and small Ainu mappings.
+  Halfwidth-kana normalization, complete Greek uppercase accent tailoring and
+  all language-specific special-casing rules are not claimed. Display bytes
+  map back to original decoded text byte spans and DOM owners, including
+  clusters crossing nodes; paint-only differences do not split graphemes.
+  Selected-line reshaping reuses those spans, rather than turning transformed
+  bytes into DOM offsets.
+
+  Justification distributes finite inter-word/inter-character opportunities
+  **only on selected lines**, before visual glyph placement, including bidi
+  and native vertical flow. Auto selects the implemented Latin/CJK policy;
+  none suppresses expansion. Independent text-align-last handles final and
+  forced-break lines; shorthand resets it to auto. Finite signed letter/word
+  lengths feed both advances and paint positions. Optional ligatures may be
+  disabled for spacing/emergency breaks; mandatory clusters remain indivisible.
+  Script-specific kashida/Thai expansion, text-wrap balance/pretty, line clamps
+  and the full Text 4 algorithms remain rejected/unimplemented.
+
+  **Decorations:** independently propagated ancestor sources carry their
+  original color, font instance and size across descendants; this is not
+  inheritance of text-decoration-line. Atomic inline, positioned and float
+  barriers stop propagation. Underline, overline and line-through produce
+  native software display-list strokes in horizontal or vertical geometry,
+  including solid/double/dotted/dashed/wavy styles, auto/from-font or finite
+  length/percentage thickness, underline offset/side and conservative glyph-ink
+  exclusions. Sources are bounded to 32. Complex script-specific underline
+  placement, complete skip-ink heuristics, emphasis/ruby and fragmentation
+  geometry remain finite/unsupported, not SVG screenshot substitutes.
+
+  **Fonts and pixels:** numeric weights and author weight ranges, font-width,
+  feature settings, variation settings, optical sizing, kerning and ligature
+  controls reach real OpenType selection/shaping. Sorted declared axes are
+  clamped; automatic wght/wdth/ital/slnt/opsz and explicit overrides are shared
+  by rustybuzz, selected-face units and outline rasterization. Glyph and bitmap
+  caches include instance coordinates and device size; document author overlays
+  do not contaminate the parent font cache. Static/default outlines retain
+  fontdue pixels, while Swash rasterizes nondefault TrueType and CFF2 outlines.
+  CFF2 never routes through fontdue's unsupported default-outline path.
+
+  COLR v0/CPAL layer masks use explicit integer RGBA composition, preserving
+  palette alpha independently of CSS fill. Bounded PNG strikes in CBDT/sbix
+  use the production image decoder, with nearest-neighbor strike scaling and
+  the common clipping/rotated-glyph raster path at device scales 1/2.
+  Emoji family ZWJ, regional flag, modifier and variation-selector coverage
+  is selected by whole grapheme, not separate scalar/system-font guesses.
+  COLR v1 graphs, foreground-palette entries, SVG font execution and non-PNG
+  bitmap encodings diagnose their specific unsupported fallback. Only palette
+  zero is selected; font-palette, timed font-display and advanced font
+  descriptors/synthesis remain outside this finite scope.
+
+  Font byte/face/glyph/fallback budgets remain in force. Instance axes are
+  bounded to 64; raster size to 2048 device pixels; decoded/target glyph masks
+  to 1,048,576 pixels; PNG bytes to 4 MiB and per-face bitmap cache to 1024
+  entries/2 MiB retention policy. Layer counts/outline bounds and PNG header
+  dimensions are checked **before** large raster allocations. Original CC0
+  fixtures provide real gvar/HVAR, CFF2 blend/variation-store, COLR/CPAL/GSUB
+  and sbix PNG data. Their version-pinned generator, design units, SHA-256
+  hashes and waiver are in `assets/fonts/typography/PROVENANCE.txt`/`LICENSE`.
+  They are deliberately tiny test fonts, not comprehensive emoji/script fonts.
+
+  **Lists and counters:** reset → increment → set runs once in DOM/pseudo
+  order before box construction, with scoped stacks, generated counter()/counters()
+  text, HTML ol start/reversed/li value and CSS precedence. Display:contents
+  preserves counter ancestry and contributes list items to reversed counts.
+  Inside markers join the inline stream; outside markers retain negative
+  overflow geometry. Real shaped marker font/color and local-policy marker
+  images use production layout/paint. Marker resources are separate from
+  replaced-element images, preserving both on the same node; external CSS URLs
+  resolve against their stylesheet source before policy checks.
+
+  Typed @counter-style rules use active conditions, imports, origin/layer/source
+  ordering, cyclic/fixed/symbolic/alphabetic/numeric/additive/extends systems,
+  symbols/additive-symbols, ranges, padding, negative, prefix/suffix and fallback.
+  Decimal, alpha/Latin/Greek, Roman, bullets and selected international decimal
+  digit systems are built in. Cycles/depth/output work use diagnosed decimal
+  fallback rather than recursion/panics. Bounds include 256 symbols/additive
+  entries, 64 ranges, 16 formatting depth, 4096 formatting pieces,
+  65,536 output bytes, 1024 counter names, 256 scope depth and 1 MiB document
+  work. Speech/speak-as, image counter symbols, reversed() CSS resets, complete
+  international systems and the full generated-content/marker property model
+  remain diagnosed/rejected or outside the accepted grammar.
+
+  **Verification:** sixteen added layout/shaping/raster contracts exercise
+  real instances and masks, source ownership/expansions, legal wrapping and
+  intrinsic distinctions, licensed hyphens, bidi/vertical justification,
+  ancestor decoration barriers, bounded custom styles and scoped/HTML/pseudo
+  counters. Seven additional independent native assertion/reference pairs
+  cover wrapping, justification, decorations, variable outlines, color/bitmap/
+  CFF2 glyphs, list/counter/image resources and multilingual casing. References
+  use explicit breaks, literal transformed/counter text or independently
+  derived rectangles; they do not reuse the tested algorithms.
+  Twenty-three native assertion pages compare exactly at device scales 1/2,
+  without fuzzy tolerance, network, scripts or system fonts.
+  `cargo test --all-features` passes **828 tests** (729 library plus 99
+  integration tests). All-feature/all-target strict Clippy with `-D warnings`,
+  benchmark compilation, formatting, seven offline generator tests, both
+  deterministic generator checks and `git diff --check` pass. Reproducing all
+  four original typography fonts twice preserves their recorded SHA-256 hashes.
+  The native CLI passes all twenty-three assertion pages at both scales;
+  PNG/manifest evidence is under `target/reftests/m816-scale1` and
+  `target/reftests/m816-scale2`. The multilingual demonstration also renders
+  through the native screenshot loader at both scales using declared local
+  Arabic, Hebrew and Japanese faces, with no render diagnostics.
+  This checkbox records the bounded implemented step; **the milestone exit
+  criteria and external/full-WPT typography conformance gate remain unmet**.
+  **8.17 and later work are untouched.**
 - [ ] **8.17 Add transforms, effects, and compositing.** Implement 2D and 3D
   transforms, `opacity`, filters, `backdrop-filter`, Compositing and Blending,
   masking, `clip-path`, and the stacking contexts they create.

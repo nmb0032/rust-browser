@@ -256,6 +256,7 @@ fn author_weight_matching_uses_css_search_order_and_precedes_installed_families(
             family: "Noto Sans".into(),
             sources: vec![FontSource::Local("fixture".into())],
             weight,
+            weight_range: (weight, weight),
             style: FontStyle::Normal,
             ranges: vec![(0, 0x10ffff)],
         },

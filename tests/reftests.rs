@@ -162,7 +162,7 @@ fn complete_native_suite_is_exact_and_mismatch_has_nonzero_pixels_at_two_scales(
             &options,
         )
         .unwrap();
-        assert_eq!(report.outcomes.len(), 16);
+        assert_eq!(report.outcomes.len(), 23);
         assert!(report.passed(), "{report:#?}");
         let mismatch = report
             .outcomes

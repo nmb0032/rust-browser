@@ -18,6 +18,7 @@
 
 mod bidi;
 mod block;
+mod counters;
 mod flex;
 mod floats;
 mod geometry;
@@ -30,6 +31,8 @@ mod sizing;
 mod stacking;
 mod table;
 mod tree;
+#[cfg(test)]
+mod typography_tests;
 mod writing;
 
 pub use geometry::{ActualRect, Rect};
@@ -37,6 +40,7 @@ pub use overflow::{
     ClipRect, ScrollContainer, ScrollOffset, ScrollRange, ScrollState, Scrollbar, SpatialState,
 };
 pub(crate) use stacking::{PaintPhase, paint_order};
+pub(crate) use tree::build_layout_tree_with_marker_resources;
 pub use tree::{
     BoxKind, CoordinateSpace, InlineFragment, LayoutBox, LayoutTree, LineBox, ListMarker,
     TextFragment, build_layout_tree, build_layout_tree_with_resources,

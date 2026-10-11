@@ -75,6 +75,31 @@ pub(crate) fn rasterize_display_list(
         .intersect(framebuffer);
         let clip = object_clip.map_or(clip, |object| clip.intersect(object));
         match item {
+            DisplayItem::TextDecoration {
+                rect,
+                horizontal,
+                style,
+                color,
+            } => {
+                let rect = crate::layout::Rect {
+                    x: (rect.x + spatial.offset.x) * scale,
+                    y: (rect.y + spatial.offset.y - item_scroll) * scale,
+                    width: rect.width * scale,
+                    height: rect.height * scale,
+                };
+                let (foreground, alpha) = color.to_srgb8();
+                draw_decoration(
+                    pixels,
+                    width,
+                    height,
+                    clip,
+                    rect,
+                    *horizontal,
+                    *style,
+                    foreground,
+                    alpha,
+                );
+            }
             DisplayItem::ObjectClip(rect) => {
                 object_clip = Some(PixelRect {
                     left: edge(rect.x + spatial.offset.x),
@@ -83,6 +108,7 @@ pub(crate) fn rasterize_display_list(
                     bottom: edge(rect.y + spatial.offset.y + rect.height - item_scroll),
                 })
             }
+
             DisplayItem::ObjectClipEnd => object_clip = None,
             DisplayItem::Spatial(state) => spatial = *state,
             DisplayItem::CoordinateSpace(space) => {
@@ -217,6 +243,76 @@ pub(crate) fn rasterize_display_list(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn draw_decoration(
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+    clip: PixelRect,
+    rect: crate::layout::Rect,
+    horizontal: bool,
+    style: crate::style::typography::Keyword,
+    color: u32,
+    alpha: u32,
+) {
+    use crate::style::typography::Keyword as K;
+    let thickness = if horizontal { rect.height } else { rect.width };
+    if !thickness.is_finite() || thickness <= 0.0 {
+        return;
+    }
+    let extent = if matches!(style, K::Double | K::Wavy) {
+        thickness * 3.0
+    } else {
+        thickness
+    };
+    let left = rect.x.floor().clamp(0.0, width as f32) as i32;
+    let top = rect.y.floor().clamp(0.0, height as f32) as i32;
+    let right = (rect.x + if horizontal { rect.width } else { extent })
+        .ceil()
+        .clamp(0.0, width as f32) as i32;
+    let bottom = (rect.y + if horizontal { extent } else { rect.height })
+        .ceil()
+        .clamp(0.0, height as f32) as i32;
+    for y in top..bottom {
+        for x in left..right {
+            if !clip.contains(x, y) {
+                continue;
+            }
+            let (along, across) = if horizontal {
+                (x as f32 + 0.5, y as f32 + 0.5 - rect.y)
+            } else {
+                (y as f32 + 0.5, x as f32 + 0.5 - rect.x)
+            };
+            let phase = along.rem_euclid(thickness * 6.0);
+            let hit = match style {
+                K::Double => {
+                    (0.0..thickness).contains(&across)
+                        || (thickness * 2.0..thickness * 3.0).contains(&across)
+                }
+                K::Dashed => across < thickness && phase < thickness * 3.0,
+                K::Dotted => {
+                    (along.rem_euclid(thickness * 2.0) - thickness * 0.5).powi(2)
+                        + (across - thickness * 0.5).powi(2)
+                        <= (thickness * 0.5).powi(2)
+                }
+                K::Wavy => {
+                    (across
+                        - (thickness * 1.5
+                            + (along / (thickness * 6.0) * std::f32::consts::TAU).sin()
+                                * thickness))
+                        .abs()
+                        <= thickness * 0.5
+                }
+                _ => (0.0..thickness).contains(&across),
+            };
+            if hit {
+                let index = y as usize * width + x as usize;
+                pixels[index] = blend(pixels[index], color, alpha);
+            }
+        }
+    }
+}
+
 fn draw_outline_rect(
     pixels: &mut [u32],
     width: usize,
@@ -331,7 +427,11 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
         {
             continue;
         }
-        let Some(bitmap) = glyph.face.rasterized(glyph.id, glyph.size * run.scale) else {
+        let Some(bitmap) =
+            glyph
+                .face
+                .instance_bitmap(glyph.id, glyph.size * run.scale, &glyph.coordinates)
+        else {
             continue;
         };
         let metrics = &bitmap.metrics;
@@ -378,10 +478,21 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
                     continue;
                 }
 
-                let coverage =
-                    bitmap.pixels[glyph_y * metrics.width + glyph_x] as u32 * run.alpha / 255;
+                let sample = glyph_y * metrics.width + glyph_x;
+                let (foreground, coverage) = if bitmap.color {
+                    let rgba = &bitmap.pixels[sample * 4..sample * 4 + 4];
+                    (
+                        (u32::from(rgba[0]) << 16) | (u32::from(rgba[1]) << 8) | u32::from(rgba[2]),
+                        u32::from(rgba[3]) * run.alpha / 255,
+                    )
+                } else {
+                    (
+                        run.color,
+                        u32::from(bitmap.pixels[sample]) * run.alpha / 255,
+                    )
+                };
                 let index = y as usize * width + x as usize;
-                pixels[index] = blend(pixels[index], run.color, coverage);
+                pixels[index] = blend(pixels[index], foreground, coverage);
                 let (bold_x, bold_y) = match glyph.rotation {
                     crate::text::GlyphRotation::None => (x + 1, y),
                     crate::text::GlyphRotation::Clockwise => (x, y + 1),

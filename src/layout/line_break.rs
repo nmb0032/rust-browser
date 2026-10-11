@@ -5,6 +5,7 @@
 use unicode_linebreak::{BreakClass, BreakOpportunity, break_property, linebreaks};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::style::typography::{Keyword as K, Property as P};
 use crate::style::{ComputedStyle, TextWrapMode, WhiteSpaceCollapse};
 
 use super::{Assembly, BoxData, Token, finite_used};
@@ -21,7 +22,7 @@ fn bound_paragraph(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
             Token::End(id) => super::super::bidi::controls(&assembly.boxes[*id].style)
                 .1
                 .len(),
-            Token::Text(_, text, _) | Token::Glyphs(_, text, _) => text.len(),
+            Token::Text(_, text, _, _) | Token::Glyphs(_, text, _) => text.len(),
             t => character(t).map_or(0, |(_, c)| c.len_utf8()),
         })
         .sum();
@@ -44,7 +45,9 @@ fn bound_paragraph(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
 }
 fn character(token: &Token) -> Option<(usize, char)> {
     match token {
-        Token::Text(id, text, _) | Token::Glyphs(id, text, _) => Some((*id, text.chars().next()?)),
+        Token::Text(id, text, _, _) | Token::Glyphs(id, text, _) => {
+            Some((*id, text.chars().next()?))
+        }
         Token::Space(id, character, ..) | Token::Control(id, character) => Some((*id, *character)),
         Token::Image(id) => Some((*id, '\u{fffc}')),
         Token::Break(id) => Some((*id, '\n')),
@@ -68,13 +71,18 @@ fn han_or_kana(c: char) -> bool {
 fn normalize(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
     let mut result = Vec::new();
     for token in tokens {
-        let Token::Text(id, text, _) = token else {
+        let Token::Text(id, text, _, source) = token else {
             result.push(token);
             continue;
         };
         let b = &assembly.boxes[id];
         let mode = b.style.white_space_collapse;
-        for c in text.chars() {
+        for (offset, c) in text.char_indices() {
+            let span = source.as_ref().map(|source| crate::text::SourceSpan {
+                start: source.start + offset,
+                end: source.start + offset + c.len_utf8(),
+                ..source.clone()
+            });
             let c = if c == '\r' { ' ' } else { c };
             let token = match c {
                 '\n' if mode.preserves_breaks() => Token::Break(id),
@@ -84,17 +92,14 @@ fn normalize(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
                     if c == '\t' && mode.preserves_spaces() {
                         0.0
                     } else {
-                        assembly
-                            .font
-                            .select(&b.style)
-                            .metrics(' ', b.style.font_size)
-                            .advance_width
+                        assembly.font.shape(&b.style, " ").width
+                            + b.style.typography.length(P::WordSpacing, b.style.font_size)
                     },
                     mode.preserves_spaces(),
                 ),
                 '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}' => Token::Break(id),
                 c if super::nonprinting(c) => Token::Control(id, c),
-                _ => Token::Text(id, c.to_string(), 0.0),
+                _ => Token::Text(id, c.to_string(), 0.0, span),
             };
             result.push(token);
         }
@@ -157,6 +162,103 @@ fn normalize(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
         if let Token::Space(_, c, _, false) = token {
             *c = ' ';
         }
+        if let Token::Space(id, c @ ' ', width, _) = token
+            && let crate::style::typography::Value::Transform(transform) = assembly.boxes[*id]
+                .style
+                .typography
+                .get(crate::style::typography::Property::TextTransform)
+            && transform.full_width
+        {
+            let style = &assembly.boxes[*id].style;
+            *c = '\u{3000}';
+            *width = style.font_size
+                + style.typography.length(
+                    crate::style::typography::Property::LetterSpacing,
+                    style.font_size,
+                )
+                + style.typography.length(
+                    crate::style::typography::Property::WordSpacing,
+                    style.font_size,
+                );
+        }
+    }
+    automatic_hyphens(result, assembly)
+}
+
+fn automatic_hyphens(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
+    use hyphenation::{Hyphenator, Language, Load, Standard};
+    use std::sync::OnceLock;
+    static EN: OnceLock<Standard> = OnceLock::new();
+    let mut logical = String::new();
+    let mut owners = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if let Some((id, c)) = character(token) {
+            owners.push((logical.len(), index, id));
+            logical.push(c);
+        }
+    }
+    let mut insertions = std::collections::BTreeMap::new();
+    let mut work = 0;
+    for (start, word) in logical.unicode_word_indices() {
+        let owner = owners.partition_point(|&(at, _, _)| at < start);
+        let Some(&(_, _, id)) = owners.get(owner) else {
+            continue;
+        };
+        let style = &assembly.boxes[id].style;
+        if style.typography.keyword(P::Hyphens) != K::Auto {
+            continue;
+        }
+        let language = style
+            .font_language
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(language.as_str(), "en" | "en-us") {
+            if !assembly
+                .diagnostics
+                .iter()
+                .any(|d| d.message.starts_with("hyphens:auto requires English-US"))
+            {
+                assembly.diagnostics.push(crate::style::Diagnostic { node_id: assembly.boxes[id].node, message: "hyphens:auto requires English-US (lang=en or en-US); unsupported/missing language uses manual hyphenation".into() });
+            }
+            continue;
+        }
+        if word.len() > 128 || word.chars().count() < 5 || word.contains('\u{00ad}') {
+            continue;
+        }
+        work += word.len();
+        if work > MAX_PARAGRAPH_BYTES {
+            assembly.diagnostics.push(crate::style::Diagnostic { node_id: assembly.boxes[id].node, message: "English-US hyphenation word-work limit exceeded; remaining words use manual opportunities".into() });
+            break;
+        }
+        let dictionary = EN.get_or_init(|| {
+            Standard::from_embedded(Language::EnglishUS)
+                .expect("embedded licensed English patterns")
+        });
+        for at in dictionary.hyphenate(word).breaks {
+            if !word.is_char_boundary(at)
+                || word[..at].chars().count() < 2
+                || word[at..].chars().count() < 3
+            {
+                continue;
+            }
+            let i = owners.partition_point(|&(offset, _, _)| offset < start + at);
+            if let Some(&(_, index, right)) = owners.get(i)
+                && let Some(&(_, _, left)) = owners.get(i.saturating_sub(1))
+                && assembly.boxes[right].style.typography.keyword(P::Hyphens) == K::Auto
+                && assembly.boxes[left].style.font_language
+                    == assembly.boxes[right].style.font_language
+            {
+                insertions.insert(index, Token::Control(left, '\u{00ad}'));
+            }
+        }
+    }
+    let mut result = Vec::with_capacity(tokens.len() + insertions.len());
+    for (i, token) in tokens.into_iter().enumerate() {
+        if let Some(inserted) = insertions.remove(&i) {
+            result.push(inserted);
+        }
+        result.push(token);
     }
     result
 }
@@ -169,6 +271,22 @@ fn same_font(a: &ComputedStyle, b: &ComputedStyle) -> bool {
         && a.font_language == b.font_language
         && a.writing_mode == b.writing_mode
         && a.text_orientation == b.text_orientation
+        && [
+            crate::style::typography::Property::FontFeatures,
+            crate::style::typography::Property::FontVariations,
+            crate::style::typography::Property::FontOpticalSizing,
+            crate::style::typography::Property::FontKerning,
+            crate::style::typography::Property::FontLigatures,
+            crate::style::typography::Property::FontWidth,
+            crate::style::typography::Property::LetterSpacing,
+            crate::style::typography::Property::WordSpacing,
+            crate::style::typography::Property::TextTransform,
+            crate::style::typography::Property::WordBreak,
+            crate::style::typography::Property::OverflowWrap,
+            crate::style::typography::Property::LineBreak,
+        ]
+        .into_iter()
+        .all(|p| a.typography.get(p) == b.typography.get(p))
 }
 
 fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: &mut Assembly<'_>) {
@@ -207,6 +325,7 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
         let level = levels[start];
         let mut source = String::new();
         let mut positions = Vec::new();
+        let mut source_positions = Vec::new();
         let mut paint_boundaries = Vec::new();
         let mut paint_owner = owner;
         let mut oversized = false;
@@ -219,7 +338,7 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
             let continues_cluster = context_bounded
                 && cluster.is_some_and(|&(begin, _)| begin < offset && begin >= offsets[start]);
             match &tokens[index] {
-                Token::Text(id, text, _)
+                Token::Text(id, text, _, span)
                     if continues_cluster
                         || same_font(&assembly.boxes[owner].style, &assembly.boxes[*id].style) =>
                 {
@@ -234,6 +353,7 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
                     }
                     if !oversized {
                         positions.push((index, source.len(), *id));
+                        source_positions.push(span.clone());
                         source.push_str(text);
                     }
                 }
@@ -246,6 +366,7 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
                     }
                     if !oversized {
                         positions.push((index, source.len(), *id));
+                        source_positions.push(None);
                         source.push(*c);
                     }
                 }
@@ -283,14 +404,71 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
         } else {
             ("", "")
         };
-        let run = assembly.font.shape_resolved(
+        let transformed =
+            crate::text::transform::apply(&source, &assembly.boxes[owner].style, before, after);
+        let map_start = |display: usize| {
+            transformed
+                .mapping
+                .get(
+                    transformed
+                        .mapping
+                        .partition_point(|&(at, _, _)| at <= display)
+                        .saturating_sub(1),
+                )
+                .map_or(source.len(), |&(_, original, _)| original)
+        };
+        let map_end = |display: usize| {
+            let end = transformed
+                .mapping
+                .partition_point(|&(at, _, _)| at < display);
+            transformed
+                .mapping
+                .get(end.saturating_sub(1))
+                .map_or(0, |&(_, _, end)| end)
+        };
+        let transformed_boundaries = paint_boundaries
+            .iter()
+            .filter_map(|&boundary| {
+                transformed
+                    .mapping
+                    .get(
+                        transformed
+                            .mapping
+                            .partition_point(|&(_, original, _)| original < boundary),
+                    )
+                    .map(|&(display, _, _)| display)
+            })
+            .collect::<Vec<_>>();
+        let shaped = assembly.font.shape_resolved(
             &assembly.boxes[owner].style,
-            &source,
-            &paint_boundaries,
+            &transformed.text,
+            &transformed_boundaries,
             before,
             after,
             Some(level.is_rtl()),
         );
+        let mut run = shaped.as_ref().clone();
+        let original: std::sync::Arc<str> = std::sync::Arc::from(source.as_str());
+        for glyph in &mut run.glyphs {
+            glyph.cluster = map_start(glyph.cluster);
+            glyph.cluster_end = map_end(glyph.cluster_end);
+            glyph.source = original.clone();
+            let first = positions.partition_point(|p| p.1 < glyph.cluster);
+            let end = positions.partition_point(|p| p.1 < glyph.cluster_end);
+            let mut spans: Vec<crate::text::SourceSpan> = Vec::new();
+            for span in source_positions[first..end].iter().flatten() {
+                if let Some(last) = spans.last_mut()
+                    && last.node_id == span.node_id
+                    && std::sync::Arc::ptr_eq(&last.source, &span.source)
+                    && last.end == span.start
+                {
+                    last.end = span.end;
+                } else {
+                    spans.push(span.clone());
+                }
+            }
+            glyph.source_spans = spans.into();
+        }
         let mut widths = vec![0.0; positions.len()];
         let mut glyphs = vec![Vec::new(); positions.len()];
         let mut cluster_advance = vec![0.0; positions.len()];
@@ -418,16 +596,39 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
                 descent: run.descent,
                 unsafe_after: unsafe_after[position],
                 line_extents: run.line_extents,
+                logical_text: source[offset..end].to_owned(),
+                logical_span: source_positions[position].clone(),
                 ..crate::text::ShapedText::default()
             };
             part.glyphs = std::mem::take(&mut glyphs[position])
                 .into_iter()
                 .map(|mut g| {
                     g.x -= group_origin + logical_x;
+                    if let Some(span) = g.source_spans.first() {
+                        g.source = span.source.clone();
+                        g.cluster = span.start;
+                        g.cluster_end = span.end;
+                    }
                     g
                 })
                 .collect();
-            let text: String = source[offset..end]
+            let display_start = transformed
+                .mapping
+                .get(
+                    transformed
+                        .mapping
+                        .partition_point(|&(_, original, _)| original < offset),
+                )
+                .map_or(transformed.text.len(), |&(at, _, _)| at);
+            let display_end = transformed
+                .mapping
+                .get(
+                    transformed
+                        .mapping
+                        .partition_point(|&(_, original, _)| original < end),
+                )
+                .map_or(transformed.text.len(), |&(at, _, _)| at);
+            let text: String = transformed.text[display_start..display_end]
                 .chars()
                 .filter(|&c| !matches!(c, '\u{00ad}' | '\u{200b}'))
                 .collect();
@@ -469,9 +670,15 @@ struct Opportunity {
     forced: bool,
     hyphen: Option<usize>,
     context_break: bool,
+    emergency: bool,
 }
 
-fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> Vec<Opportunity> {
+fn opportunities(
+    tokens: &[Token],
+    boxes: &[BoxData],
+    block: &ComputedStyle,
+    intrinsic: bool,
+) -> Vec<Opportunity> {
     let mut logical = String::new();
     let mut positions = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
@@ -481,6 +688,10 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
         }
     }
     let mut uax = linebreaks(&logical).peekable();
+    let grapheme_ends = logical
+        .grapheme_indices(true)
+        .map(|(at, g)| at + g.len())
+        .collect::<Vec<_>>();
     let mut result = Vec::new();
     for (position, &(offset, index, id, c)) in positions.iter().enumerate() {
         while uax.peek().is_some_and(|(byte, _)| *byte < offset) {
@@ -493,6 +704,8 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
         let forced = matches!(tokens[index], Token::Break(_))
             || kind == Some(BreakOpportunity::Mandatory) && offset != logical.len();
         let right = positions.get(position + 1);
+        let style = &boxes[id].style;
+        let grapheme_boundary = grapheme_ends.binary_search(&offset).is_ok();
         let break_spaces = matches!(tokens[index], Token::Space(_, _, _, true))
             && boxes[id].style.white_space_collapse == WhiteSpaceCollapse::BreakSpaces;
         let protected = |c| {
@@ -511,7 +724,73 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
             && !right.is_some_and(|&(_, _, _, c)| {
                 protected(c) || break_property(c as u32) == BreakClass::CombiningMark
             });
-        if !forced && kind != Some(BreakOpportunity::Allowed) && !break_spaces && !atomic {
+        let safe = grapheme_boundary
+            && right.is_some_and(|&(_, _, _, next)| !protected(c) && !protected(next));
+        let any = safe && style.typography.keyword(P::LineBreak) == K::Anywhere;
+        let break_all = safe
+            && style.typography.keyword(P::WordBreak) == K::BreakAll
+            && right.is_some_and(|&(_, _, _, next)| c.is_alphanumeric() && next.is_alphanumeric());
+        let loose = safe
+            && style.typography.keyword(P::LineBreak) == K::Loose
+            && right.is_some_and(|&(_, _, _, next)| {
+                han_or_kana(c)
+                    && matches!(
+                        next,
+                        'ぁ' | 'ぃ'
+                            | 'ぅ'
+                            | 'ぇ'
+                            | 'ぉ'
+                            | 'っ'
+                            | 'ゃ'
+                            | 'ゅ'
+                            | 'ょ'
+                            | 'ァ'
+                            | 'ィ'
+                            | 'ゥ'
+                            | 'ェ'
+                            | 'ォ'
+                            | 'ッ'
+                            | 'ャ'
+                            | 'ュ'
+                            | 'ョ'
+                            | 'ー'
+                    )
+            });
+        let keep_all = style.typography.keyword(P::WordBreak) == K::KeepAll
+            && right.is_some_and(|&(_, _, _, next)| {
+                (han_or_kana(c) || ('\u{ac00}'..='\u{d7af}').contains(&c))
+                    && (han_or_kana(next) || ('\u{ac00}'..='\u{d7af}').contains(&next))
+                    && c.is_alphanumeric()
+                    && next.is_alphanumeric()
+            });
+        let strict = style.typography.keyword(P::LineBreak) == K::Strict
+            && right.is_some_and(|&(_, _, _, next)| {
+                matches!(next, 'ー' | '々' | 'ゝ' | 'ゞ' | 'ヽ' | 'ヾ')
+            });
+        let shy = c == '\u{00ad}' && style.typography.keyword(P::Hyphens) != K::None;
+        let ordinary = grapheme_boundary
+            && kind == Some(BreakOpportunity::Allowed)
+            && !keep_all
+            && !strict
+            && (c != '\u{00ad}' || shy);
+        let overflow = style.typography.keyword(P::OverflowWrap);
+        let emergency = safe
+            && !ordinary
+            && !break_all
+            && !any
+            && !loose
+            && matches!(overflow, K::Anywhere | K::BreakWord)
+            && (!intrinsic || overflow == K::Anywhere)
+            && right.is_some_and(|&(_, _, _, next)| c.is_alphanumeric() && next.is_alphanumeric());
+        if !forced
+            && !ordinary
+            && !break_spaces
+            && !atomic
+            && !any
+            && !break_all
+            && !loose
+            && !emergency
+        {
             continue;
         }
         let wrapping = if collapsible(&tokens[index]) || matches!(c, '\u{200b}' | '\u{00ad}') {
@@ -519,7 +798,9 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
         } else {
             right.is_some_and(|&(_, _, right, _)| wrap_at(id, right, boxes, block))
         };
-        if forced || wrapping && (kind == Some(BreakOpportunity::Allowed) || break_spaces || atomic)
+        if forced
+            || wrapping
+                && (ordinary || break_spaces || atomic || any || break_all || loose || emergency)
         {
             let mut end = index + 1;
             // Closing box edges belong to the preceding line; opening edges
@@ -530,8 +811,10 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
             result.push(Opportunity {
                 end,
                 forced,
-                hyphen: (c == '\u{00ad}' && !forced).then_some(id),
-                context_break: !forced && matches!(c, '\u{00ad}' | '\u{200b}'),
+                hyphen: (shy && !forced).then_some(id),
+                context_break: !forced
+                    && (matches!(c, '\u{00ad}' | '\u{200b}') || any || break_all || emergency),
+                emergency,
             });
         }
     }
@@ -541,12 +824,14 @@ fn opportunities(tokens: &[Token], boxes: &[BoxData], block: &ComputedStyle) -> 
         last.forced = true;
         last.hyphen = None;
         last.context_break = false;
+        last.emergency = false;
     } else {
         result.push(Opportunity {
             end: tokens.len(),
             forced: true,
             hyphen: None,
             context_break: false,
+            emergency: false,
         });
     }
     result
@@ -682,6 +967,23 @@ fn emit(
         None
     };
     reshape(&mut tokens, levels, hyphen_at, assembly);
+    let saved_align = assembly.align;
+    assembly.align = if soft {
+        saved_align
+    } else {
+        match assembly.last_align {
+            crate::style::TextAlignLast::Align(a) => a,
+            crate::style::TextAlignLast::Auto
+                if saved_align == crate::style::TextAlign::Justify =>
+            {
+                crate::style::TextAlign::Start
+            }
+            _ => saved_align,
+        }
+    };
+    if assembly.align == crate::style::TextAlign::Justify && assembly.justify != K::None {
+        justify(&mut tokens, assembly, tab, half_ch);
+    }
     let mut measure = Measure::default();
     // Collapsible trailing whitespace is removed before contributing metrics
     // or decorations. Preserved hanging whitespace retains its hit geometry.
@@ -735,6 +1037,65 @@ fn emit(
     }
     assembly.visualize(&slots, &visual_levels);
     assembly.finish(measure.aligned(!soft, assembly.width as f64));
+    assembly.align = saved_align;
+}
+
+fn justify(tokens: &mut [Token], assembly: &Assembly<'_>, tab: f64, half_ch: f64) {
+    let mut measured = Measure::default();
+    for t in tokens.iter() {
+        measured.add(t, assembly.boxes, tab, half_ch);
+    }
+    let extra = (assembly.width as f64 - measured.fit()).max(0.0);
+    if !extra.is_finite() || extra == 0.0 {
+        return;
+    }
+    let first = tokens
+        .iter()
+        .position(|t| matches!(t, Token::Glyphs(_, _, run) if run.width != 0.0));
+    let last = tokens
+        .iter()
+        .rposition(|t| matches!(t, Token::Glyphs(_, _, run) if run.width != 0.0));
+    let (Some(first), Some(last)) = (first, last) else {
+        return;
+    };
+    let inter_character = assembly.justify == K::InterCharacter
+        || assembly.justify == K::Auto
+            && tokens
+                .iter()
+                .filter_map(character)
+                .any(|(_, c)| han_or_kana(c));
+    let mut points = Vec::new();
+    for i in first..last {
+        let available = if inter_character {
+            matches!(&tokens[i], Token::Glyphs(_, text, run) if !run.unsafe_after && text.chars().any(|c| c.is_alphanumeric()) && run.width != 0.0)
+                && tokens[i + 1..]
+                    .iter()
+                    .find_map(character)
+                    .is_some_and(|(_, c)| c.is_alphanumeric())
+        } else {
+            matches!(tokens[i], Token::Space(_, ' ', width, _) if width > 0.0)
+        };
+        if available {
+            points.push(i);
+        }
+    }
+    if points.is_empty() {
+        return;
+    }
+    let share = (extra / points.len() as f64) as f32;
+    for i in points {
+        match &mut tokens[i] {
+            Token::Space(_, _, width, _) => *width += share,
+            Token::Glyphs(_, _, run) => {
+                let run = std::sync::Arc::make_mut(run);
+                run.width += share;
+                if let Some(last) = run.glyphs.last_mut() {
+                    last.advance += share;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn reshape(
@@ -744,12 +1105,21 @@ fn reshape(
     assembly: &mut Assembly<'_>,
 ) {
     for (index, token) in tokens.iter_mut().enumerate() {
-        if let Token::Glyphs(id, text, _) = token {
-            *token = Token::Text(*id, text.clone(), 0.0);
+        if let Token::Glyphs(id, text, run) = token {
+            *token = Token::Text(
+                *id,
+                if run.logical_text.is_empty() {
+                    text.clone()
+                } else {
+                    run.logical_text.clone()
+                },
+                0.0,
+                run.logical_span.clone(),
+            );
         } else if hyphen_at == Some(index)
             && let Token::Control(id, _) = token
         {
-            *token = Token::Text(*id, "-".into(), 0.0);
+            *token = Token::Text(*id, "-".into(), 0.0, None);
         }
     }
     shape_tokens(tokens, levels, assembly);
@@ -761,17 +1131,41 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
     let paragraph = super::super::bidi::Paragraph::new(&tokens, assembly.boxes, block);
     let bidi = unicode_bidi::BidiInfo::new(&paragraph.text, paragraph.base);
     let levels = paragraph.levels(&bidi, 0..tokens.len(), false);
-    let opportunities = opportunities(&tokens, assembly.boxes, block);
+    let opportunities = opportunities(&tokens, assembly.boxes, block, false);
     shape_tokens(&mut tokens, &levels, assembly);
     let face = assembly.font.select(block);
     let tab = (face.metrics(' ', block.font_size).advance_width as f64 * 8.0).max(0.0001);
     let half_ch = face.metrics('0', block.font_size).advance_width as f64 * 0.5;
+    let mut emergency_widths = std::collections::HashMap::new();
+    let mut segment_start = 0;
+    let mut pending = Vec::new();
+    for b in &opportunities {
+        if b.emergency {
+            pending.push(b.end);
+            continue;
+        }
+        let mut segment = Measure::default();
+        for t in &tokens[segment_start..b.end] {
+            segment.add(t, assembly.boxes, tab, half_ch);
+        }
+        for end in pending.drain(..) {
+            emergency_widths.insert(end, segment.fit());
+        }
+        segment_start = b.end;
+    }
     let mut start = 0;
     let mut measured_to = 0;
     let mut measure = Measure::default();
     let mut previous = None;
     let mut discretionary_work = 0usize;
     for boundary in opportunities {
+        if boundary.emergency
+            && emergency_widths
+                .get(&boundary.end)
+                .is_some_and(|&width| width <= assembly.width as f64)
+        {
+            continue;
+        }
         let left = tokens[..boundary.end]
             .iter()
             .rev()
@@ -905,7 +1299,7 @@ pub(super) fn intrinsic(
     let paragraph = super::super::bidi::Paragraph::new(&tokens, assembly.boxes, block);
     let bidi = unicode_bidi::BidiInfo::new(&paragraph.text, paragraph.base);
     let levels = paragraph.levels(&bidi, 0..tokens.len(), false);
-    let opportunities = opportunities(&tokens, assembly.boxes, block);
+    let opportunities = opportunities(&tokens, assembly.boxes, block, true);
     shape_tokens(&mut tokens, &levels, assembly);
     let face = assembly.font.select(block);
     let tab = (face.metrics(' ', block.font_size).advance_width as f64 * 8.0).max(0.0001);

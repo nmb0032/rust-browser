@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset=utf-8>
+<title>Multilingual text, fonts, decorations and counters</title>
+<link rel=stylesheet href="../reftests/support/typography.css">
+<style>
+@font-face { font-family: Arabic; src:url("../../assets/fonts/noto-sans/NotoSansArabic-Regular.ttf") }
+@font-face { font-family: Hebrew; src:url("../../assets/fonts/noto-sans/NotoSansHebrew-Regular.ttf") }
+@font-face { font-family: Japanese; src:url("../../assets/fonts/noto-sans/NotoSansJP-fixture.ttf") }
+@counter-style chapters { system:extends upper-roman; prefix:"Chapter "; suffix:" — "; }
+main { width:520px; font:18px/28px "Noto Sans",Arabic,Hebrew,Japanese;counter-reset:chapter }
+h2 { counter-increment:chapter;font:24px/32px "Noto Sans";color:navy }
+h2::before { content:counter(chapter,upper-roman) ". " }
+p { text-align:justify;hyphens:auto }
+p[lang] { hyphens:manual }
+.annotation { text-decoration:underline wavy red;text-decoration-thickness:1px }
+.vertical { writing-mode:vertical-rl;inline-size:160px;block-size:100px;text-justify:inter-character }
+.variable { font:32px/40px Geometry;font-variation-settings:"wght" 800 }
+.emoji { font:32px/40px GeometryEmoji }
+ol { list-style:chapters inside }
+</style>
+<main lang=en-US>
+<h2>Typography without a second renderer</h2>
+<p>Internationalization and representation demonstrate dictionary hyphenation.
+<span class=annotation>Descendant decorations retain their ancestor's color</span>
+while a <b>variable weight</b> changes the actual outline.</p>
+<p lang=tr style="text-transform:uppercase">istanbul ve ısparta</p>
+<p lang=el style="text-transform:lowercase">ΟΣ ΟΣΑ</p>
+<p lang=lt style="text-transform:lowercase">Í</p>
+<p dir=rtl lang=ar>العربية لغة جميلة</p>
+<p dir=rtl lang=he>שלום עולם שלום עולם</p>
+<p class=vertical lang=ja style="hyphens:manual">漢字かな漢字かな</p>
+<p class=variable>AA BB</p>
+<p class=emoji>😀 👨‍👩‍👧 🇺🇸 👨🏻</p>
+<ol reversed start=4><li>Scoped list counters</li><li value=8>Explicit value</li><li>Reverse progression</li></ol>
+</main>

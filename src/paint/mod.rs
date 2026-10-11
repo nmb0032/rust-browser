@@ -1,3 +1,4 @@
+mod decoration;
 mod display_list;
 mod rasterizer;
 

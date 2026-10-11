@@ -1,0 +1,14 @@
+@font-face {
+  font-family: Geometry;
+  font-weight: 100 900;
+  src: url("../../../assets/fonts/typography/GeometryVariable.ttf");
+}
+@font-face {
+  font-family: GeometryEmoji;
+  src: url("../../../assets/fonts/typography/GeometryColor.ttf");
+}
+body { margin: 0; }
+.geometry { font: 20px/20px Geometry; }
+@font-face {font-family: GeometryBitmap;src:url("../../../assets/fonts/typography/GeometryBitmap.ttf")}
+@font-face {font-family: GeometryCFF2;font-weight:100 900;src:url("../../../assets/fonts/typography/GeometryCFF2.otf")}
+.image-list {margin:0;padding:0 0 0 24px;list-style-image:url("stripes.png")}

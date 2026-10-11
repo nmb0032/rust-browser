@@ -1,4 +1,4 @@
-//! The supported, static-outline subset of CSS Fonts descriptors.
+//! Finite CSS Fonts descriptors for static, variable and color faces.
 use super::{AtRule, BlockItem, tokenizer::TokenKind, values::FontStyle};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -12,6 +12,7 @@ pub(crate) struct FontDescriptor {
     pub family: String,
     pub sources: Vec<FontSource>,
     pub weight: u16,
+    pub weight_range: (u16, u16),
     pub style: FontStyle,
     pub ranges: Vec<(u32, u32)>,
 }
@@ -215,6 +216,7 @@ pub(crate) fn parse(rule: &AtRule) -> (Option<FontDescriptor>, Vec<String>) {
     let mut family = None;
     let mut src = None;
     let mut weight = 400;
+    let mut weight_range = (400, 400);
     let mut style = FontStyle::Normal;
     let mut unicode = vec![(0, 0x10ffff)];
     for item in rule.block().unwrap().iter().take(129) {
@@ -233,17 +235,39 @@ pub(crate) fn parse(rule: &AtRule) -> (Option<FontDescriptor>, Vec<String>) {
                 .map(|s| src = Some(s))
                 .is_some(),
             "font-weight" => {
-                let value = match tokens.as_slice() {
-                    [TokenKind::Ident(s)] if s.eq_ignore_ascii_case("normal") => Some(400),
-                    [TokenKind::Ident(s)] if s.eq_ignore_ascii_case("bold") => Some(700),
-                    [TokenKind::Number(n)] => n
-                        .value()
-                        .ok()
-                        .filter(|n| (1.0..=1000.0).contains(n) && n.fract() == 0.0)
-                        .map(|n| n as u16),
-                    _ => None,
-                };
-                value.map(|n| weight = n).is_some()
+                if let [TokenKind::Number(a), TokenKind::Number(b)] = tokens.as_slice() {
+                    let values = a.value().ok().zip(b.value().ok()).filter(|(a, b)| {
+                        (1.0..=1000.0).contains(a)
+                            && a <= b
+                            && *b <= 1000.0
+                            && a.fract() == 0.0
+                            && b.fract() == 0.0
+                    });
+                    if let Some((a, b)) = values {
+                        weight = a as u16;
+                        weight_range = (a as u16, b as u16);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    let value = match tokens.as_slice() {
+                        [TokenKind::Ident(s)] if s.eq_ignore_ascii_case("normal") => Some(400),
+                        [TokenKind::Ident(s)] if s.eq_ignore_ascii_case("bold") => Some(700),
+                        [TokenKind::Number(n)] => n
+                            .value()
+                            .ok()
+                            .filter(|n| (1.0..=1000.0).contains(n) && n.fract() == 0.0)
+                            .map(|n| n as u16),
+                        _ => None,
+                    };
+                    value
+                        .map(|n| {
+                            weight = n;
+                            weight_range = (n, n);
+                        })
+                        .is_some()
+                }
             }
             "font-style" => match tokens.as_slice() {
                 [TokenKind::Ident(s)] if s.eq_ignore_ascii_case("normal") => {
@@ -298,6 +322,7 @@ pub(crate) fn parse(rule: &AtRule) -> (Option<FontDescriptor>, Vec<String>) {
         family,
         sources,
         weight,
+        weight_range,
         style,
         ranges: unicode,
     });

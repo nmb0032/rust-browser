@@ -276,8 +276,10 @@ pub(super) fn load(
             check_cancelled(cancelled)?;
             match result {
                 Ok(face) => {
-                    if face.default_instance_only {
-                        frame.web_fonts.report(rule.node_id, format!("{}: web variable font uses its default instance only; variation axes are unsupported", face.name));
+                    for message in face.format_diagnostics() {
+                        frame
+                            .web_fonts
+                            .report(rule.node_id, format!("{}: {message}", face.name));
                     }
                     selected = Some(face);
                     break;

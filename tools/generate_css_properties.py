@@ -142,7 +142,7 @@ def engine_registry(data, engine):
         for field in ("syntax", "initial", "inherited", "computedValue", "animationType"):
             if field not in prop:
                 raise ValueError(f"supported property missing {field}: {name}")
-        if prop["inherited"] not in ("yes", "no"):
+        if prop["inherited"] not in ("yes", "no", "no (but see prose, above)"):
             raise ValueError(f"non-boolean longhand inheritance: {name}")
         if details["rust"] in rust_ids:
             raise ValueError(f"duplicate engine Rust property: {details['rust']}")
@@ -237,7 +237,7 @@ def generate(data, engine, provenance):
             "Grammar::ColorSubset" if simple and simple.get("color") else
             f'Grammar::Keywords({strings(sorted(simple["keywords"]))})' if simple else
             "Grammar::SemanticSubset")
-        inherited = {"yes": "Some(true)", "no": "Some(false)"}.get(prop.get("inherited"), "None")
+        inherited = {"yes": "Some(true)", "no": "Some(false)", "no (but see prose, above)": "Some(false)"}.get(prop.get("inherited"), "None")
         lines.append("PropertyMetadata { " + ", ".join([
             f"name: {rs(name)}", f'href: {rs(prop["href"])}',
             f'syntax: {optional(prop.get("syntax"))}', f'initial: {optional(prop.get("initial"))}',
@@ -260,7 +260,7 @@ def generate(data, engine, provenance):
         lines.append(syntax_record(entry) + ",")
     lines.extend([
         "];", "#[derive(Clone, Copy)]",
-        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place }",
+        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place, Typography }",
         "pub(super) fn parser(name: &str) -> Option<Parser> { Some(match name {",
     ])
     for name, details in sorted(supported.items()):

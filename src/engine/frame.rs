@@ -24,6 +24,7 @@ pub struct Frame {
     pub external_stylesheet_sources: HashMap<NodeId, StylesheetSource>,
     pub styles: ComputedStyles,
     pub images: ImageMap,
+    pub marker_images: ImageMap,
     pub error: Option<String>,
     pub parse_errors: Vec<crate::html::tokenizer::ParseError>,
     pub dropped_parse_errors: usize,
@@ -68,6 +69,7 @@ impl Frame {
             external_stylesheet_sources: HashMap::new(),
             styles: resolution.styles,
             images: ImageMap::new(),
+            marker_images: ImageMap::new(),
             error: None,
             parse_errors: Vec::new(),
             dropped_parse_errors: 0,
@@ -165,8 +167,12 @@ impl Frame {
     /// Low-level box construction from current styles. For converged container
     /// conditions/units use `layout_with_container_queries` instead.
     pub fn layout_tree(&self) -> LayoutTree {
-        let mut tree =
-            layout::build_layout_tree_with_resources(&self.document, &self.styles, &self.images);
+        let mut tree = layout::build_layout_tree_with_marker_resources(
+            &self.document,
+            &self.styles,
+            &self.images,
+            &self.marker_images,
+        );
         tree.restore_scroll_state(self.scroll_state.clone());
         tree
     }

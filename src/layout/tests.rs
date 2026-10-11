@@ -217,8 +217,8 @@ fn blocks_split_every_inline_ancestor_without_losing_styles_order_or_containing_
     assert_eq!(first_em.style().color, Some(0xff0000));
     assert!(first_em.inline_start && !first_em.inline_end);
     assert!(!last_em.inline_start && last_em.inline_end);
-    assert_eq!(first_em.rect().width, first_em.content_rect().width + 11.0);
-    assert_eq!(last_em.rect().width, last_em.content_rect().width + 11.0);
+    assert!((first_em.rect().width - first_em.content_rect().width - 11.0).abs() < 0.001);
+    assert!((last_em.rect().width - last_em.content_rect().width - 11.0).abs() < 0.001);
     assert_eq!(first_em.padding.right, 0.0);
     assert_eq!(last_em.padding.left, 0.0);
     let first_strong = find(before, "<strong>").unwrap();

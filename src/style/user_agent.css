@@ -6,6 +6,8 @@ html, main, nav, ol, p, pre, section, ul { display: block; }
 base, head, link, meta, script, style, template, title { display: none; }
 a { color: #0000ee; }
 li { display: list-item; }
+ol { list-style-type: decimal; }
+ul { list-style-type: disc; }
 p, ul, ol { margin: 1em 0; }
 ul, ol { padding-left: 32px; }
 h1 { font-size: 32px; margin: 0.67em 0; }

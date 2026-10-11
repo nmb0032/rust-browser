@@ -1,0 +1,42 @@
+English-US automatic hyphenation uses hyphenation 0.8.4's embedded
+en-us.standard.bincode and the Knuth–Liang algorithm. Other dictionaries
+are not embedded or claimed. The patterns are not an invented word list.
+
+Pattern source:
+https://github.com/hyphenation/tex-hyphen/blob/49706f9cfa97f6ead26b473ec10d23d5a651318a/hyph-utf8/tex/generic/hyph-utf8/patterns/tex/hyph-en-us.tex
+Version: 2005-05-30, American English, by Gerard D.C. Kuiken.
+Copyright (C) 1990, 2004, 2005 Gerard D.C. Kuiken
+This file is part of the hyph-utf8 package.
+See http://www.hyphenation.org/tex for more information.
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.
+
+SHA-256 of the pattern inputs distributed in hyphenation 0.8.4:
+hyph-en-us.pat.txt 0f57318b878b132547ae92db39a6e1d1cf2a05d9008874955d6ecb910007a463
+hyph-en-us.hyp.txt 7b62f3eab4bfcab0b85d6a5d6797100239721ba06ce9874c1657fe4b8cad95ed
+The original header prescribes minimum prefix 2 and suffix 3, retained here.
+
+hyphenation crate license (MIT option):
+
+The MIT License (MIT)
+Copyright (c) 2016 tapeinosyne
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
