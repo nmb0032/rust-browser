@@ -99,10 +99,18 @@ pub struct ContainerSnapshot {
 
 impl ContainerSnapshot {
     pub fn from_layout(tree: &LayoutTree, environment: MediaEnvironment) -> Self {
+        fn first_real(layout: &LayoutBox) -> Option<&LayoutBox> {
+            if !layout.is_anonymous() {
+                Some(layout)
+            } else {
+                layout.children().iter().find_map(first_real)
+            }
+        }
         let root = tree
             .root()
             .children()
-            .first()
+            .iter()
+            .find_map(first_real)
             .map(|child| (child.style().font_size, child.style().used_line_height()));
         let mut result = Self::default();
         fn visit(
@@ -112,7 +120,8 @@ impl ContainerSnapshot {
             root: Option<(f32, f32)>,
         ) {
             let style = layout.style();
-            if layout.pseudo_element().is_none()
+            if let Some(node) = layout.dom_node_id()
+                && layout.pseudo_element().is_none()
                 && layout.kind() == BoxKind::Block
                 && !layout.tag_name().eq_ignore_ascii_case("<img>")
                 && style.container_type != container::ContainerType::Normal
@@ -124,9 +133,9 @@ impl ContainerSnapshot {
                     && rect.height >= 0.0
                 {
                     result.containers.insert(
-                        layout.dom_node_id(),
+                        node,
                         Container {
-                            node: layout.dom_node_id(),
+                            node,
                             names: style.container_names.clone(),
                             kind: style.container_type,
                             size: (rect.width, rect.height),

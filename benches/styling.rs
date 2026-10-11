@@ -192,7 +192,7 @@ fn time<T>(operation: impl FnOnce() -> T) -> Duration {
 fn find_box(root: &layout::LayoutBox, id: rust_browser::dom::NodeId) -> Option<&layout::LayoutBox> {
     let mut pending = vec![root];
     while let Some(node) = pending.pop() {
-        if node.dom_node_id() == id {
+        if node.dom_node_id() == Some(id) {
             return Some(node);
         }
         pending.extend(node.children());

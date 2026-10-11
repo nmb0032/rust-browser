@@ -1,9 +1,14 @@
-use crate::style::{ComputedStyle, Diagnostic};
+use crate::{
+    dom::NodeId,
+    style::{ComputedStyle, Diagnostic},
+};
 
 use super::{
     BoxKind, LayoutBox, Rect, TextFragment,
-    block::layout_block,
-    tree::{resolve_edges, resolve_length, resolve_line_height},
+    tree::{
+        finite_rect, finite_used, resolve_edges, resolve_length, resolve_line_height,
+        resolve_margins,
+    },
 };
 
 pub(super) fn layout_inline(
@@ -12,19 +17,9 @@ pub(super) fn layout_inline(
     font: &fontdue::Font,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if layout_box.kind == BoxKind::Block {
-        let y = flow.start_y + flow.content_height();
-        let height = layout_block(layout_box, flow.start_x, y, flow.width, font, diagnostics);
-        flow.y = y + height;
-        flow.current_x = flow.start_x;
-        flow.line_height = flow.base_line_height;
-        flow.has_line = false;
-        flow.line_has_content = false;
-        flow.pending_space = false;
-        return;
-    }
+    debug_assert_ne!(layout_box.kind, BoxKind::Block);
     if layout_box.tag_name == "<br>" {
-        layout_box.rect = flow.break_line();
+        layout_box.rect = flow.break_line(layout_box.node_id, diagnostics);
         layout_box.content_rect = layout_box.rect;
         return;
     }
@@ -44,36 +39,40 @@ pub(super) fn layout_inline(
             &layout_box.style,
             font,
             line_height,
+            layout_box.node_id,
+            diagnostics,
         );
-        layout_box.rect = fragments.iter().fold(Rect::default(), |bounds, fragment| {
-            bounds.union(Rect {
-                x: fragment.x,
-                y: fragment.y,
-                width: fragment.width,
-                height: fragment.height,
-            })
-        });
+        layout_box.rect = finite_rect(
+            fragments.iter().fold(Rect::default(), |bounds, fragment| {
+                bounds.union(Rect {
+                    x: fragment.x,
+                    y: fragment.y,
+                    width: fragment.width,
+                    height: fragment.height,
+                })
+            }),
+            layout_box.node_id,
+            diagnostics,
+        );
         layout_box.content_rect = layout_box.rect;
         layout_box.text_fragments = fragments;
         return;
     }
     let style = &layout_box.style;
-    let padding = resolve_edges(
-        &style.padding,
-        style.font_size,
-        flow.width,
-        layout_box.node_id,
-        "padding",
-        diagnostics,
-    )
-    .map(|value| value.max(0.0));
-    let margin = resolve_edges(
-        &style.margin,
-        style.font_size,
-        flow.width,
-        layout_box.node_id,
-        "margin",
-        diagnostics,
+    let padding = layout_box.inline_edges(
+        resolve_edges(
+            &style.padding,
+            style.font_size,
+            flow.width,
+            layout_box.node_id,
+            "padding",
+            diagnostics,
+        )
+        .map(|value| value.max(0.0)),
+    );
+    let margin = layout_box.inline_edges(
+        resolve_margins(style, flow.width, layout_box.node_id, diagnostics)
+            .map(|value| value.unwrap_or(0.0)),
     );
     let line_height = resolve_line_height(
         &style.line_height,
@@ -81,11 +80,31 @@ pub(super) fn layout_inline(
         layout_box.node_id,
         diagnostics,
     );
-    let border = style.border_width;
-    let left = padding.left + border.left;
-    let right = padding.right + border.right;
-    let extra_height = padding.top + padding.bottom + border.top + border.bottom;
-    flow.advance(margin.left + left, line_height + extra_height);
+    let border = layout_box.inline_edges(style.border_width);
+    let left = finite_used(
+        padding.left as f64 + border.left as f64,
+        layout_box.node_id,
+        "inline left decorations",
+        diagnostics,
+    );
+    let right = finite_used(
+        padding.right as f64 + border.right as f64,
+        layout_box.node_id,
+        "inline right decorations",
+        diagnostics,
+    );
+    let extra_height = finite_used(
+        padding.top as f64 + padding.bottom as f64 + border.top as f64 + border.bottom as f64,
+        layout_box.node_id,
+        "inline vertical decorations",
+        diagnostics,
+    );
+    flow.advance(
+        margin.left as f64 + left as f64,
+        line_height as f64 + extra_height as f64,
+        layout_box.node_id,
+        diagnostics,
+    );
     let start = Rect {
         x: flow.current_x,
         y: flow.y,
@@ -105,14 +124,40 @@ pub(super) fn layout_inline(
         bounds
     };
     layout_box.padding = padding;
-    layout_box.content_rect = content;
+    layout_box.margin = margin;
+    layout_box.content_rect = finite_rect(content, layout_box.node_id, diagnostics);
     layout_box.rect = Rect {
-        x: content.x - left,
-        y: content.y - padding.top - border.top,
-        width: content.width + left + right,
-        height: content.height + extra_height,
+        x: finite_used(
+            content.x as f64 - left as f64,
+            layout_box.node_id,
+            "inline border x",
+            diagnostics,
+        ),
+        y: finite_used(
+            content.y as f64 - padding.top as f64 - border.top as f64,
+            layout_box.node_id,
+            "inline border y",
+            diagnostics,
+        ),
+        width: finite_used(
+            content.width as f64 + left as f64 + right as f64,
+            layout_box.node_id,
+            "inline border width",
+            diagnostics,
+        ),
+        height: finite_used(
+            content.height as f64 + extra_height as f64,
+            layout_box.node_id,
+            "inline border height",
+            diagnostics,
+        ),
     };
-    flow.advance(right + margin.right, line_height + extra_height);
+    flow.advance(
+        right as f64 + margin.right as f64,
+        line_height as f64 + extra_height as f64,
+        layout_box.node_id,
+        diagnostics,
+    );
 }
 
 fn layout_image(
@@ -141,17 +186,21 @@ fn layout_image(
         diagnostics,
     )
     .map(|value| value.max(0.0));
-    let margin = resolve_edges(
-        &style.margin,
-        style.font_size,
-        flow.width,
+    let margin = resolve_margins(style, flow.width, layout_box.node_id, diagnostics)
+        .map(|value| value.unwrap_or(0.0));
+    let border = style.border_width;
+    let horizontal = finite_used(
+        padding.left as f64 + padding.right as f64 + border.left as f64 + border.right as f64,
         layout_box.node_id,
-        "margin",
+        "image horizontal decorations",
         diagnostics,
     );
-    let border = style.border_width;
-    let horizontal = padding.left + padding.right + border.left + border.right;
-    let vertical = padding.top + padding.bottom + border.top + border.bottom;
+    let vertical = finite_used(
+        padding.top as f64 + padding.bottom as f64 + border.top as f64 + border.bottom as f64,
+        layout_box.node_id,
+        "image vertical decorations",
+        diagnostics,
+    );
     let explicit_width = style.width.as_ref().map(|length| {
         style.box_sizing.content_size(
             resolve_length(
@@ -183,24 +232,54 @@ fn layout_image(
             )
         });
     let (width, height) = image.size(style, explicit_width, explicit_height, line_height, font);
-    let box_width = width + padding.left + padding.right + border.left + border.right;
-    let box_height = height + padding.top + padding.bottom + border.top + border.bottom;
+    let box_width = finite_used(
+        width as f64 + horizontal as f64,
+        layout_box.node_id,
+        "image border width",
+        diagnostics,
+    );
+    let box_height = finite_used(
+        height as f64 + vertical as f64,
+        layout_box.node_id,
+        "image border height",
+        diagnostics,
+    );
     let separator = if flow.pending_space && flow.line_has_content {
         font.metrics(' ', style.font_size).advance_width
     } else {
         0.0
     };
     if flow.line_has_content
-        && flow.current_x + separator + margin.left + box_width + margin.right
-            > flow.start_x + flow.width
+        && flow.current_x as f64
+            + separator as f64
+            + margin.left as f64
+            + box_width as f64
+            + margin.right as f64
+            > flow.start_x as f64 + flow.width as f64
     {
-        flow.next_line();
+        flow.next_line(layout_box.node_id, diagnostics);
     } else {
-        flow.current_x += separator;
+        flow.current_x = finite_used(
+            flow.current_x as f64 + separator as f64,
+            layout_box.node_id,
+            "image separator x",
+            diagnostics,
+        );
     }
-    let x = flow.current_x + margin.left;
-    let y = flow.y + margin.top;
+    let x = finite_used(
+        flow.current_x as f64 + margin.left as f64,
+        layout_box.node_id,
+        "image border x",
+        diagnostics,
+    );
+    let y = finite_used(
+        flow.y as f64 + margin.top as f64,
+        layout_box.node_id,
+        "image border y",
+        diagnostics,
+    );
     layout_box.padding = padding;
+    layout_box.margin = margin;
     layout_box.rect = Rect {
         x,
         y,
@@ -208,8 +287,18 @@ fn layout_image(
         height: box_height,
     };
     layout_box.content_rect = Rect {
-        x: x + border.left + padding.left,
-        y: y + border.top + padding.top,
+        x: finite_used(
+            x as f64 + border.left as f64 + padding.left as f64,
+            layout_box.node_id,
+            "image content x",
+            diagnostics,
+        ),
+        y: finite_used(
+            y as f64 + border.top as f64 + padding.top as f64,
+            layout_box.node_id,
+            "image content y",
+            diagnostics,
+        ),
         width,
         height,
     };
@@ -217,13 +306,18 @@ fn layout_image(
         layout_box.text_fragments.push(fragment);
     }
     flow.advance(
-        margin.left + box_width + margin.right,
-        margin.top + box_height + margin.bottom,
+        margin.left as f64 + box_width as f64 + margin.right as f64,
+        margin.top as f64 + box_height as f64 + margin.bottom as f64,
+        layout_box.node_id,
+        diagnostics,
     );
     if box_height > 0.0 {
-        flow.line_height = flow
-            .line_height
-            .max(margin.top + box_height + margin.bottom);
+        flow.line_height = flow.line_height.max(finite_used(
+            margin.top as f64 + box_height as f64 + margin.bottom as f64,
+            layout_box.node_id,
+            "image margin height",
+            diagnostics,
+        ));
         flow.has_line = true;
     }
     flow.pending_space = false;
@@ -258,12 +352,25 @@ impl InlineFlow {
         }
     }
 
-    fn advance(&mut self, width: f32, height: f32) {
-        self.current_x += width;
+    fn advance(
+        &mut self,
+        width: f64,
+        height: f64,
+        node: Option<NodeId>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        self.current_x = finite_used(
+            self.current_x as f64 + width,
+            node,
+            "inline flow x",
+            diagnostics,
+        );
         if width != 0.0 {
             self.line_has_content = true;
             self.has_line = true;
-            self.line_height = self.line_height.max(height);
+            self.line_height =
+                self.line_height
+                    .max(finite_used(height, node, "inline flow height", diagnostics));
         }
     }
 
@@ -273,6 +380,8 @@ impl InlineFlow {
         style: &ComputedStyle,
         font: &fontdue::Font,
         line_height: f32,
+        node: Option<NodeId>,
+        diagnostics: &mut Vec<Diagnostic>,
     ) -> Vec<TextFragment> {
         let words: Vec<&str> = text.split_whitespace().collect();
         if words.is_empty() {
@@ -286,7 +395,7 @@ impl InlineFlow {
             if index > 0 || (index == 0 && starts_with_space) {
                 self.pending_space = true;
             }
-            fragments.push(self.add_word(word, style, font, line_height));
+            fragments.push(self.add_word(word, style, font, line_height, node, diagnostics));
             self.pending_space = index + 1 < words.len() || ends_with_space;
         }
         fragments
@@ -298,6 +407,8 @@ impl InlineFlow {
         style: &ComputedStyle,
         font: &fontdue::Font,
         line_height: f32,
+        node: Option<NodeId>,
+        diagnostics: &mut Vec<Diagnostic>,
     ) -> TextFragment {
         let word_width = measure_text(font, word, style.font_size);
         let separator_width = if self.pending_space && self.line_has_content {
@@ -306,11 +417,17 @@ impl InlineFlow {
             0.0
         };
         if self.line_has_content
-            && self.current_x + separator_width + word_width > self.start_x + self.width
+            && self.current_x as f64 + separator_width as f64 + word_width as f64
+                > self.start_x as f64 + self.width as f64
         {
-            self.next_line();
+            self.next_line(node, diagnostics);
         } else {
-            self.current_x += separator_width;
+            self.current_x = finite_used(
+                self.current_x as f64 + separator_width as f64,
+                node,
+                "text separator x",
+                diagnostics,
+            );
         }
         self.line_height = self.line_height.max(line_height);
         let fragment = TextFragment {
@@ -325,26 +442,36 @@ impl InlineFlow {
             bold: style.bold,
             italic: style.italic,
         };
-        self.current_x += word_width;
+        self.current_x = finite_used(
+            self.current_x as f64 + word_width as f64,
+            node,
+            "text flow x",
+            diagnostics,
+        );
         self.line_has_content = true;
         self.has_line = true;
         self.pending_space = false;
         fragment
     }
 
-    fn break_line(&mut self) -> Rect {
+    fn break_line(&mut self, node: Option<NodeId>, diagnostics: &mut Vec<Diagnostic>) -> Rect {
         let rect = Rect {
             x: self.current_x,
             y: self.y,
             width: 1.0,
             height: self.line_height,
         };
-        self.next_line();
+        self.next_line(node, diagnostics);
         rect
     }
 
-    fn next_line(&mut self) {
-        self.y += self.line_height;
+    fn next_line(&mut self, node: Option<NodeId>, diagnostics: &mut Vec<Diagnostic>) {
+        self.y = finite_used(
+            self.y as f64 + self.line_height as f64,
+            node,
+            "inline flow y",
+            diagnostics,
+        );
         self.current_x = self.start_x;
         self.line_height = self.base_line_height;
         self.line_has_content = false;
@@ -352,8 +479,13 @@ impl InlineFlow {
         self.pending_space = false;
     }
 
-    pub(super) fn content_height(&self) -> f32 {
-        self.y - self.start_y + if self.has_line { self.line_height } else { 0.0 }
+    pub(super) fn content_height(&self) -> f64 {
+        self.y as f64 - self.start_y as f64
+            + if self.has_line {
+                self.line_height as f64
+            } else {
+                0.0
+            }
     }
 }
 

@@ -1751,6 +1751,18 @@ fn compute_with_context(
         ..ComputedColors::default()
     };
     for (&property, (_, value)) in &winners {
+        if matches!(property, Property::Margin(_)) {
+            let margin = match value {
+                Value::Auto => Some(crate::css::values::LengthOrAuto::Auto),
+                Value::Length(length) => Some(length.clone().into()),
+                _ => None,
+            };
+            if let Some(margin) = margin {
+                style
+                    .specified_margins
+                    .insert(format!("{property:?}"), margin);
+            }
+        }
         if let Value::Color(color) = value {
             style
                 .specified_colors
@@ -1988,6 +2000,7 @@ fn computed_value(
         P::BackgroundColor => Value::Color(parent.colors.background.clone()),
         P::BackgroundImage => Value::BackgroundImage(style.background_image),
         P::Display => Value::Display(style.display),
+        P::Direction => Value::Direction(style.direction),
         P::BoxSizing => Value::BoxSizing(style.box_sizing),
         P::FontSize => Value::Length(Length::Px(style.font_size)),
         P::FontFamily => Value::Family(style.font_family.clone()),
@@ -2006,7 +2019,10 @@ fn computed_value(
             .unwrap_or(Value::Auto),
         P::ContainerType => Value::ContainerType(style.container_type),
         P::ContainerName => Value::ContainerNames(style.container_names.clone()),
-        P::Margin(side) => Value::Length(style.margin.get(side).clone()),
+        P::Margin(side) => match style.margin.get(side) {
+            crate::css::values::LengthOrAuto::Length(length) => Value::Length(length.clone()),
+            crate::css::values::LengthOrAuto::Auto => Value::Auto,
+        },
         P::Padding(side) => Value::Length(style.padding.get(side).clone()),
         P::BorderWidth(side) => Value::Length(Length::Px(*style.border_width.get(side))),
         P::BorderStyle(side) => Value::BorderStyle(*style.border_style.get(side)),
@@ -2033,6 +2049,7 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         }
         (P::BackgroundImage, Value::BackgroundImage(image)) => style.background_image = image,
         (P::Display, Value::Display(display)) => style.display = display,
+        (P::Direction, Value::Direction(direction)) => style.direction = direction,
         (P::BoxSizing, Value::BoxSizing(sizing)) => style.box_sizing = sizing,
         (P::FontSize, Value::Length(length)) => {
             style.font_size = length
@@ -2062,7 +2079,10 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         (P::Height, Value::Auto) => style.height = None,
         (P::ContainerType, Value::ContainerType(kind)) => style.container_type = kind,
         (P::ContainerName, Value::ContainerNames(names)) => style.container_names = names,
-        (P::Margin(side), Value::Length(length)) => *style.margin.get_mut(side) = length,
+        (P::Margin(side), Value::Length(length)) => *style.margin.get_mut(side) = length.into(),
+        (P::Margin(side), Value::Auto) => {
+            *style.margin.get_mut(side) = crate::css::values::LengthOrAuto::Auto;
+        }
         (P::Padding(side), Value::Length(length)) => *style.padding.get_mut(side) = length,
         (P::BorderWidth(side), Value::Length(length)) => {
             *style.border_width.get_mut(side) = length.resolve(style.font_size, 0.0).max(0.0)

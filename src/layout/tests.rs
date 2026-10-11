@@ -18,6 +18,412 @@ fn find<'a>(layout_box: &'a LayoutBox, tag: &str) -> Option<&'a LayoutBox> {
         .find_map(|child| find(child, tag))
 }
 
+fn assert_normalized(layout_box: &LayoutBox) {
+    if layout_box.kind() == BoxKind::Block {
+        assert!(
+            layout_box
+                .children()
+                .iter()
+                .all(|child| child.kind() == BoxKind::Block)
+                || layout_box
+                    .children()
+                    .iter()
+                    .all(|child| child.kind() != BoxKind::Block),
+            "mixed children of {}",
+            layout_box.tag_name()
+        );
+    } else {
+        assert!(
+            layout_box
+                .children()
+                .iter()
+                .all(|child| child.kind() != BoxKind::Block)
+        );
+    }
+    for child in layout_box.children() {
+        assert_normalized(child);
+    }
+}
+
+#[test]
+fn anonymous_blocks_group_leading_middle_trailing_and_multiple_inline_runs() {
+    for (contents, expected) in [
+        ("Leading<em>inline</em><div>Block</div>", vec![true, false]),
+        ("<div>Block</div>Trailing<em>inline</em>", vec![false, true]),
+        (
+            "<div>First</div>Middle<em>inline</em><div>Last</div>",
+            vec![false, true, false],
+        ),
+        (
+            "Leading<div>First</div>Middle<div>Last</div>Trailing",
+            vec![true, false, true, false, true],
+        ),
+    ] {
+        let tree = layout(
+            &format!("<section style='font:16px/20px serif'>{contents}</section>"),
+            400.0,
+        );
+        let section = find(tree.root(), "<section>").unwrap();
+        assert_eq!(
+            section
+                .children()
+                .iter()
+                .map(LayoutBox::is_anonymous)
+                .collect::<Vec<_>>(),
+            expected,
+            "{contents}"
+        );
+        assert_normalized(tree.root());
+        for (index, child) in section.children().iter().enumerate() {
+            assert_eq!(child.kind(), BoxKind::Block);
+            assert_eq!(child.rect().x, section.content_rect().x);
+            assert_eq!(child.rect().width, section.content_rect().width);
+            assert_eq!(
+                child.rect().y,
+                section.content_rect().y + index as f32 * 20.0
+            );
+            assert_eq!(child.rect().height, 20.0);
+            if child.is_anonymous() {
+                assert_eq!(child.dom_node_id(), None);
+                assert_eq!(child.pseudo_element(), None);
+                assert!(
+                    child
+                        .children()
+                        .iter()
+                        .all(|child| child.kind() != BoxKind::Block)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn anonymous_generation_discards_only_collapsible_whitespace_runs_and_preserves_pure_trees() {
+    let tree = layout(
+        "<section> \t\n<div>First</div> \r\n <div>Last</div>\n </section>\
+         <article> \t Inline <em>only</em> \n </article>\
+         <main><div>Only</div><div>blocks</div></main>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    assert_eq!(section.children().len(), 2);
+    assert!(section.children().iter().all(|child| !child.is_anonymous()));
+    let article = find(tree.root(), "<article>").unwrap();
+    assert_eq!(article.children().len(), 3);
+    assert_eq!(article.children()[0].text(), Some(" \t Inline "));
+    assert_eq!(article.children()[1].kind(), BoxKind::Inline);
+    assert_eq!(article.children()[2].text(), Some(" \n "));
+    assert!(article.children().iter().all(|child| !child.is_anonymous()));
+    let main = find(tree.root(), "<main>").unwrap();
+    assert_eq!(main.children().len(), 2);
+    assert!(main.children().iter().all(|child| !child.is_anonymous()));
+    assert_normalized(tree.root());
+
+    // NBSP is not collapsible CSS whitespace. Empty inline elements and
+    // explicit line breaks are real inline boxes, not ignorable text runs.
+    let tree = layout(
+        "<section>&nbsp;<div>Block</div><span></span><br></section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    assert_eq!(section.children().len(), 3);
+    assert_eq!(section.children()[0].children()[0].text(), Some("\u{a0}"));
+    assert_eq!(section.children()[2].children().len(), 2);
+    assert_eq!(section.children()[2].children()[0].tag_name(), "<span>");
+    assert_eq!(section.children()[2].children()[1].tag_name(), "<br>");
+
+    let tree = layout(
+        "<section>Visible<span style='display:none'><div>Hidden</div></span></section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    assert_eq!(section.children().len(), 1);
+    assert_eq!(section.children()[0].kind(), BoxKind::Text);
+}
+
+#[test]
+fn anonymous_styles_inherit_typography_and_reset_noninherited_box_properties() {
+    use crate::{
+        css::values::Edges,
+        style::{ComputedStyle, Display},
+    };
+    let tree = layout(
+        "<style>section {--tone:blue;color:red;-webkit-text-fill-color:blue;\
+         font:italic bold 22px/2 serif;width:200px;height:160px;\
+         box-sizing:border-box;margin:7px;padding:9px;border:3px solid green;\
+         background:yellow;container:owner / size}</style>\
+         <section>Before<div>Block</div>After</section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    let mut expected = ComputedStyle::inherit(section.style());
+    expected.display = Display::Block;
+    for child in [&section.children()[0], &section.children()[2]] {
+        assert!(child.is_anonymous());
+        assert_eq!(child.style(), &expected);
+        assert_eq!(child.style().font_size, 22.0);
+        assert!(child.style().bold && child.style().italic);
+        assert_eq!(child.style().color, Some(0xff0000));
+        assert_eq!(child.style().text_fill_color.legacy(), Some(0x0000ff));
+        assert_eq!(
+            child.style().custom_properties,
+            section.style().custom_properties
+        );
+        assert_eq!(child.style().width, None);
+        assert_eq!(child.style().height, None);
+        assert_eq!(child.style().margin, Edges::default());
+        assert_eq!(child.style().padding, Edges::default());
+        assert_eq!(child.style().border_width, Edges::default());
+        assert_eq!(child.style().background_color, None);
+        assert_eq!(
+            child.style().container_type,
+            crate::css::container::ContainerType::Normal
+        );
+        assert!(child.style().container_names.is_empty());
+        assert_eq!(child.rect(), child.content_rect());
+        assert_eq!(child.rect().width, section.content_rect().width);
+        assert_eq!(child.rect().height, 44.0);
+    }
+    assert!(tree.diagnostics().is_empty());
+}
+
+#[test]
+fn blocks_split_every_inline_ancestor_without_losing_styles_order_or_containing_width() {
+    let tree = layout(
+        "<style>section{width:220px;font:16px/20px serif}\
+         em{color:red;padding:2px 8px;margin:0 5px;border:3px solid green}\
+         strong{color:blue} .block{display:block;margin:0}</style>\
+         <section>Outside <em>Before <strong>Deep <span class='block'>Block</span>\
+         Return</strong> After</em> End</section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    assert_eq!(section.children().len(), 3);
+    assert_normalized(tree.root());
+    let before = &section.children()[0];
+    let block = &section.children()[1];
+    let after = &section.children()[2];
+    assert!(before.is_anonymous() && after.is_anonymous());
+    assert_eq!(block.tag_name(), "<span>");
+    assert_eq!(block.style().color, Some(0x0000ff));
+    assert_eq!(block.rect().x, section.content_rect().x);
+    assert_eq!(block.rect().width, 220.0);
+    assert!(block.rect().y >= before.rect().y + before.rect().height);
+    assert!(after.rect().y >= block.rect().y + block.rect().height);
+    let first_em = find(before, "<em>").unwrap();
+    let last_em = find(after, "<em>").unwrap();
+    assert_eq!(first_em.dom_node_id(), last_em.dom_node_id());
+    assert_eq!(first_em.style(), last_em.style());
+    assert_eq!(first_em.style().color, Some(0xff0000));
+    assert!(first_em.inline_start && !first_em.inline_end);
+    assert!(!last_em.inline_start && last_em.inline_end);
+    assert_eq!(first_em.rect().width, first_em.content_rect().width + 11.0);
+    assert_eq!(last_em.rect().width, last_em.content_rect().width + 11.0);
+    assert_eq!(first_em.padding.right, 0.0);
+    assert_eq!(last_em.padding.left, 0.0);
+    let first_strong = find(before, "<strong>").unwrap();
+    let last_strong = find(after, "<strong>").unwrap();
+    assert_eq!(first_strong.dom_node_id(), last_strong.dom_node_id());
+    assert_eq!(first_strong.style(), last_strong.style());
+    assert_eq!(find(first_strong, "#text").unwrap().text(), Some("Deep "));
+    assert_eq!(find(last_strong, "#text").unwrap().text(), Some("Return"));
+}
+
+#[test]
+fn inline_splits_keep_empty_end_continuations_but_not_between_consecutive_blocks() {
+    let tree = layout(
+        "<style>.block{display:block;height:12px} em{border:2px solid blue}</style>\
+         <section><em><span class='block'></span><span class='block'></span></em></section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    assert_eq!(section.children().len(), 4);
+    assert!(section.children()[0].is_anonymous());
+    assert!(section.children()[3].is_anonymous());
+    for child in [&section.children()[0], &section.children()[3]] {
+        assert_eq!(child.children().len(), 1);
+        assert!(child.children()[0].children().is_empty());
+        assert!(child.rect().height > 0.0, "empty decorated continuation");
+    }
+    assert_normalized(tree.root());
+    let tree = layout(
+        "<section><em><span style='display:block;height:12px'></span></em></section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    assert_eq!(section.children().len(), 3);
+    assert_eq!(section.children()[0].rect().height, 0.0);
+    assert_eq!(section.children()[2].rect().height, 0.0);
+    assert_eq!(section.rect().height, 12.0);
+}
+
+#[test]
+fn generated_replaced_and_list_item_content_participate_in_anonymous_generation() {
+    use crate::{
+        paint::{self, DisplayItem},
+        style::PseudoElement,
+    };
+    let tree = layout(
+        "<style>section{font:16px/20px serif}\
+         section::before{content:'Prelude';display:block;height:20px}\
+         em::before{content:'Inner';display:block;height:20px}\
+         section::after{content:'End'}\
+         .item{display:list-item}</style>\
+         <section>Before<img alt='Image' width='30' height='20'>\
+         <em>Inside</em><span class='item'>Item</span></section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    assert_eq!(section.children().len(), 6);
+    assert_eq!(
+        section.children()[0].pseudo_element(),
+        Some(PseudoElement::Before)
+    );
+    assert!(section.children()[1].is_anonymous());
+    let image = find(&section.children()[1], "<img>").unwrap();
+    assert_eq!(image.content_rect().width, 30.0);
+    assert_eq!(image.content_rect().height, 20.0);
+    assert_eq!(
+        section.children()[2].pseudo_element(),
+        Some(PseudoElement::Before)
+    );
+    assert_eq!(section.children()[2].tag_name(), "::before");
+    assert!(section.children()[3].is_anonymous());
+    assert_eq!(
+        section.children()[4].list_marker().unwrap().text,
+        "\u{2022}"
+    );
+    assert!(section.children()[5].is_anonymous());
+    let after = find(&section.children()[5], "::after").unwrap();
+    assert_eq!(after.pseudo_element(), Some(PseudoElement::After));
+    assert_normalized(tree.root());
+    let display = paint::build_display_list(&tree, 400.0, 300.0, false);
+    for text in [
+        "Prelude", "Before", "Image", "Inner", "Inside", "Item", "End",
+    ] {
+        assert!(
+            display
+                .iter()
+                .any(|item| matches!(item, DisplayItem::Text{text:t,..} if t==text)),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn anonymous_hit_testing_and_node_geometry_use_real_inline_continuations_not_wrappers_or_pseudos() {
+    let document = parser::parse(
+        "<style>section{width:240px;font:16px/20px serif}\
+         a{background:yellow}\
+         a::before{content:'Generated';display:block;width:200px;height:20px;color:blue}\
+         .block{display:block;width:80px;height:20px}</style>\
+         <section><a href='next'>Before<span class='block'>Block</span>After</a></section>",
+    )
+    .unwrap();
+    let original_dom = crate::devtools::format_dom(&document);
+    let mut tree = build_layout_tree(&document);
+    let font = load_bundled_font().unwrap();
+    tree.layout(400.0, &font);
+    let section = find(tree.root(), "<section>").unwrap();
+    let link = find(tree.root(), "<a>").unwrap().dom_node_id().unwrap();
+    let mut links = Vec::new();
+    for anonymous in section
+        .children()
+        .iter()
+        .filter(|child| child.is_anonymous())
+    {
+        links.push(find(anonymous, "<a>").unwrap());
+        assert_eq!(anonymous.dom_node_id(), None);
+        let whitespace_x = anonymous.rect().x + anonymous.rect().width - 1.0;
+        assert_eq!(
+            tree.hit_test(whitespace_x, anonymous.rect().y + 1.0),
+            section.dom_node_id()
+        );
+    }
+    assert_eq!(links.len(), 3); // Empty continuation before the block pseudo, then Before/After.
+    let union = links
+        .iter()
+        .fold(Rect::default(), |rect, piece| rect.union(piece.rect()));
+    assert_eq!(tree.node_rect(link), Some(union));
+    assert!(
+        union.width < 200.0,
+        "block pseudo must not enlarge originating node geometry"
+    );
+    let pseudo = find(tree.root(), "::before").unwrap();
+    let fragment = &pseudo.children()[0].text_fragments()[0];
+    assert_eq!(
+        tree.hit_test(fragment.x + 1.0, fragment.y + 1.0),
+        Some(link)
+    );
+    for piece in &links[1..] {
+        let text = find(piece, "#text").unwrap();
+        let fragment = &text.text_fragments()[0];
+        let hit = tree.hit_test(fragment.x + 1.0, fragment.y + 1.0);
+        assert_eq!(hit, text.dom_node_id());
+        assert!(
+            crate::engine::link_url(
+                &document,
+                hit.unwrap(),
+                &url::Url::parse("https://example.test/").unwrap()
+            )
+            .unwrap()
+            .is_some()
+        );
+    }
+    assert_eq!(crate::devtools::format_dom(&document), original_dom);
+    tree.layout(400.0, &font);
+    let once = tree.clone();
+    tree.layout(400.0, &font);
+    assert_eq!(tree, once);
+}
+
+#[test]
+fn anonymous_boxes_are_visible_in_value_dumps_and_debug_outlines_without_decorations() {
+    use crate::paint::{self, DisplayItem};
+    let tree = layout(
+        "<style>section{width:200px;font:16px/20px serif;background:yellow;border:2px solid blue}</style>\
+         <section>Before<div>Block</div>After</section>",
+        400.0,
+    );
+    let section = find(tree.root(), "<section>").unwrap();
+    let plain = paint::build_display_list(&tree, 400.0, 300.0, false);
+    let debug = paint::build_display_list(&tree, 400.0, 300.0, true);
+    let values = crate::devtools::format_values(&tree, 1.0);
+    assert_eq!(values.matches("Anonymous #anonymous-block").count(), 2);
+    assert!(!values.contains("Node None"));
+    for child in section
+        .children()
+        .iter()
+        .filter(|child| child.is_anonymous())
+    {
+        let rect = child.rect();
+        assert!(debug.iter().any(|item| matches!(
+            item, DisplayItem::OutlineRect {x,y,w,h,..}
+            if (*x,*y,*w,*h)==(rect.x,rect.y,rect.width,rect.height)
+        )));
+        assert!(!plain.iter().any(|item| matches!(
+            item, DisplayItem::Rect {x,y,w,h,..}
+            if (*x,*y,*w,*h)==(rect.x,rect.y,rect.width,rect.height)
+        )));
+    }
+    let mut pixels = vec![0xffffff; 400 * 300];
+    paint::rasterize_display_list(
+        &debug,
+        &load_bundled_font().unwrap(),
+        &mut pixels,
+        400,
+        300,
+        1.0,
+        0.0,
+    );
+    let rect = section.children()[2].rect();
+    let offset = rect.y as usize * 400 + (rect.x + rect.width - 1.0) as usize;
+    assert_eq!(
+        pixels[offset], 0xff0000,
+        "anonymous block's full-width debug outline"
+    );
+}
+
 #[test]
 fn compatibility_box_sizing_uses_content_floor_and_replaced_dimensions() {
     for (sizing, content_width, content_height) in
@@ -153,7 +559,7 @@ fn generated_content_uses_separate_boxes_styles_hit_targets_and_paint_without_do
     let fragment = &before.children()[0].text_fragments()[0];
     assert_eq!(
         tree.hit_test(fragment.x + 1.0, fragment.y + 1.0),
-        Some(before.dom_node_id())
+        before.dom_node_id()
     );
     let list = paint::build_display_list(&tree, 320.0, 300.0, false);
     for (text, color) in [
@@ -213,7 +619,7 @@ fn marker_font_color_and_content_have_a_real_layout_and_paint_hook() {
 fn generated_text_limit_reports_literal_attribute_and_combined_overflow_and_survives_relayout() {
     use crate::style;
     fn find_node(layout_box: &LayoutBox, id: crate::dom::NodeId) -> Option<&LayoutBox> {
-        if layout_box.dom_node_id() == id {
+        if layout_box.dom_node_id() == Some(id) {
             return Some(layout_box);
         }
         layout_box
@@ -350,7 +756,7 @@ fn wrapped_link_hit_testing_uses_fragments_not_whitespace_between_lines() {
         let hit = tree
             .hit_test(fragment.x + fragment.width / 2.0, fragment.y + 1.0)
             .unwrap();
-        assert_eq!(hit, text.dom_node_id());
+        assert_eq!(Some(hit), text.dom_node_id());
         assert!(
             crate::engine::link_url(
                 &document,
@@ -541,10 +947,13 @@ fn nested_block_display_interrupts_inline_flow() {
         "<p><em>before<span style='display:block; margin:0'>middle</span>after</em></p>",
         400.0,
     );
-    let em = find(tree.root(), "<em>").unwrap();
-    let before = em.children()[0].rect();
-    let middle = em.children()[1].rect();
-    let after = em.children()[2].rect();
+    let paragraph = find(tree.root(), "<p>").unwrap();
+    let before = paragraph.children()[0].rect();
+    let middle = paragraph.children()[1].rect();
+    let after = paragraph.children()[2].rect();
+    assert!(paragraph.children()[0].is_anonymous());
+    assert_eq!(paragraph.children()[1].tag_name(), "<span>");
+    assert!(paragraph.children()[2].is_anonymous());
     assert!(middle.y >= before.y + before.height);
     assert!(after.y >= middle.y + middle.height);
 }
@@ -623,7 +1032,7 @@ fn used_math_failures_are_observable_and_consistent_across_layout_paths_and_rela
         }
         assert_eq!(tree.diagnostics().len(), if has_width { 9 } else { 8 });
         for diagnostic in tree.diagnostics() {
-            assert_eq!(diagnostic.node_id, Some(target.dom_node_id()));
+            assert_eq!(diagnostic.node_id, target.dom_node_id());
             assert!(diagnostic.message.contains("non-finite CSS length result"));
             assert!(diagnostic.message.contains("value=Math("));
             assert!(diagnostic.message.contains("font-size=16px"));

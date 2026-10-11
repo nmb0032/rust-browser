@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Centered page containers - Milestone 8.2</title>
+  <style>
+    body { margin: 0; background: #e6ebef; color: #203040; }
+    main { width: 560px; margin: 20px auto; padding: 20px; border: 2px solid #386080; background: white; }
+    h1 { margin: 0 0 16px; font-size: 26px; }
+    p { margin: 12px 0; }
+    .centered { width: 50%; margin: 12px auto; padding: 12px; background: #b8d8ed; }
+    .right { width: 60%; margin: 12px 0 12px auto; padding: 12px; background: #c5e4cb; }
+    .border-box { box-sizing: border-box; width: 50%; margin: 12px auto; padding: 12px; border: 2px solid #386080; }
+    img { display: block; width: 160px; height: 30px; margin: 12px auto; background: #f6dfb4; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Centered page containers</h1>
+    <p>The white page has equal horizontal auto margins. Resize the window to move its center without changing its width.</p>
+    <div class="centered">Half-width centered content box</div>
+    <div class="right">One auto margin pushes this box right</div>
+    <div class="border-box">Half-width centered border box</div>
+    <img alt="Centered image fallback">
+    <p>At narrow widths the page overflows to the right instead of gaining negative centering margins.</p>
+  </main>
+</body>
+</html>

@@ -259,7 +259,7 @@ fn import_graph_retains_redirected_base_cache_conditions_layers_and_source_order
         assert_eq!(computed.color, Some(color));
         assert_eq!(computed.width, Some(Length::Px(size)));
         assert_eq!(computed.padding.left, Length::Px(4.0));
-        assert_eq!(computed.margin.top, Length::Px(3.0));
+        assert_eq!(computed.margin.top, Length::Px(3.0).into());
         #[cfg(feature = "style-bench-reference")]
         {
             let reference = style::resolve_for_benchmark_with_stylesheets(
@@ -331,7 +331,7 @@ fn cycles_failures_and_misplaced_imports_recover_without_refetching_and_do_not_d
     let target = id(&frame, "target");
     let computed = frame.styles.get(target).unwrap();
     assert_eq!(computed.color, Some(0xff0000));
-    assert_eq!(computed.margin.top, Length::Px(4.0));
+    assert_eq!(computed.margin.top, Length::Px(4.0).into());
     assert_eq!(computed.padding.top, Length::Px(2.0));
     let messages: Vec<_> = frame
         .stylesheets

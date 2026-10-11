@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Anonymous block boxes — Milestone 8.1</title>
+<style>
+  body { margin: 0; font: 16px/24px sans-serif; color: #18312b }
+  h1 { font-size: 24px }
+  section { margin-bottom: 24px; padding: 12px; border: 1px solid #54766b; background: #f1f6f3 }
+  .block { display: block; margin: 8px 0; padding: 6px; background: #d5e5dd }
+  em { color: #713919; background: #f9ecd9 }
+  .generated::before { content: 'Generated block inside an inline'; display: block; padding: 6px; background: #d5e5dd }
+</style>
+<h1>Anonymous block boxes</h1>
+<p>Press F12 to show box outlines. Full-width anonymous blocks surround the inline runs.
+Sizing, margins, and word wrapping still use the existing naive layout.</p>
+<section id="mixed">
+  Leading inline text <strong>with emphasis</strong>.
+  <div class="block">First real block</div>
+  Middle inline text <img alt="Image fallback" width="90" height="24">.
+  <div class="block">Second real block</div>
+  Trailing inline text.
+</section>
+<section id="nested">
+  Outside before <em>Inline before <strong>nested before
+  <span class="block">Block lifted through both inline ancestors</span>
+  nested after</strong> inline after</em> outside after.
+</section>
+<section id="generated">
+  Before <span class="generated">inline after its block pseudo</span> end.
+</section>
+<section id="blocks-only">
+  <div class="block">Whitespace between blocks creates no anonymous box</div>
+  <div class="block">Second block</div>
+</section>
+<section id="inline-only">Pure inline <em>content stays inline</em>, with no anonymous wrapper.</section>

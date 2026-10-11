@@ -211,7 +211,7 @@ fn actual_matching_limits_report_and_fail_closed_in_selectors_scope_roots_and_li
     let style = result.styles.get(target).unwrap();
     assert_eq!(style.color, Some(0x008000));
     assert_eq!(style.width, Some(Length::Px(12.0)));
-    assert_eq!(style.margin.top, Length::Px(0.0));
+    assert_eq!(style.margin.top, Length::Px(0.0).into());
     assert_eq!(
         result.stylesheets.diagnostics.len(),
         super::super::matching::MAX_MATCH_DIAGNOSTICS + 1
@@ -459,13 +459,13 @@ fn variables_pending_shorthands_cycles_and_all_origins_match_reference() {
             target.width,
             Some(Length::Px(if width < 600.0 { 20.0 } else { 40.0 }))
         );
-        assert_eq!(target.margin.left, Length::Px(9.0));
-        assert_eq!(target.margin.top, Length::Px(2.0));
+        assert_eq!(target.margin.left, Length::Px(9.0).into());
+        assert_eq!(target.margin.top, Length::Px(2.0).into());
         assert_eq!(target.border_color.left, Some(0x800080));
         assert_eq!(target.border_width.top, 3.0);
         assert_eq!(target.background_color, Some(0x008000));
         let other = result.styles.get(find(&document, "other")).unwrap();
-        assert_eq!(other.margin.top, Length::Px(4.0));
+        assert_eq!(other.margin.top, Length::Px(4.0).into());
         assert_eq!(other.border_width.top, 1.0);
     }
 }

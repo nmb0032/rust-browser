@@ -7,15 +7,18 @@ use crate::paint::DisplayItem;
 pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
     use std::fmt::Write;
     fn walk(layout_box: &LayoutBox, scale: f32, output: &mut String) {
-        writeln!(
-            output,
-            "Node {:?} {}",
-            layout_box.dom_node_id(),
-            layout_box.tag_name()
-        )
-        .unwrap();
+        if let Some(node) = layout_box.dom_node_id() {
+            writeln!(output, "Node {node:?} {}", layout_box.tag_name()).unwrap();
+        } else {
+            writeln!(output, "Anonymous {}", layout_box.tag_name()).unwrap();
+        }
         for (property, value) in &layout_box.style().specified_lengths {
             writeln!(output, "  specified {property}: {value:?}").unwrap();
+        }
+        for (property, value) in &layout_box.style().specified_margins {
+            if *value == crate::css::values::LengthOrAuto::Auto {
+                writeln!(output, "  specified {property}: Auto").unwrap();
+            }
         }
         for (property, value) in &layout_box.style().specified_colors {
             writeln!(output, "  specified {property}: {value:?}").unwrap();
@@ -46,6 +49,19 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
         )
         .unwrap();
         writeln!(output, "  computed width: {:?}", layout_box.style().width).unwrap();
+        writeln!(
+            output,
+            "  computed direction: {:?}",
+            layout_box.style().direction
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed margins: {:?}",
+            layout_box.style().margin
+        )
+        .unwrap();
+        writeln!(output, "  used margins: {:?}", layout_box.used_margins()).unwrap();
         writeln!(
             output,
             "  computed font-size: Px({:?})",
@@ -121,6 +137,7 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
             }
         };
         writeln!(output, "  display: {:?}", style.display).unwrap();
+        writeln!(output, "  direction: {:?}", style.direction).unwrap();
         if style.box_sizing != crate::style::BoxSizing::ContentBox {
             writeln!(output, "  box-sizing: {:?}", style.box_sizing).unwrap();
         }
@@ -219,7 +236,14 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
                 style.borders.left,
             ),
         ] {
-            writeln!(output, "  margin-{name}: {margin:?}").unwrap();
+            match margin {
+                crate::css::values::LengthOrAuto::Length(length) => {
+                    writeln!(output, "  margin-{name}: {length:?}").unwrap();
+                }
+                crate::css::values::LengthOrAuto::Auto => {
+                    writeln!(output, "  margin-{name}: Auto").unwrap();
+                }
+            }
             writeln!(output, "  padding-{name}: {padding:?}").unwrap();
             writeln!(output, "  border-{name}-width: Px({width:?})").unwrap();
             writeln!(output, "  border-{name}-style: {border_style:?}").unwrap();

@@ -847,7 +847,7 @@ mod tests {
             let computed = frame.styles.get(card).unwrap();
             assert_eq!(computed.background_color, Some(background));
             assert_eq!(computed.color, Some(color));
-            assert_eq!(computed.margin.top, Length::Px(7.0));
+            assert_eq!(computed.margin.top, Length::Px(7.0).into());
             assert_eq!(
                 frame.media_environment().resolution_dppx,
                 Some(scale as f32)

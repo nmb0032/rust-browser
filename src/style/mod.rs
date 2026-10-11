@@ -52,7 +52,9 @@ pub use cascade::{
     resolve_with_stylesheets, resolve_with_stylesheets_and_environment,
     resolve_with_user_stylesheets, resolve_with_user_stylesheets_and_environment,
 };
-pub use computed::{BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem, Display};
+pub use computed::{
+    BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem, Direction, Display,
+};
 pub use container::ContainerSnapshot;
 pub(crate) use stylesheets::report_css_errors;
 pub(crate) fn import_supported(
@@ -83,6 +85,8 @@ mod compat_tests;
 mod container_tests;
 #[cfg(test)]
 mod control_tests;
+#[cfg(test)]
+mod margin_tests;
 #[cfg(test)]
 mod math_tests;
 #[cfg(test)]

@@ -65,7 +65,7 @@ keeping the codebase small enough to learn from.
 | DOM | `src/dom` | Arena of nodes addressed by `NodeId`; supports append only. |
 | CSS | `src/css` | Resumable CSS Syntax tokenizer and token-based rule parsing with bounded diagnostics/recovery; source-retaining AST, three-valued MQ range/dimension/preference/input conditions, typed container establishment, attribute/combinator/structural selector matching and specificity, colors, dimension-checked bounded math, contextual lengths including container units, and angle/time/resolution parsers. |
 | Style | `src/style` | Embedded/external/inline and optional user sheets, origin/importance/layer cascade with rollback candidates, nested media/supports/container conditions, nesting and scoped/namespace-aware matching, bounded typed registrations, indexed/Bloom matching, typed values and atomic shorthands, token-based custom properties, font/root/viewport/container length computation against immutable real layout snapshots, inherited styles keyed by `NodeId`, and `--dump=style`. |
-| Layout | `src/layout` | Block/inline boxes, percentage/math used values, non-replaced block size containment and definite length heights, image sizing, spacing, text, list markers, naive fragment-aware hit testing, and explicit device-pixel rectangle quantization. |
+| Layout | `src/layout` | Block/inline box generation with anonymous block wrappers and block-in-inline continuations; percentage/math used values, non-replaced block size containment and definite length heights, image sizing, naive spacing/text flow, list markers, fragment-aware hit testing, and explicit device-pixel rectangle quantization. |
 | Paint | `src/paint` | Rasterizes text, backgrounds, borders, and shared RGBA images with clipping, scaling, alpha blending, and scrolling. |
 | Media | `src/media` | Bounded PNG/JPEG/GIF/WebP decoding, with shared intrinsic-size image data. |
 | Window | `src/ui` | CSS-pixel resize/scale/theme restyle-layout-paint with bounded container and pointer feedback, click navigation, back/forward shortcuts, scroll restoration, and current URL/loading/error titles. |
@@ -1803,13 +1803,100 @@ and the CSSOM parts covered here meet the conformance gate.
 
 **Goal:** Replace naive layout with the CSS visual formatting model.
 
-- [ ] **8.1 Generate anonymous boxes.** Wrap inline content that sits next to
+- [x] **8.1 Generate anonymous boxes.** Wrap inline content that sits next to
   blocks in anonymous block boxes.
   *You'll see:* mixed block and inline content matches browsers in the
   debug overlay.
-- [ ] **8.2 Compute widths and auto margins.** Implement the CSS 2 width
+
+  Box construction groups leading, intervening, and trailing inline runs
+  whenever the containing block has block-level children. Collapsible
+  whitespace-only text runs create no wrapper; pure inline and pure block
+  content retain their formatting. In-flow blocks inside inline ancestors
+  (including generated block pseudos) are lifted to the containing block,
+  splitting every intervening inline ancestor into real continuations.
+  Empty end continuations are retained, consecutive block siblings have no
+  spurious intervening continuation, and broken horizontal margin/padding/
+  border edges are suppressed. Supported inline images, line breaks, and
+  list markers continue to participate in their existing layout paths.
+
+  Anonymous boxes inherit the containing block's typography, colors, and
+  custom-property environment through the existing inherited-style helper;
+  non-inherited box properties start at initial values, with block display.
+  Original descendants retain their DOM-computed styles. Anonymous boxes
+  have no node or pseudo identity (`LayoutBox::dom_node_id()` now returns
+  `Option<NodeId>`, and `is_anonymous()` identifies wrappers). Hit testing
+  traverses them without targeting them; node geometry unions real inline
+  continuations and excludes anonymous/pseudo boxes. Container feedback
+  consumes only real eligible block boxes, not formatting wrappers.
+  Value dumps label anonymous boxes separately; layout dumps and F12
+  outlines expose their full-width formatting rectangles.
+
+  **Visible check:** `cargo run -- tests/pages/anonymous_boxes.html
+  --dump=layout` shows seven `#anonymous-block Block` entries, with nested
+  blocks beside (not inside) their inline continuations. Run the same page
+  without `--dump=layout` and press F12 to inspect the overlay. The image
+  intentionally has no source to exercise supported alt-text fallback.
+  Focused structural/geometry/style/hit-test/paint/container regressions
+  and a CLI dump assertion cover these cases.
+
+  **Remaining naive behavior:** This is box generation, not complete
+  browser layout parity. The existing viewport gutter, height sizing,
+  additive vertical margins, word wrapping, and inline bounding rectangles
+  remain.
+  Margin collapsing, proper baseline-aligned line boxes, per-line inline
+  decoration fragments, Unicode line breaking, and `white-space` handling
+  remain unimplemented. Those remain for 8.3–8.5 and later steps;
+  Milestone 8 is not complete.
+- [x] **8.2 Compute widths and auto margins.** Implement the CSS 2 width
   equations, including `margin: auto` centering.
   *You'll see:* centered page containers.
+
+  Normal-flow block and list-item boxes now solve the CSS2 horizontal
+  width equation after resolving fixed, percentage, and supported math
+  lengths against the containing content width and applying `box-sizing`.
+  An auto width fills the remaining space with horizontal auto margins
+  treated as zero. A definite width distributes free space to one auto
+  margin or equally to two. Over-constrained boxes adjust the end margin;
+  overflowing fixed terms first treat auto margins as zero, and a negative
+  available auto width floors at zero before balancing the equation.
+  Negative margins, zero containing widths, padding, and borders participate.
+  The containing block's CSS `direction` (`ltr` or `rtl`) selects the
+  adjusted margin, not the child's direction. This minimal inherited
+  property is excluded from `all`; it does not implement bidi text or RTL
+  inline flow.
+
+  Supported block images determine their width using the existing
+  intrinsic/explicit/alt-fallback sizing path before solving their margins.
+  Inline auto margins and all vertical auto margins have used value zero.
+  Margin shorthands and longhands accept typed length-or-auto values,
+  including pending `var()` substitution, atomic invalidation, CSS-wide
+  keywords, and origin/layer rollback. Computed auto and percentage values
+  remain distinct from used values. `LayoutBox::used_margins()` and
+  `--dump=values` expose the result; `--dump=style` retains `Auto`.
+  Width-equation and affected flow arithmetic use wider intermediates;
+  unrepresentable used results report existing layout diagnostics and
+  use the established 0px compatibility fallback rather than infinity.
+  Anonymous wrappers, split inline continuations, hit testing, paint, and
+  content-width container feedback use the resolved geometry, including
+  after viewport changes.
+
+  **Visible check:** `cargo run -- tests/pages/auto_margins.html
+  --dump=layout` shows the main border box at `x=98.0`, `width=604.0`
+  in the default 800px viewport (including the existing 24px gutter).
+  `--dump=values` shows left/right used margins of 74px while the
+  computed margins remain auto. Open the page without a dump to resize
+  and inspect the centered, right-aligned, border-box, and image examples.
+  The intentionally source-less image exercises the supported alt fallback.
+
+  **Supported scope, not browser parity:** This is the CSS2 equation for
+  the existing horizontal normal-flow block/replaced-image subset, not
+  complete CSS2 sizing. The viewport gutter, image sizing cap/alt fallback,
+  additive vertical margins, indefinite percentage-height fallback, naive
+  text wrapping/inline bounding boxes, and limited display types remain.
+  No min/max/intrinsic sizing keywords, margin collapse, positioned/floated/
+  table/flex/grid layout, writing modes, logical margins, HTML `dir`
+  semantics, or bidi text are added. Those remain in 8.3 and later steps;
+  Milestone 8 is not complete.
 - [ ] **8.3 Collapse margins.** Implement vertical margin collapsing.
   *You'll see:* spacing between paragraphs matches browsers.
 - [ ] **8.4 Implement inline layout.** Build line boxes with baselines,

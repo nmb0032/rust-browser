@@ -210,7 +210,7 @@ fn syntax_recovery_keeps_valid_embedded_and_inline_styles_and_rule_order() {
     assert_eq!(style.color, Some(0x008000));
     assert_eq!(style.width, Some(Length::Px(4.0)));
     assert_eq!(style.padding, Edges::all(Length::Px(2.0)));
-    assert_eq!(style.margin, Edges::all(Length::Px(3.0)));
+    assert_eq!(style.margin, Edges::all(Length::Px(3.0).into()));
     assert_eq!(result.stylesheets.diagnostics.len(), 4);
     assert!(result.stylesheets.diagnostics.iter().any(|diagnostic| {
         diagnostic.node_id == Some(find(&document, "p"))
@@ -294,6 +294,7 @@ fn shorthand_and_longhand_declarations_cascade_per_edge() {
             bottom: Length::Px(3.0),
             left: Length::Px(9.0)
         }
+        .map(Into::into)
     );
     assert_eq!(style.padding, Edges::all(Length::Percent(10.0)));
     assert_eq!(style.border_width.left, 4.0);
@@ -311,7 +312,7 @@ fn wide_keywords_and_currentcolor_use_computed_values() {
         "p",
     );
     assert_eq!(style.font_size, 40.0);
-    assert_eq!(style.margin, Edges::all(Length::Px(20.0)));
+    assert_eq!(style.margin, Edges::all(Length::Px(20.0).into()));
     assert_eq!(style.background_color, Some(0x008000));
     assert_eq!(style.border_color, Edges::all(Some(0x008000)));
 }
@@ -376,6 +377,7 @@ fn every_supported_property_and_shorthand_accepts_css_wide_keywords() {
         // The child's specified keyword is not the parent's pre-computation
         // length. Compare the computed fields, not their distinct provenance.
         expected.specified_lengths.clear();
+        expected.specified_margins.clear();
         expected.specified_colors.clear();
         assert_eq!(child, &expected, "{keyword}");
     }
@@ -444,8 +446,8 @@ fn explicit_inherit_preserves_computed_percentages_and_symbolic_currentcolor() {
     assert!(result.stylesheets.diagnostics.is_empty());
     let child = result.styles.get(find(&document, "child")).unwrap();
     assert_eq!(child.width, Some(Length::Percent(50.0)));
-    assert_eq!(child.margin.top, Length::Px(20.0));
-    assert_eq!(child.margin.right, Length::Percent(10.0));
+    assert_eq!(child.margin.top, Length::Px(20.0).into());
+    assert_eq!(child.margin.right, Length::Percent(10.0).into());
     assert_eq!(child.padding, Edges::all(Length::Px(40.0)));
     assert_eq!(child.border_width, Edges::all(2.0));
     assert_eq!(child.background_color, Some(0xFF0000));
@@ -515,6 +517,7 @@ fn wide_shorthands_cascade_per_longhand_with_importance_and_source_order() {
             bottom: Length::Px(3.0),
             left: Length::Px(4.0),
         }
+        .map(Into::into)
     );
     assert_eq!(style.padding.top, Length::Px(8.0));
     assert_eq!(style.padding.left, Length::Px(0.0));

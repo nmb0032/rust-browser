@@ -34,7 +34,7 @@ fn id(frame: &Frame, name: &str) -> NodeId {
 
 fn box_for(tree: &LayoutTree, node: NodeId) -> &LayoutBox {
     fn find(layout: &LayoutBox, node: NodeId) -> Option<&LayoutBox> {
-        if layout.dom_node_id() == node && layout.pseudo_element().is_none() {
+        if layout.dom_node_id() == Some(node) && layout.pseudo_element().is_none() {
             return Some(layout);
         }
         layout.children().iter().find_map(|child| find(child, node))
@@ -44,6 +44,113 @@ fn box_for(tree: &LayoutTree, node: NodeId) -> &LayoutBox {
 
 fn layout(frame: &mut Frame) -> LayoutTree {
     frame.layout_with_container_queries(&paint::load_bundled_font().unwrap())
+}
+
+#[test]
+fn centered_containers_use_content_width_feedback_and_stay_stable_across_resizes() {
+    let mut frame = frame(
+        "<!doctype html><style>body{margin:0}\
+        #owner{container:owner / inline-size;width:50%;margin:auto;padding:10px}\
+        #child{width:50cqw;margin:0 auto}\
+        @container owner (width >= 300px){#child{color:blue}}\
+        </style><section id='owner'>Before<div id='child'>Child</div>After</section>",
+    );
+    for (viewport, width, left, child_width) in [
+        (848.0, 400.0, 190.0, 200.0),
+        (448.0, 200.0, 90.0, 100.0),
+        (1048.0, 500.0, 240.0, 250.0),
+        (848.0, 400.0, 190.0, 200.0),
+    ] {
+        frame.set_media_environment(MediaEnvironment::new(viewport, 600.0));
+        let tree = layout(&mut frame);
+        let owner = box_for(&tree, id(&frame, "owner"));
+        assert_eq!(owner.content_rect().width, width);
+        assert_eq!(owner.rect().x, 24.0 + left);
+        assert_eq!(owner.used_margins().left.0, left);
+        let child = box_for(&tree, id(&frame, "child"));
+        assert_eq!(child.content_rect().width, child_width);
+        assert_eq!(child.rect().x, owner.content_rect().x + child_width / 2.0);
+        assert_eq!(
+            child.style().color,
+            Some(if width >= 300.0 { 0x0000ff } else { 0x000000 })
+        );
+        assert_eq!(owner.children()[0].content_rect().width, width);
+        assert_eq!(owner.children()[2].content_rect().width, width);
+        assert!(owner.children()[0].is_anonymous());
+        assert!(
+            frame.stylesheets.diagnostics.is_empty(),
+            "{:?}",
+            frame.stylesheets.diagnostics
+        );
+        assert!(tree.diagnostics().is_empty());
+        assert_eq!(layout(&mut frame), tree);
+    }
+}
+
+#[test]
+fn anonymous_wrappers_and_inline_continuations_never_replace_real_container_geometry() {
+    let mut frame = frame(
+        "<style>\
+         #owner{container:owner / inline-size;width:240px;padding:10px}\
+         #inline{container:ghost / size;font-size:24px}\
+         #block{display:block;width:80px;height:20px}\
+         @container owner (width:240px){#inline{color:blue}}\
+         @container ghost (width > 0px){#block{color:red}}\
+         </style>\
+         <section id='owner'>Leading <em id='inline'>Before<span id='block'>Block</span>\
+         After</em> Trailing</section>",
+    );
+    let tree = layout(&mut frame);
+    let owner = box_for(&tree, id(&frame, "owner"));
+    assert_eq!(owner.content_rect().width, 240.0);
+    assert_eq!(owner.children().len(), 3);
+    for child in [&owner.children()[0], &owner.children()[2]] {
+        assert!(child.is_anonymous());
+        assert_eq!(child.dom_node_id(), None);
+        assert_eq!(
+            child.style().container_type,
+            crate::css::container::ContainerType::Normal
+        );
+        assert!(child.style().container_names.is_empty());
+        assert_eq!(child.content_rect().width, 240.0);
+    }
+    assert_eq!(
+        frame.styles.get(id(&frame, "inline")).unwrap().color,
+        Some(0x0000ff)
+    );
+    assert_eq!(
+        frame.styles.get(id(&frame, "block")).unwrap().color,
+        Some(0x0000ff)
+    );
+    assert!(
+        frame.stylesheets.diagnostics.is_empty(),
+        "{:?}",
+        frame.stylesheets.diagnostics
+    );
+    let stable = tree.clone();
+    assert_eq!(layout(&mut frame), stable);
+}
+
+#[test]
+fn container_root_font_metrics_skip_anonymous_root_wrappers() {
+    let mut frame = frame(
+        "<style>html{display:inline;font-size:30px}\
+         body{container-type:inline-size;width:300px}\
+         #card{width:1rem}\
+         @container (width:10rem){#card{width:2rem}}\
+         </style><div id='card'>Root font</div>",
+    );
+    let tree = layout(&mut frame);
+    assert!(tree.root().children()[0].is_anonymous());
+    assert_eq!(
+        box_for(&tree, id(&frame, "card")).content_rect().width,
+        60.0
+    );
+    assert!(
+        frame.stylesheets.diagnostics.is_empty(),
+        "{:?}",
+        frame.stylesheets.diagnostics
+    );
 }
 
 #[test]
@@ -78,7 +185,7 @@ fn named_nearest_ancestors_axis_eligibility_nesting_and_no_self_query() {
     assert_eq!(card.background_color, Some(0x008000));
     assert_eq!(card.padding.top, Length::Px(12.0));
     assert_eq!(card.padding.bottom, Length::Px(13.0));
-    assert_eq!(card.margin.top, Length::Px(14.0));
+    assert_eq!(card.margin.top, Length::Px(14.0).into());
     assert_ne!(
         frame.styles.get(id(&frame, "inner")).unwrap().color,
         Some(0x800080)
@@ -122,10 +229,10 @@ fn container_units_use_real_content_geometry_per_axis_math_variables_and_inherit
     let tree = layout(&mut frame);
     let card = frame.styles.get(id(&frame, "card")).unwrap();
     assert_eq!(card.width, Some(Length::Px(25.0)));
-    assert_eq!(card.margin.top, Length::Px(20.0));
-    assert_eq!(card.margin.right, Length::Px(24.0));
-    assert_eq!(card.margin.bottom, Length::Px(20.0));
-    assert_eq!(card.margin.left, Length::Px(24.0));
+    assert_eq!(card.margin.top, Length::Px(20.0).into());
+    assert_eq!(card.margin.right, Length::Px(24.0).into());
+    assert_eq!(card.margin.bottom, Length::Px(20.0).into());
+    assert_eq!(card.margin.left, Length::Px(24.0).into());
     assert_eq!(card.padding.top, Length::Px(20.0));
     assert_eq!(card.padding.right, Length::Px(24.0));
     assert_eq!(card.font_size, 20.0);
@@ -240,7 +347,7 @@ fn missing_axes_and_non_container_inline_boxes_use_small_viewport_not_zero_or_la
     let tree = layout(&mut frame);
     let fallback = frame.styles.get(id(&frame, "fallback")).unwrap();
     assert_eq!(fallback.width, Some(Length::Px(30.0)));
-    assert_eq!(fallback.margin.top, Length::Px(40.0));
+    assert_eq!(fallback.margin.top, Length::Px(40.0).into());
     assert_eq!(fallback.padding.top, Length::Px(30.0));
     assert_eq!(fallback.padding.right, Length::Px(40.0));
     assert_ne!(fallback.color, Some(0x800080));
@@ -254,7 +361,7 @@ fn missing_axes_and_non_container_inline_boxes_use_small_viewport_not_zero_or_la
     );
     assert_eq!(
         frame.styles.get(id(&frame, "child")).unwrap().margin.top,
-        Length::Px(40.0)
+        Length::Px(40.0).into()
     );
 }
 

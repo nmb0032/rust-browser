@@ -52,6 +52,7 @@ fn token_values_decode_escapes_preserve_functions_and_do_not_concatenate_comment
             bottom: Length::Percent(30.0),
             left: Length::Px(0.0)
         }
+        .map(Into::into)
     );
     assert_eq!(
         computed.padding,
@@ -81,7 +82,7 @@ fn token_values_decode_escapes_preserve_functions_and_do_not_concatenate_comment
     .unwrap();
     let result = resolve(&document);
     let computed = result.styles.get(find(&document, "target")).unwrap();
-    assert_eq!(computed.margin, Edges::all(Length::Px(4.0)));
+    assert_eq!(computed.margin, Edges::all(Length::Px(4.0).into()));
     assert_eq!(computed.border_color, Edges::all(Some(0x0000ff)));
     assert_eq!(result.stylesheets.diagnostics.len(), 2);
 }
@@ -209,7 +210,11 @@ fn invalid_shorthands_are_atomic_and_do_not_erase_previous_longhands() {
             "{invalid}"
         );
         assert_eq!(computed.background_color, Some(0xff0000), "{invalid}");
-        assert_eq!(computed.margin, Edges::all(Length::Px(3.0)), "{invalid}");
+        assert_eq!(
+            computed.margin,
+            Edges::all(Length::Px(3.0).into()),
+            "{invalid}"
+        );
         assert_eq!(computed.padding, Edges::all(Length::Px(2.0)), "{invalid}");
         assert_eq!(computed.font_size, 18.0, "{invalid}");
         assert_eq!(computed.font_weight, FontWeight(700.0), "{invalid}");

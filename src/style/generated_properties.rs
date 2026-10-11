@@ -2,7 +2,7 @@
 // @webref/css 8.7.6, MIT; see tools/css-spec/LICENSE and provenance.json.
 // Snapshot SHA-256: 4860d2a9ad90814a61888e8b2d879651fd523c0d3926eecfe4548b4dd60a20eb
 use super::{
-    BoxSizing, Display,
+    BoxSizing, Direction, Display,
     declarations::{Property, Value},
     metadata::{Grammar, PropertyMetadata, Support, SyntaxMetadata},
 };
@@ -5091,8 +5091,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["ltr", "rtl"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "display",
@@ -18067,6 +18067,7 @@ pub(super) fn parser(name: &str) -> Option<Parser> {
         "container-name" => Parser::Longhand,
         "container-type" => Parser::Longhand,
         "content" => Parser::Longhand,
+        "direction" => Parser::Longhand,
         "display" => Parser::Longhand,
         "font" => Parser::Font,
         "font-family" => Parser::Longhand,
@@ -18204,6 +18205,7 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         "container-name" => vec![Property::ContainerName],
         "container-type" => vec![Property::ContainerType],
         "content" => vec![Property::Content],
+        "direction" => vec![Property::Direction],
         "display" => vec![Property::Display],
         "font" => vec![
             Property::FontStyle,
@@ -18251,6 +18253,7 @@ impl Property {
             Self::BackgroundColor => "background-color",
             Self::BackgroundImage => "background-image",
             Self::Display => "display",
+            Self::Direction => "direction",
             Self::BoxSizing => "box-sizing",
             Self::FontSize => "font-size",
             Self::FontFamily => "font-family",
@@ -18291,6 +18294,7 @@ impl Property {
             Self::BackgroundColor => false,
             Self::BackgroundImage => false,
             Self::Display => false,
+            Self::Direction => true,
             Self::BoxSizing => false,
             Self::FontSize => true,
             Self::FontFamily => true,
@@ -18331,6 +18335,7 @@ impl Property {
             Self::BackgroundColor => false,
             Self::BackgroundImage => false,
             Self::Display => false,
+            Self::Direction => false,
             Self::BoxSizing => false,
             Self::FontSize => true,
             Self::FontFamily => false,
@@ -18372,6 +18377,7 @@ pub(super) fn initial_css(property: Property) -> &'static str {
         Property::BackgroundColor => "transparent",
         Property::BackgroundImage => "none",
         Property::Display => "inline",
+        Property::Direction => "ltr",
         Property::BoxSizing => "content-box",
         Property::FontSize => "medium",
         Property::FontFamily => "sans-serif",
@@ -18412,6 +18418,7 @@ pub(super) fn simple(property: Property) -> bool {
             | Property::BackgroundColor
             | Property::BackgroundImage
             | Property::Display
+            | Property::Direction
             | Property::BoxSizing
             | Property::FontStyle
             | Property::ContainerType
@@ -18450,6 +18457,11 @@ pub(super) fn simple_value(property: Property, tokens: &[Component]) -> Option<V
             "inline" => Value::Display(Display::Inline),
             "list-item" => Value::Display(Display::ListItem),
             "none" => Value::Display(Display::None),
+            _ => return None,
+        }),
+        Property::Direction => Some(match token.ident()?.to_ascii_lowercase().as_str() {
+            "ltr" => Value::Direction(Direction::Ltr),
+            "rtl" => Value::Direction(Direction::Rtl),
             _ => return None,
         }),
         Property::FontStyle => Some(match token.ident()?.to_ascii_lowercase().as_str() {
@@ -18515,6 +18527,7 @@ pub(super) static SAMPLES: &[(&str, &str)] = &[
     ("container-name", "card"),
     ("container-type", "size"),
     ("content", "\"hello\""),
+    ("direction", "rtl"),
     ("display", "block"),
     ("font", "italic bold 20px/2 serif"),
     ("font-family", "serif"),

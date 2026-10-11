@@ -48,6 +48,7 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::BackgroundColor => format!("{:?}", style.background),
         P::BackgroundImage => format!("{:?}", style.background_image),
         P::Display => format!("{:?}", style.display),
+        P::Direction => format!("{:?}", style.direction),
         P::BoxSizing => format!("{:?}", style.box_sizing),
         P::FontSize => format!("{:?}", style.font_size),
         P::FontFamily => format!("{:?}", style.font_family),
@@ -177,16 +178,17 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 51, 707, 63]);
-    assert_eq!(longhands.len(), 36);
+    assert_eq!(counts, [0, 52, 706, 63]);
+    assert_eq!(longhands.len(), 37);
     let all = declarations::properties("all").unwrap();
     assert_eq!(all.len(), 36);
+    longhands.remove(&Property::Direction);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **50 partial**, **707 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **51 partial**, **706 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**36 longhands**, **14 shorthands**"));
+    assert!(report.contains("**37 longhands**, **14 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("height percentage/containment"));
@@ -543,7 +545,7 @@ fn missing_unknown_and_unsupported_metadata_never_becomes_a_catch_all_parser() {
         "display:grid",
         "width:min-content",
         "height:fit-content",
-        "margin:auto",
+        "margin:auto nonsense",
         "container-type:scroll-state",
         "border-style:inset",
         "border-top-color:stripes(red, blue)",

@@ -153,7 +153,7 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
                 color: style.background,
             }));
         }
-        let widths = style.border_width;
+        let widths = layout_box.inline_edges(style.border_width);
         let colors = style.borders;
         let styles = style.border_style;
         let inner_height = (rect.height - widths.top - widths.bottom).max(0.0);

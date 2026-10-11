@@ -8,7 +8,7 @@ use crate::{
     css::tokenizer::TokenKind,
     css::values::{
         BackgroundImage, BorderStyle, Color, ComputedLength, Edges, FontFamily, FontStyle,
-        FontWeight, Length, LineHeight, ResolvedColor, SpecifiedLength,
+        FontWeight, Length, LengthOrAuto, LineHeight, ResolvedColor, SpecifiedLength,
     },
     dom::{ElementData, NodeId},
 };
@@ -19,6 +19,15 @@ pub enum Content {
     Normal,
     None,
     Items(Vec<ContentItem>),
+}
+
+/// Only the containing block's horizontal width equation uses this today.
+/// Text reordering and logical properties are not implemented.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,11 +108,14 @@ pub struct ComputedStyle {
     pub content: Content,
     /// Winning, substituted length values before relative-unit computation.
     pub specified_lengths: BTreeMap<String, SpecifiedLength>,
+    /// Substituted margin values before relative-unit computation, including auto.
+    pub specified_margins: BTreeMap<String, LengthOrAuto>,
     pub specified_colors: BTreeMap<String, Color>,
     /// Case-sensitive names and computed component tokens. `None` is the
     /// guaranteed-invalid value; absence has the same substitution semantics.
     pub custom_properties: BTreeMap<String, Option<Arc<[TokenKind]>>>,
     pub display: Display,
+    pub direction: Direction,
     pub box_sizing: BoxSizing,
     pub color: Option<u32>,
     pub background_color: Option<u32>,
@@ -124,7 +136,7 @@ pub struct ComputedStyle {
     pub italic: bool,
     pub width: Option<Length>,
     pub height: Option<Length>,
-    pub margin: Edges<Length>,
+    pub margin: Edges<LengthOrAuto>,
     pub padding: Edges<Length>,
     pub border_width: Edges<f32>,
     pub border_style: Edges<BorderStyle>,
@@ -138,9 +150,11 @@ impl Default for ComputedStyle {
             container_names: Vec::new(),
             content: Content::Normal,
             specified_lengths: BTreeMap::new(),
+            specified_margins: BTreeMap::new(),
             specified_colors: BTreeMap::new(),
             custom_properties: BTreeMap::new(),
             display: Display::Inline,
+            direction: Direction::Ltr,
             box_sizing: BoxSizing::ContentBox,
             color: Some(0),
             background_color: None,
@@ -179,6 +193,7 @@ impl ComputedStyle {
     pub(crate) fn inherit(parent: &Self) -> Self {
         Self {
             custom_properties: parent.custom_properties.clone(),
+            direction: parent.direction,
             color: parent.color,
             text_color: parent.text_color,
             text_fill_color: parent.text_fill_color,

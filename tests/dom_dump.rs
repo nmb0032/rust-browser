@@ -53,3 +53,63 @@ fn dumps_the_layout_tree_with_geometry() {
     assert!(actual.contains("width=752.0"));
     assert!(!actual.contains("My Simple Page"));
 }
+
+#[test]
+fn dumps_anonymous_blocks_and_split_inline_ancestors() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/anonymous_boxes.html"))
+        .arg("--dump=layout")
+        .output()
+        .expect("browser process should start");
+    assert!(
+        output.status.success(),
+        "browser failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let actual = String::from_utf8(output.stdout).expect("layout dump should be UTF-8");
+    assert_eq!(
+        actual.matches("#anonymous-block Block").count(),
+        7,
+        "{actual}"
+    );
+    assert_eq!(actual.matches("<em> Inline").count(), 3, "{actual}");
+    assert_eq!(actual.matches("::before Block").count(), 1, "{actual}");
+    assert!(actual.contains("<img> Inline"));
+    // The nested real block and both anonymous runs are section children;
+    // the inline continuations occur one level beneath their wrappers.
+    let nested = actual.split("<section> Block").nth(2).unwrap();
+    assert!(nested.contains("\n        <span> Block"));
+    assert!(nested.contains("\n          <em> Inline"));
+    assert!(!nested.contains("\n              <span> Block"));
+    assert!(!actual.contains("Anonymous block boxes — Milestone 8.1"));
+}
+
+#[test]
+fn dumps_centered_page_with_distinct_computed_auto_and_used_margins() {
+    let page = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/auto_margins.html");
+    for mode in ["layout", "values", "style"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+            .arg(&page)
+            .arg(format!("--dump={mode}"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual = String::from_utf8(output.stdout).unwrap();
+        match mode {
+            "layout" => assert!(
+                actual.contains("<main> Block x=98.0 y=44.0 width=604.0"),
+                "{actual}"
+            ),
+            "values" => {
+                assert!(actual.contains("specified Margin(Left): Auto"), "{actual}");
+                assert!(actual.contains("used margins: Edges { top: UsedLength(20.0), right: UsedLength(74.0), bottom: UsedLength(20.0), left: UsedLength(74.0) }"), "{actual}");
+            }
+            "style" => assert!(actual.contains("margin-left: Auto"), "{actual}"),
+            _ => unreachable!(),
+        }
+    }
+}

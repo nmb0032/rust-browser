@@ -42,14 +42,14 @@ fn id(frame: &Frame, value: &str) -> NodeId {
 }
 
 fn layout_box(root: &LayoutBox, id: NodeId) -> &LayoutBox {
-    if root.dom_node_id() == id {
+    if root.dom_node_id() == Some(id) {
         return root;
     }
     root.children()
         .iter()
         .find_map(|child| {
             fn find(root: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
-                if root.dom_node_id() == id {
+                if root.dom_node_id() == Some(id) {
                     return Some(root);
                 }
                 root.children().iter().find_map(|child| find(child, id))
@@ -502,7 +502,7 @@ fn malformed_external_css_is_recovered_cached_and_applied_at_each_document_slot(
     );
     assert_eq!(
         target.margin,
-        rust_browser::css::values::Edges::all(rust_browser::css::values::Length::Px(1.0))
+        rust_browser::css::values::Edges::all(rust_browser::css::values::Length::Px(1.0).into())
     );
     assert_eq!(
         target.padding,

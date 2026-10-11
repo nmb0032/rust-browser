@@ -1,4 +1,6 @@
-//! Naive block/inline layout consuming computed styles, never CSS source.
+//! CSS block/inline box generation with anonymous blocks and inline
+//! continuations and CSS2 normal-flow horizontal width equations. Height sizing
+//! and text flow remain naive. Consumes computed styles, never CSS source.
 
 mod block;
 mod geometry;
@@ -14,3 +16,5 @@ pub use tree::{
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod width_tests;

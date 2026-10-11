@@ -43,7 +43,7 @@ fn functional_specificity_cascades_with_layers_and_inactive_media() {
     let style = result.styles.get(find(&document, "target")).unwrap();
     assert_eq!(style.color, Some(0x0000ff));
     assert_eq!(style.padding, Edges::all(Length::Px(7.0)));
-    assert_eq!(style.margin, Edges::all(Length::Px(3.0)));
+    assert_eq!(style.margin, Edges::all(Length::Px(3.0).into()));
 }
 
 #[test]

@@ -133,7 +133,7 @@ fn missing_empty_and_comma_rich_nested_fallbacks_are_distinct() {
     assert_eq!(style.border_style, Edges::all(BorderStyle::Solid));
     assert_eq!(style.border_width, Edges::all(3.0));
     assert_eq!(style.padding, Edges::all(Length::Px(2.0)));
-    assert_eq!(style.margin, Edges::all(Length::Px(3.0)));
+    assert_eq!(style.margin, Edges::all(Length::Px(3.0).into()));
     assert_eq!(
         style.font_family.0,
         [
@@ -165,7 +165,7 @@ fn fallback_is_not_a_property_grammar_retry_and_invalid_winners_become_unset() {
     assert_eq!(style.font_size, 24.0);
     assert_eq!(style.width, None);
     assert_eq!(style.background_color, None);
-    assert_eq!(style.margin, Edges::all(Length::Px(0.0)));
+    assert_eq!(style.margin, Edges::all(Length::Px(0.0).into()));
     assert_eq!(style.border_style, Edges::all(BorderStyle::None));
     assert_eq!(style.border_width, Edges::all(0.0));
     assert_eq!(result.stylesheets.diagnostics.len(), 6);
@@ -245,7 +245,7 @@ fn substitution_never_creates_identifiers_or_dimensions_across_token_boundaries(
     }
     assert_eq!(
         clean_style("--x:1px/**/2px; margin:var(--x)").margin.right,
-        Length::Px(2.0)
+        Length::Px(2.0).into()
     );
     assert_eq!(
         clean_style("--channels:1 2 3; color:rgb(var(--channels))").color,
@@ -337,6 +337,7 @@ fn shorthand_longhand_winners_priority_and_omitted_resets_survive_substitution()
             bottom: Length::Px(2.0),
             left: Length::Px(7.0)
         }
+        .map(Into::into)
     );
     assert_eq!(style.padding.left, Length::Px(3.0));
     assert_eq!(style.font_size, 20.0);
@@ -436,6 +437,7 @@ fn invalid_variable_shorthand_does_not_touch_other_winners_or_recover_older_valu
             bottom: Length::Px(0.0),
             left: Length::Px(7.0)
         }
+        .map(Into::into)
     );
     assert_eq!(
         style.border_width,
@@ -508,7 +510,7 @@ fn inline_custom_importance_and_user_author_origin_order_share_the_normal_cascad
     assert!(result.stylesheets.diagnostics.is_empty());
     let style = result.styles.get(find(&document, "target")).unwrap();
     assert_eq!(style.color, Some(0x0000ff));
-    assert_eq!(style.margin, Edges::all(Length::Px(9.0)));
+    assert_eq!(style.margin, Edges::all(Length::Px(9.0).into()));
     let result = resolve(&document);
     assert_eq!(
         result.styles.get(find(&document, "target")).unwrap().color,

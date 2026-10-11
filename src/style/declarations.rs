@@ -12,7 +12,7 @@ use crate::css::{
 };
 
 use super::{
-    BoxSizing, Content, ContentItem, Display,
+    BoxSizing, Content, ContentItem, Direction, Display,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -26,6 +26,7 @@ pub(super) enum Property {
     BackgroundColor,
     BackgroundImage,
     Display,
+    Direction,
     BoxSizing,
     FontSize,
     FontFamily,
@@ -62,6 +63,7 @@ pub(super) enum Value {
     BackgroundImage(BackgroundImage),
     BorderStyle(BorderStyle),
     Display(Display),
+    Direction(Direction),
     BoxSizing(BoxSizing),
     Length(Length),
     NumberMath(Arc<MathExpression>),
@@ -300,10 +302,11 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::BackgroundImage
         | P::BorderStyle(_)
         | P::Display
+        | P::Direction
         | P::BoxSizing
         | P::ContainerType => unreachable!("generated simple dispatch or content"),
         P::ContainerName => unreachable!(),
-        P::Width | P::Height if lower == "auto" => Some(Value::Auto),
+        P::Width | P::Height | P::Margin(_) if lower == "auto" => Some(Value::Auto),
         P::FontSize => font_size(token),
         P::Width | P::Height | P::Margin(_) | P::Padding(_) | P::BorderWidth(_) => {
             let length = if matches!(property, P::BorderWidth(_)) {

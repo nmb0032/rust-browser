@@ -26,6 +26,25 @@ impl Default for Length {
     }
 }
 
+/// A box value whose `auto` keyword must survive until layout.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LengthOrAuto {
+    Length(Length),
+    Auto,
+}
+
+impl Default for LengthOrAuto {
+    fn default() -> Self {
+        Self::Length(Length::default())
+    }
+}
+
+impl From<Length> for LengthOrAuto {
+    fn from(length: Length) -> Self {
+        Self::Length(length)
+    }
+}
+
 impl Length {
     pub fn parse(source: &str) -> Option<Self> {
         Self::from_tokens(&math::tokenize(source)?)

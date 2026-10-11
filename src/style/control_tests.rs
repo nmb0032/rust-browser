@@ -86,7 +86,7 @@ fn rollback_uses_origin_and_layer_candidates_with_custom_values_and_pending_shor
     );
     let target = result.styles.get(find(&document, "target")).unwrap();
     assert_eq!(target.color, Some(0xff0000));
-    assert_eq!(target.margin.top, Length::Px(2.0));
+    assert_eq!(target.margin.top, Length::Px(2.0).into());
     assert_eq!(target.background_color, Some(0x0000ff));
     let origin = result.styles.get(find(&document, "origin")).unwrap();
     assert_eq!(origin.color, Some(0x800080));
@@ -104,7 +104,7 @@ fn rollback_uses_origin_and_layer_candidates_with_custom_values_and_pending_shor
             .unwrap()
             .margin
             .left,
-        Length::Px(2.0)
+        Length::Px(2.0).into()
     );
 }
 
@@ -120,7 +120,7 @@ fn important_rollback_and_shorthand_invalidity_do_not_revive_same_layer_declarat
     let target = result.styles.get(find(&document, "target")).unwrap();
     assert_eq!(target.color, Some(0));
     assert_eq!(target.background_color, None);
-    assert_eq!(target.margin.top, Length::Px(0.0));
+    assert_eq!(target.margin.top, Length::Px(0.0).into());
     let result = resolve_with_user_stylesheets(
         &document,
         collect_stylesheets(&document),
@@ -366,7 +366,7 @@ fn all_rolls_back_supported_longhands_without_resetting_custom_properties_or_pre
     );
     let target = result.styles.get(find(&document, "target")).unwrap();
     assert_eq!(target.width, Some(Length::Px(9.0)));
-    assert_eq!(target.margin.top, Length::Px(2.0));
+    assert_eq!(target.margin.top, Length::Px(2.0).into());
     assert_eq!(target.color, Some(0x0000ff));
     assert!(target.custom_properties.contains_key("--x"));
     assert_eq!(

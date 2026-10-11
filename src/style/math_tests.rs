@@ -61,8 +61,8 @@ fn root_font_and_line_height_dependencies_resolve_in_css_order() {
     assert_eq!(target.font_size, 42.0);
     assert_eq!(target.line_height, LineHeight::Length(Length::Px(60.0)));
     assert_eq!(target.width, Some(Length::Px(64.0)));
-    assert_eq!(target.margin.top, Length::Px(60.0));
-    assert_eq!(target.margin.right, Length::Px(40.0));
+    assert_eq!(target.margin.top, Length::Px(60.0).into());
+    assert_eq!(target.margin.right, Length::Px(40.0).into());
     assert_eq!(target.padding, Edges::all(Length::Px(42.0)));
     let child = result.styles.get(id(&document, "child")).unwrap();
     assert_eq!(child.width, target.width);
@@ -145,7 +145,7 @@ fn viewport_variants_have_explicit_sizes_and_restyle_on_environment_changes() {
     let result = resolve_with_environment(&document, environment);
     let target = result.styles.get(id(&document, "target")).unwrap();
     assert_eq!(target.width, Some(Length::Px(170.0)));
-    assert_eq!(target.margin, Edges::all(Length::Px(50.0)));
+    assert_eq!(target.margin, Edges::all(Length::Px(50.0).into()));
     assert_eq!(target.padding, Edges::all(Length::Px(50.0)));
     for (width, height) in [(400.0, 600.0), (800.0, 900.0)] {
         let result = resolve_with_environment(&document, MediaEnvironment::new(width, height));
@@ -154,7 +154,10 @@ fn viewport_variants_have_explicit_sizes_and_restyle_on_environment_changes() {
             target.width.as_ref().unwrap().resolve(16.0, 0.0),
             height * 0.3,
         );
-        near(target.margin.left.resolve(16.0, 0.0), width * 0.1);
+        let crate::css::values::LengthOrAuto::Length(length) = &target.margin.left else {
+            panic!("expected a length margin");
+        };
+        near(length.resolve(16.0, 0.0), width * 0.1);
     }
 }
 
@@ -176,8 +179,8 @@ fn variables_shorthands_and_computed_invalid_values_follow_the_cascade() {
     assert_eq!(target.line_height, LineHeight::Number(1.5));
     assert_eq!(target.padding.right, Length::Px(22.0));
     near(target.padding.top.resolve(20.0, 100.0), 10.0);
-    assert_eq!(target.margin.top, Length::Px(-2.0));
-    assert_eq!(target.margin.right, Length::Px(2.0));
+    assert_eq!(target.margin.top, Length::Px(-2.0).into());
+    assert_eq!(target.margin.right, Length::Px(2.0).into());
     assert_eq!(target.border_width, Edges::all(8.0));
     let bad = result.styles.get(id(&document, "bad")).unwrap();
     assert_eq!(bad.font_size, 16.0);
@@ -262,7 +265,7 @@ fn percentage_math_reaches_used_geometry_and_actual_raster_edges_on_resize() {
         let mut tree = layout::build_layout_tree_with_styles(&document, &result.styles);
         tree.layout(width, &font);
         fn find(node: &layout::LayoutBox, id: NodeId) -> Option<&layout::LayoutBox> {
-            if node.dom_node_id() == id {
+            if node.dom_node_id() == Some(id) {
                 Some(node)
             } else {
                 node.children().iter().find_map(|child| find(child, id))
