@@ -368,7 +368,7 @@ fn real_inline_text_breaks_and_replaced_content_separate_but_phantom_boxes_do_no
         ("<span style='margin:30px 0'></span>", true, 0.0),
         ("Text", false, 20.0),
         ("<span style='line-height:0'>Text</span>", false, 20.0),
-        ("<br>", false, 40.0),
+        ("<br>", false, 20.0),
         ("<img style='width:0;height:0'>", false, 20.0),
         ("<span style='padding-top:1px'></span>", false, 20.0),
         ("<span style='padding-left:1px'></span>", false, 20.0),
@@ -481,7 +481,21 @@ fn outside_list_markers_do_not_prevent_empty_items_collapsing_through_and_pseudo
         assert_eq!(gap(&document, &tree, "a", "b"), expected_gap, "{pseudo}");
         let empty = box_for(&document, &tree, "empty");
         assert_eq!(empty.list_marker().unwrap().text, "!");
-        assert_eq!(empty.list_marker().unwrap().y, empty.content_rect().y);
+        let marker = empty.list_marker().unwrap();
+        let font = load_bundled_font().unwrap();
+        let metrics = font
+            .horizontal_line_metrics(marker.style.font_size)
+            .unwrap();
+        assert_eq!(marker.y, marker.baseline - metrics.ascent);
+        if let Some(line) = empty.line_boxes().first() {
+            assert_eq!(marker.baseline, line.baseline);
+        } else if !pseudo.contains("content:'Text'") {
+            let (above, _) = {
+                let leading = (20.0 - metrics.ascent + metrics.descent) / 2.0;
+                (metrics.ascent + leading, -metrics.descent + leading)
+            };
+            assert_eq!(marker.baseline, empty.content_rect().y + above);
+        }
     }
 }
 
@@ -583,14 +597,24 @@ fn finalized_geometry_consumers_follow_collapsed_blocks_text_images_and_markers(
     assert_eq!(item.rect().y, parent.rect().y);
     let marker = item.list_marker().unwrap();
     assert_eq!(marker.text, "!");
-    assert_eq!(marker.y, item.content_rect().y);
+    assert_eq!(marker.baseline, item.children()[0].line_boxes()[0].baseline);
     let pseudo = &item.children()[0];
     assert_eq!(pseudo.pseudo_element(), Some(style::PseudoElement::Before));
     assert_eq!(pseudo.rect().y, item.rect().y);
-    assert_eq!(pseudo.children()[0].text_fragments()[0].y, pseudo.rect().y);
+    assert_eq!(
+        pseudo.children()[0].text_fragments()[0].baseline,
+        pseudo.line_boxes()[0].baseline
+    );
     let image = box_for(&document, &tree, "image");
     assert_eq!(gap(&document, &tree, "item", "image"), 15.0);
-    assert_eq!(image.text_fragments()[0].y, image.content_rect().y);
+    let metrics = load_bundled_font()
+        .unwrap()
+        .horizontal_line_metrics(image.style().font_size)
+        .unwrap();
+    assert_eq!(
+        image.text_fragments()[0].baseline,
+        image.content_rect().y + image.content_rect().height + metrics.descent
+    );
     assert_eq!(tree.node_rect(id(&document, "image")), Some(image.rect()));
     assert_eq!(
         tree.hit_test(image.rect().x + 1.0, image.rect().y + 1.0),

@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
-use crate::css::values::{BorderStyle, ResolvedColor};
-use crate::layout::{LayoutBox, LayoutTree};
+use crate::css::values::{BorderStyle, Edges, ResolvedColor};
+use crate::layout::{BoxKind, LayoutBox, LayoutTree, Rect};
 use crate::media::DecodedImage;
 
 pub(crate) const DEFAULT_VIEWPORT_WIDTH: f32 = crate::css::media::DEFAULT_VIEWPORT_WIDTH;
@@ -21,7 +21,9 @@ pub enum DisplayItem {
     },
     ColorText {
         x: f32,
+        /// Font metric top for inspection; rasterization uses the baseline.
         y: f32,
+        baseline: f32,
         text: String,
         size: f32,
         color: ResolvedColor,
@@ -36,6 +38,7 @@ pub enum DisplayItem {
     Text {
         x: f32,
         y: f32,
+        baseline: f32,
         text: String,
         size: f32,
         color: u32,
@@ -112,6 +115,7 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
         display_list.push(text_item(DisplayItem::ColorText {
             x: marker.x,
             y: marker.y,
+            baseline: marker.baseline,
             text: marker.text.clone(),
             size: marker.style.font_size,
             color: marker.style.text_fill_color,
@@ -130,6 +134,7 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
         display_list.push(text_item(DisplayItem::ColorText {
             x: fragment.x,
             y: fragment.y,
+            baseline: fragment.baseline,
             text: fragment.text.clone(),
             size: fragment.font_size,
             color: fragment.text_color,
@@ -139,7 +144,33 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
     }
 
     fn append_decoration_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
-        let rect = layout_box.rect();
+        if layout_box.kind() == BoxKind::Inline && !layout_box.is_replaced_image() {
+            for fragment in layout_box.inline_fragments() {
+                let mut widths = layout_box.style().border_width;
+                if !fragment.first {
+                    widths.left = 0.0;
+                }
+                if !fragment.last {
+                    widths.right = 0.0;
+                }
+                append_decoration_rect(layout_box, fragment.rect, widths, display_list);
+            }
+        } else {
+            append_decoration_rect(
+                layout_box,
+                layout_box.rect(),
+                layout_box.inline_edges(layout_box.style().border_width),
+                display_list,
+            );
+        }
+    }
+
+    fn append_decoration_rect(
+        layout_box: &LayoutBox,
+        rect: Rect,
+        widths: Edges<f32>,
+        display_list: &mut Vec<DisplayItem>,
+    ) {
         let style = layout_box.style();
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
@@ -153,7 +184,6 @@ fn append_box_items(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>)
                 color: style.background,
             }));
         }
-        let widths = layout_box.inline_edges(style.border_width);
         let colors = style.borders;
         let styles = style.border_style;
         let inner_height = (rect.height - widths.top - widths.bottom).max(0.0);
@@ -261,6 +291,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
         DisplayItem::ColorText {
             x,
             y,
+            baseline,
             text,
             size,
             color,
@@ -271,6 +302,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
                 DisplayItem::Text {
                     x,
                     y,
+                    baseline,
                     text,
                     size,
                     color: rgb,
@@ -281,6 +313,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
                 DisplayItem::ColorText {
                     x,
                     y,
+                    baseline,
                     text,
                     size,
                     color,
@@ -294,14 +327,38 @@ fn text_item(item: DisplayItem) -> DisplayItem {
 }
 
 fn append_box_outlines(layout_box: &LayoutBox, display_list: &mut Vec<DisplayItem>) {
-    let rect = layout_box.rect();
-    if rect.width > 0.0 && rect.height > 0.0 {
-        display_list.push(DisplayItem::OutlineRect {
-            x: rect.x,
-            y: rect.y,
-            w: rect.width,
-            h: rect.height,
-            color: OUTLINE_COLOR,
+    let mut outline = |rect: Rect, color| {
+        if rect.width > 0.0 && rect.height > 0.0 {
+            display_list.push(DisplayItem::OutlineRect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.width,
+                h: rect.height,
+                color,
+            });
+        }
+    };
+    if layout_box.kind() == BoxKind::Text {
+        for fragment in layout_box.text_fragments() {
+            outline(fragment.ink_rect, OUTLINE_COLOR);
+        }
+    } else if layout_box.kind() == BoxKind::Inline && !layout_box.is_replaced_image() {
+        for fragment in layout_box.inline_fragments() {
+            outline(fragment.rect, OUTLINE_COLOR);
+        }
+    } else {
+        outline(layout_box.rect(), OUTLINE_COLOR);
+    }
+    for line in layout_box.line_boxes() {
+        outline(line.rect, 0x008080);
+    }
+    for line in layout_box.line_boxes() {
+        display_list.push(DisplayItem::Rect {
+            x: line.rect.x,
+            y: line.baseline,
+            w: line.rect.width,
+            h: 1.0,
+            color: 0x0000ff,
         });
     }
 

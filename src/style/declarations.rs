@@ -12,7 +12,8 @@ use crate::css::{
 };
 
 use super::{
-    BoxSizing, Content, ContentItem, Direction, Display,
+    BaselineShift, BaselineSource, BoxSizing, Content, ContentItem, Direction, Display, TextAlign,
+    TextAlignLast, VerticalAlign,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -27,6 +28,11 @@ pub(super) enum Property {
     BackgroundImage,
     Display,
     Direction,
+    TextAlignAll,
+    TextAlignLast,
+    AlignmentBaseline,
+    BaselineShift,
+    BaselineSource,
     BoxSizing,
     FontSize,
     FontFamily,
@@ -64,6 +70,11 @@ pub(super) enum Value {
     BorderStyle(BorderStyle),
     Display(Display),
     Direction(Direction),
+    TextAlign(TextAlign),
+    TextAlignLast(TextAlignLast),
+    VerticalAlign(VerticalAlign),
+    BaselineShift(BaselineShift),
+    BaselineSource(BaselineSource),
     BoxSizing(BoxSizing),
     Length(Length),
     NumberMath(Arc<MathExpression>),
@@ -182,6 +193,19 @@ pub(super) fn parse_tokens_with_context(
     }
     match parser {
         Parser::Longhand => value(properties[0], &tokens).map(|value| vec![value]),
+        Parser::TextAlign => Some(vec![
+            value(Property::TextAlignAll, &tokens)?,
+            initial_value(Property::TextAlignLast),
+        ]),
+        Parser::VerticalAlign => {
+            // Only the baseline shorthand subset; all targets reset atomically.
+            let alignment = value(Property::AlignmentBaseline, &tokens)?;
+            Some(vec![
+                alignment,
+                initial_value(Property::BaselineShift),
+                initial_value(Property::BaselineSource),
+            ])
+        }
         Parser::Container => {
             let parts = tokens
                 .split(|t| matches!(t, Component::Token(TokenKind::Delim('/'))))
@@ -303,9 +327,16 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::BorderStyle(_)
         | P::Display
         | P::Direction
+        | P::TextAlignAll
+        | P::TextAlignLast
+        | P::AlignmentBaseline
+        | P::BaselineSource
         | P::BoxSizing
         | P::ContainerType => unreachable!("generated simple dispatch or content"),
         P::ContainerName => unreachable!(),
+        P::BaselineShift => {
+            (token.number()? == 0.0).then_some(Value::BaselineShift(BaselineShift::Zero))
+        }
         P::Width | P::Height | P::Margin(_) if lower == "auto" => Some(Value::Auto),
         P::FontSize => font_size(token),
         P::Width | P::Height | P::Margin(_) | P::Padding(_) | P::BorderWidth(_) => {

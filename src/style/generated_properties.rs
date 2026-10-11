@@ -2,7 +2,7 @@
 // @webref/css 8.7.6, MIT; see tools/css-spec/LICENSE and provenance.json.
 // Snapshot SHA-256: 4860d2a9ad90814a61888e8b2d879651fd523c0d3926eecfe4548b4dd60a20eb
 use super::{
-    BoxSizing, Direction, Display,
+    BaselineSource, BoxSizing, Direction, Display, TextAlign, TextAlignLast, VerticalAlign,
     declarations::{Property, Value},
     metadata::{Grammar, PropertyMetadata, Support, SyntaxMetadata},
 };
@@ -1194,8 +1194,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["baseline"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "all",
@@ -1916,8 +1916,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "baseline-source",
@@ -1931,8 +1931,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["auto"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "block-ellipsis",
@@ -11198,8 +11198,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["text-align-all", "text-align-last"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "text-align-all",
@@ -11215,8 +11215,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["center", "end", "left", "right", "start"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "text-align-last",
@@ -11232,8 +11232,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["auto"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "text-anchor",
@@ -12310,8 +12310,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["alignment-baseline", "baseline-shift", "baseline-source"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "view-timeline",
@@ -18032,15 +18032,20 @@ pub(super) enum Parser {
     Font,
     Background,
     Container,
+    TextAlign,
+    VerticalAlign,
 }
 pub(super) fn parser(name: &str) -> Option<Parser> {
     Some(match name {
         "-webkit-box-sizing" => Parser::Longhand,
         "-webkit-text-fill-color" => Parser::Longhand,
+        "alignment-baseline" => Parser::Longhand,
         "all" => Parser::Wide,
         "background" => Parser::Background,
         "background-color" => Parser::Longhand,
         "background-image" => Parser::Longhand,
+        "baseline-shift" => Parser::Longhand,
+        "baseline-source" => Parser::Longhand,
         "border" => Parser::Border,
         "border-bottom" => Parser::Border,
         "border-bottom-color" => Parser::Longhand,
@@ -18086,6 +18091,10 @@ pub(super) fn parser(name: &str) -> Option<Parser> {
         "padding-left" => Parser::Longhand,
         "padding-right" => Parser::Longhand,
         "padding-top" => Parser::Longhand,
+        "text-align" => Parser::TextAlign,
+        "text-align-all" => Parser::Longhand,
+        "text-align-last" => Parser::Longhand,
+        "vertical-align" => Parser::VerticalAlign,
         "width" => Parser::Longhand,
         _ => return None,
     })
@@ -18094,6 +18103,7 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
     Some(match name {
         "-webkit-box-sizing" => vec![Property::BoxSizing],
         "-webkit-text-fill-color" => vec![Property::TextFillColor],
+        "alignment-baseline" => vec![Property::AlignmentBaseline],
         "all" => vec![
             Property::Content,
             Property::Color,
@@ -18101,6 +18111,11 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
             Property::BackgroundColor,
             Property::BackgroundImage,
             Property::Display,
+            Property::TextAlignAll,
+            Property::TextAlignLast,
+            Property::AlignmentBaseline,
+            Property::BaselineShift,
+            Property::BaselineSource,
             Property::BoxSizing,
             Property::FontSize,
             Property::FontFamily,
@@ -18135,6 +18150,8 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         "background" => vec![Property::BackgroundColor, Property::BackgroundImage],
         "background-color" => vec![Property::BackgroundColor],
         "background-image" => vec![Property::BackgroundImage],
+        "baseline-shift" => vec![Property::BaselineShift],
+        "baseline-source" => vec![Property::BaselineSource],
         "border" => vec![
             Property::BorderWidth(Side::Top),
             Property::BorderStyle(Side::Top),
@@ -18240,6 +18257,14 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         "padding-left" => vec![Property::Padding(Side::Left)],
         "padding-right" => vec![Property::Padding(Side::Right)],
         "padding-top" => vec![Property::Padding(Side::Top)],
+        "text-align" => vec![Property::TextAlignAll, Property::TextAlignLast],
+        "text-align-all" => vec![Property::TextAlignAll],
+        "text-align-last" => vec![Property::TextAlignLast],
+        "vertical-align" => vec![
+            Property::AlignmentBaseline,
+            Property::BaselineShift,
+            Property::BaselineSource,
+        ],
         "width" => vec![Property::Width],
         _ => return None,
     })
@@ -18254,6 +18279,11 @@ impl Property {
             Self::BackgroundImage => "background-image",
             Self::Display => "display",
             Self::Direction => "direction",
+            Self::TextAlignAll => "text-align-all",
+            Self::TextAlignLast => "text-align-last",
+            Self::AlignmentBaseline => "alignment-baseline",
+            Self::BaselineShift => "baseline-shift",
+            Self::BaselineSource => "baseline-source",
             Self::BoxSizing => "box-sizing",
             Self::FontSize => "font-size",
             Self::FontFamily => "font-family",
@@ -18295,6 +18325,11 @@ impl Property {
             Self::BackgroundImage => false,
             Self::Display => false,
             Self::Direction => true,
+            Self::TextAlignAll => true,
+            Self::TextAlignLast => true,
+            Self::AlignmentBaseline => false,
+            Self::BaselineShift => false,
+            Self::BaselineSource => false,
             Self::BoxSizing => false,
             Self::FontSize => true,
             Self::FontFamily => true,
@@ -18336,6 +18371,11 @@ impl Property {
             Self::BackgroundImage => false,
             Self::Display => false,
             Self::Direction => false,
+            Self::TextAlignAll => false,
+            Self::TextAlignLast => false,
+            Self::AlignmentBaseline => false,
+            Self::BaselineShift => false,
+            Self::BaselineSource => false,
             Self::BoxSizing => false,
             Self::FontSize => true,
             Self::FontFamily => false,
@@ -18378,6 +18418,11 @@ pub(super) fn initial_css(property: Property) -> &'static str {
         Property::BackgroundImage => "none",
         Property::Display => "inline",
         Property::Direction => "ltr",
+        Property::TextAlignAll => "start",
+        Property::TextAlignLast => "auto",
+        Property::AlignmentBaseline => "baseline",
+        Property::BaselineShift => "0",
+        Property::BaselineSource => "auto",
         Property::BoxSizing => "content-box",
         Property::FontSize => "medium",
         Property::FontFamily => "sans-serif",
@@ -18419,6 +18464,10 @@ pub(super) fn simple(property: Property) -> bool {
             | Property::BackgroundImage
             | Property::Display
             | Property::Direction
+            | Property::TextAlignAll
+            | Property::TextAlignLast
+            | Property::AlignmentBaseline
+            | Property::BaselineSource
             | Property::BoxSizing
             | Property::FontStyle
             | Property::ContainerType
@@ -18464,6 +18513,26 @@ pub(super) fn simple_value(property: Property, tokens: &[Component]) -> Option<V
             "rtl" => Value::Direction(Direction::Rtl),
             _ => return None,
         }),
+        Property::TextAlignAll => Some(match token.ident()?.to_ascii_lowercase().as_str() {
+            "center" => Value::TextAlign(TextAlign::Center),
+            "end" => Value::TextAlign(TextAlign::End),
+            "left" => Value::TextAlign(TextAlign::Left),
+            "right" => Value::TextAlign(TextAlign::Right),
+            "start" => Value::TextAlign(TextAlign::Start),
+            _ => return None,
+        }),
+        Property::TextAlignLast => Some(match token.ident()?.to_ascii_lowercase().as_str() {
+            "auto" => Value::TextAlignLast(TextAlignLast::Auto),
+            _ => return None,
+        }),
+        Property::AlignmentBaseline => Some(match token.ident()?.to_ascii_lowercase().as_str() {
+            "baseline" => Value::VerticalAlign(VerticalAlign::Baseline),
+            _ => return None,
+        }),
+        Property::BaselineSource => Some(match token.ident()?.to_ascii_lowercase().as_str() {
+            "auto" => Value::BaselineSource(BaselineSource::Auto),
+            _ => return None,
+        }),
         Property::FontStyle => Some(match token.ident()?.to_ascii_lowercase().as_str() {
             "italic" => Value::FontStyle(FontStyle::Italic),
             "normal" => Value::FontStyle(FontStyle::Normal),
@@ -18497,10 +18566,13 @@ pub(super) fn simple_value(property: Property, tokens: &[Component]) -> Option<V
 pub(super) static SAMPLES: &[(&str, &str)] = &[
     ("-webkit-box-sizing", "border-box"),
     ("-webkit-text-fill-color", "blue"),
+    ("alignment-baseline", "baseline"),
     ("all", "initial"),
     ("background", "red"),
     ("background-color", "blue"),
     ("background-image", "none"),
+    ("baseline-shift", "0"),
+    ("baseline-source", "auto"),
     ("border", "4px solid red"),
     ("border-bottom", "4px solid red"),
     ("border-bottom-color", "purple"),
@@ -18546,5 +18618,9 @@ pub(super) static SAMPLES: &[(&str, &str)] = &[
     ("padding-left", "8px"),
     ("padding-right", "8px"),
     ("padding-top", "8px"),
+    ("text-align", "center"),
+    ("text-align-all", "center"),
+    ("text-align-last", "auto"),
+    ("vertical-align", "baseline"),
     ("width", "42px"),
 ];

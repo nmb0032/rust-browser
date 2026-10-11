@@ -26,6 +26,66 @@ fn dump(format: &str) -> String {
 }
 
 #[test]
+fn inline_layout_demo_exposes_shared_baselines_sliced_fragments_and_alignment_in_cli() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/inline_layout.html");
+    let run = |format: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+            .arg(&path)
+            .arg(format!("--dump={format}"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "{output:?}"
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let layout = run("layout");
+    assert_eq!(layout, run("layout"));
+    assert_eq!(
+        layout.matches("text \"Normal\" baseline=150.416").count(),
+        2
+    );
+    assert!(layout.contains("text \"Large\" baseline=150.416"));
+    assert!(layout.contains("text \"Small\" baseline=150.416"));
+    for value in [
+        "height=40.000 baseline=150.416 ascent=32.416 descent=7.584",
+        "width: 159.616, height: 31.792 } baseline=200.208 first=true last=false",
+        "width: 173.45602, height: 31.792 } baseline=240.208 first=false last=true",
+        "line x=156.000 y=276.000 width=300.000 height=24.000 baseline=294.208 ascent=18.208 descent=5.792 content-x=254.752 content-width=102.496",
+        "line x=156.000 y=300.000 width=300.000 height=24.000 baseline=318.208 ascent=18.208 descent=5.792 content-x=272.624 content-width=66.752",
+        "line x=156.000 y=352.000 width=300.000 height=24.000 baseline=370.208 ascent=18.208 descent=5.792 content-x=323.232 content-width=132.768",
+        "line x=156.000 y=376.000 width=300.000 height=24.000 baseline=394.208 ascent=18.208 descent=5.792 content-x=389.248 content-width=66.752",
+        "line x=156.000 y=428.000 width=300.000 height=24.000 baseline=446.208 ascent=18.208 descent=5.792 content-x=202.368 content-width=253.632",
+    ] {
+        assert!(layout.contains(value), "{value}: {layout}");
+    }
+    let display = run("display-list");
+    for text in ["Normal", "Large", "Small"] {
+        assert!(
+            display.contains(&format!("baseline: 150.416,\n        text: \"{text}\"")),
+            "{display}"
+        );
+    }
+    assert!(
+        !display.contains("h: 71.792"),
+        "wrapped link must not paint its union rectangle"
+    );
+    let values = run("values");
+    for value in [
+        "used line: LineBox",
+        "used inline-fragment: InlineFragment",
+        "computed text-align: Center",
+        "computed text-align: Right",
+        "computed text-align: Start",
+        "computed direction: Rtl",
+        "computed vertical-align: Baseline",
+    ] {
+        assert!(values.contains(value), "{value}: {values}");
+    }
+}
+
+#[test]
 fn stylesheet_dump_preserves_document_and_declaration_order() {
     assert_eq!(
         dump("stylesheets"),

@@ -21,8 +21,14 @@ pub enum BoxKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextFragment {
+    /// Horizontal advance origin; `width` is advance, not ink width.
     pub x: f32,
+    /// Font metric top, not line top. Painting uses `baseline` explicitly.
     pub y: f32,
+    pub baseline: f32,
+    /// Bundled-face bitmap bounds at CSS size, including synthetic flags.
+    /// Independent of line-height; contains glyph overflow.
+    pub ink_rect: Rect,
     pub width: f32,
     pub height: f32,
     pub text: String,
@@ -36,9 +42,33 @@ pub struct TextFragment {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListMarker {
     pub x: f32,
+    /// Font metric top; outside markers share the first content baseline.
     pub y: f32,
+    pub baseline: f32,
     pub text: String,
     pub style: ComputedStyle,
+}
+
+/// Line extent includes the parent strut and baseline-aligned participants'
+/// half-leading, but excludes non-replaced inline vertical decorations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LineBox {
+    /// Available CSS line box, before text alignment.
+    pub rect: Rect,
+    /// Aligned advance extent (ink and decorations may overflow it).
+    pub content_rect: Rect,
+    pub baseline: f32,
+    pub ascent: f32,
+    pub descent: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineFragment {
+    pub rect: Rect,
+    pub content_rect: Rect,
+    pub baseline: f32,
+    pub first: bool,
+    pub last: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +84,8 @@ pub struct LayoutBox {
     pub(super) margin: Edges<f32>,
     pub(super) children: Vec<LayoutBox>,
     pub(super) text_fragments: Vec<TextFragment>,
+    pub(super) inline_fragments: Vec<InlineFragment>,
+    pub(super) line_boxes: Vec<LineBox>,
     pub(super) list_marker: Option<ListMarker>,
     pub(super) image: Option<ImageContent>,
     pub(super) pseudo: Option<PseudoElement>,
@@ -114,12 +146,41 @@ impl LayoutBox {
     pub(crate) fn text_fragments(&self) -> &[TextFragment] {
         &self.text_fragments
     }
+    pub fn inline_fragments(&self) -> &[InlineFragment] {
+        &self.inline_fragments
+    }
+    pub fn line_boxes(&self) -> &[LineBox] {
+        &self.line_boxes
+    }
+
+    /// Before finalization, descendants' baselines relative to this border
+    /// origin are used to position an outside marker in the parent's flow.
+    pub(super) fn first_local_baseline(&self) -> Option<f32> {
+        self.line_boxes
+            .first()
+            .map(|line| line.baseline)
+            .or_else(|| {
+                self.children.iter().find_map(|child| {
+                    child.first_local_baseline().map(|baseline| {
+                        baseline
+                            + if child.kind == BoxKind::Block {
+                                child.rect.y
+                            } else {
+                                0.0
+                            }
+                    })
+                })
+            })
+    }
     pub(crate) fn list_marker(&self) -> Option<&ListMarker> {
         self.list_marker.as_ref()
     }
 
     pub(crate) fn decoded_image(&self) -> Option<&Arc<DecodedImage>> {
         self.image.as_ref()?.data.as_ref()
+    }
+    pub(crate) fn is_replaced_image(&self) -> bool {
+        self.image.is_some()
     }
 
     /// Block-in-inline continuations have no decorations at the broken edges.
@@ -141,6 +202,8 @@ impl LayoutBox {
         self.margin = Edges::default();
         self.padding = Edges::default();
         self.text_fragments.clear();
+        self.inline_fragments.clear();
+        self.line_boxes.clear();
         self.list_marker = None;
         for child in &mut self.children {
             child.reset();
@@ -175,32 +238,22 @@ impl LayoutTree {
                 }
             }
             let node_id = layout_box.node_id?;
-            if layout_box.kind == BoxKind::Text {
+            let glyph_hit = layout_box
+                .text_fragments
+                .iter()
+                .rev()
+                .any(|fragment| contains(fragment.ink_rect, x, y))
+                .then_some(node_id);
+            if glyph_hit.is_some() || layout_box.kind == BoxKind::Text {
+                return glyph_hit;
+            }
+            if layout_box.kind == BoxKind::Inline && layout_box.image.is_none() {
                 return layout_box
-                    .text_fragments
+                    .inline_fragments
                     .iter()
                     .rev()
-                    .any(|fragment| {
-                        contains(
-                            Rect {
-                                x: fragment.x,
-                                y: fragment.y,
-                                width: fragment.width,
-                                height: fragment.height,
-                            },
-                            x,
-                            y,
-                        )
-                    })
+                    .any(|fragment| contains(fragment.rect, x, y))
                     .then_some(node_id);
-            }
-            // Undecorated inline wrappers have no single hit region when wrapped.
-            if layout_box.kind == BoxKind::Inline
-                && layout_box.image.is_none()
-                && layout_box.style.background_color.is_none()
-                && layout_box.inline_edges(layout_box.style.border_width) == Edges::default()
-            {
-                return None;
             }
             contains(layout_box.rect, x, y).then_some(node_id)
         }
@@ -282,6 +335,7 @@ fn absolutize_y(layout_box: &mut LayoutBox, offset: f64, diagnostics: &mut Vec<D
     } else {
         offset
     };
+    let fragment_offset = child_offset;
     layout_box.rect.y = finite_used(
         offset + layout_box.rect.y as f64,
         layout_box.node_id,
@@ -296,9 +350,61 @@ fn absolutize_y(layout_box: &mut LayoutBox, offset: f64, diagnostics: &mut Vec<D
     );
     for fragment in &mut layout_box.text_fragments {
         fragment.y = finite_used(
-            offset + fragment.y as f64,
+            fragment_offset + fragment.y as f64,
             layout_box.node_id,
             "absolute text y",
+            diagnostics,
+        );
+        fragment.baseline = finite_used(
+            fragment_offset + fragment.baseline as f64,
+            layout_box.node_id,
+            "absolute text baseline",
+            diagnostics,
+        );
+        fragment.ink_rect.y = finite_used(
+            fragment_offset + fragment.ink_rect.y as f64,
+            layout_box.node_id,
+            "absolute glyph y",
+            diagnostics,
+        );
+    }
+    for fragment in &mut layout_box.inline_fragments {
+        fragment.rect.y = finite_used(
+            offset + fragment.rect.y as f64,
+            layout_box.node_id,
+            "absolute inline y",
+            diagnostics,
+        );
+        fragment.content_rect.y = finite_used(
+            offset + fragment.content_rect.y as f64,
+            layout_box.node_id,
+            "absolute inline content y",
+            diagnostics,
+        );
+        fragment.baseline = finite_used(
+            offset + fragment.baseline as f64,
+            layout_box.node_id,
+            "absolute inline baseline",
+            diagnostics,
+        );
+    }
+    for line in &mut layout_box.line_boxes {
+        line.rect.y = finite_used(
+            fragment_offset + line.rect.y as f64,
+            layout_box.node_id,
+            "absolute line y",
+            diagnostics,
+        );
+        line.content_rect.y = finite_used(
+            fragment_offset + line.content_rect.y as f64,
+            layout_box.node_id,
+            "absolute line content y",
+            diagnostics,
+        );
+        line.baseline = finite_used(
+            fragment_offset + line.baseline as f64,
+            layout_box.node_id,
+            "absolute line baseline",
             diagnostics,
         );
     }
@@ -307,6 +413,12 @@ fn absolutize_y(layout_box: &mut LayoutBox, offset: f64, diagnostics: &mut Vec<D
             offset + marker.y as f64,
             layout_box.node_id,
             "absolute marker y",
+            diagnostics,
+        );
+        marker.baseline = finite_used(
+            offset + marker.baseline as f64,
+            layout_box.node_id,
+            "absolute marker baseline",
             diagnostics,
         );
     }
@@ -558,6 +670,8 @@ fn build_box(
             .map(|element| ImageContent::new(element, images.get(&node_id).cloned())),
         children,
         text_fragments: Vec::new(),
+        inline_fragments: Vec::new(),
+        line_boxes: Vec::new(),
         list_marker: None,
         pseudo: None,
         marker_style,
@@ -619,6 +733,8 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>) {
         margin: Edges::default(),
         children: std::mem::take(run),
         text_fragments: Vec::new(),
+        inline_fragments: Vec::new(),
+        line_boxes: Vec::new(),
         list_marker: None,
         image: None,
         pseudo: None,
@@ -696,6 +812,8 @@ fn generated_box(
         margin: Edges::default(),
         children: Vec::new(),
         text_fragments: Vec::new(),
+        inline_fragments: Vec::new(),
+        line_boxes: Vec::new(),
         list_marker: None,
         image: None,
         pseudo: Some(pseudo),
@@ -720,6 +838,8 @@ fn generated_box(
         margin: Edges::default(),
         children: vec![text_box],
         text_fragments: Vec::new(),
+        inline_fragments: Vec::new(),
+        line_boxes: Vec::new(),
         list_marker: None,
         image: None,
         pseudo: Some(pseudo),

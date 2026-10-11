@@ -1644,7 +1644,11 @@ pub(super) fn length_context(
     let viewport = (environment.viewport_width, environment.viewport_height);
     let (root_font_size, root_line_height) = root.unwrap_or((
         environment.initial_font_size,
-        environment.initial_font_size * 1.25,
+        ComputedStyle {
+            font_size: environment.initial_font_size,
+            ..ComputedStyle::default()
+        }
+        .used_line_height(),
     ));
     let mut context = LengthContext {
         font_size: style.font_size,
@@ -2001,6 +2005,11 @@ fn computed_value(
         P::BackgroundImage => Value::BackgroundImage(style.background_image),
         P::Display => Value::Display(style.display),
         P::Direction => Value::Direction(style.direction),
+        P::TextAlignAll => Value::TextAlign(style.text_align),
+        P::TextAlignLast => Value::TextAlignLast(style.text_align_last),
+        P::AlignmentBaseline => Value::VerticalAlign(style.vertical_align),
+        P::BaselineShift => Value::BaselineShift(style.baseline_shift),
+        P::BaselineSource => Value::BaselineSource(style.baseline_source),
         P::BoxSizing => Value::BoxSizing(style.box_sizing),
         P::FontSize => Value::Length(Length::Px(style.font_size)),
         P::FontFamily => Value::Family(style.font_family.clone()),
@@ -2050,6 +2059,11 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         (P::BackgroundImage, Value::BackgroundImage(image)) => style.background_image = image,
         (P::Display, Value::Display(display)) => style.display = display,
         (P::Direction, Value::Direction(direction)) => style.direction = direction,
+        (P::TextAlignAll, Value::TextAlign(align)) => style.text_align = align,
+        (P::TextAlignLast, Value::TextAlignLast(align)) => style.text_align_last = align,
+        (P::AlignmentBaseline, Value::VerticalAlign(align)) => style.vertical_align = align,
+        (P::BaselineShift, Value::BaselineShift(shift)) => style.baseline_shift = shift,
+        (P::BaselineSource, Value::BaselineSource(source)) => style.baseline_source = source,
         (P::BoxSizing, Value::BoxSizing(sizing)) => style.box_sizing = sizing,
         (P::FontSize, Value::Length(length)) => {
             style.font_size = length

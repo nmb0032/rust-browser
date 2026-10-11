@@ -5,8 +5,8 @@ use crate::{
 
 use super::{
     BoxKind, LayoutBox, ListMarker, Rect,
-    inline::{InlineFlow, layout_inline, measure_text},
-    tree::{finite_used, resolve_edges, resolve_length, resolve_line_height, resolve_margins},
+    inline::{font_metrics, layout_inline_run, measure_text},
+    tree::{finite_used, resolve_edges, resolve_length, resolve_margins},
 };
 
 /// An adjoining set must retain both extrema until all its members are known.
@@ -115,12 +115,8 @@ fn layout_block(
             )
         });
     let replaced_size = layout_box.image.as_ref().map(|image| {
-        let line_height = resolve_line_height(
-            &style.line_height,
-            style.font_size,
-            layout_box.node_id,
-            diagnostics,
-        );
+        let metrics = font_metrics(font, style, layout_box.node_id, diagnostics);
+        let line_height = metrics.above + metrics.below;
         image.size(style, explicit_width, explicit_height, line_height, font)
     });
     let (width, left, right) = solve_width(
@@ -193,6 +189,9 @@ fn layout_block(
                     height,
                 },
                 &layout_box.style,
+                font,
+                layout_box.node_id,
+                diagnostics,
             )
         {
             layout_box.text_fragments.push(fragment);
@@ -336,25 +335,42 @@ fn flow_children(
     let mut before = MarginStrut::default();
     let mut at_start = true;
     let mut all_through = true;
-    let line_height = resolve_line_height(
-        &layout_box.style.line_height,
-        layout_box.style.font_size,
-        layout_box.node_id,
-        diagnostics,
-    );
-    let mut flow = InlineFlow::new(x, y, width, line_height);
     let ordered = layout_box.tag_name == "<ol>";
     let is_document = layout_box.tag_name == "#document";
     let mut list_index = 0;
-    for child in &mut layout_box.children {
-        if child.kind == BoxKind::Block {
-            // Construction normally separates inline runs into anonymous
-            // blocks, but the document flow uses the same separator rule.
-            if flow.has_line {
-                cursor_y += flow.content_height();
+    let mut index = 0;
+    while index < layout_box.children.len() {
+        if layout_box.children[index].kind != BoxKind::Block {
+            let end = layout_box.children[index..]
+                .iter()
+                .position(|child| child.kind == BoxKind::Block)
+                .map_or(layout_box.children.len(), |offset| index + offset);
+            let inline_y = finite_used(
+                cursor_y + pending.value(),
+                layout_box.node_id,
+                "inline run y",
+                diagnostics,
+            );
+            let (lines, height) = layout_inline_run(
+                &mut layout_box.children[index..end],
+                &layout_box.style,
+                layout_box.node_id,
+                (x, inline_y, width),
+                font,
+                diagnostics,
+            );
+            if !lines.is_empty() {
+                cursor_y += pending.value() + height;
+                pending = MarginStrut::default();
                 at_start = false;
                 all_through = false;
+                layout_box.line_boxes.extend(lines);
             }
+            index = end;
+            continue;
+        }
+        let child = &mut layout_box.children[index];
+        if child.kind == BoxKind::Block {
             let child_flow = layout_block(
                 child,
                 x,
@@ -392,11 +408,18 @@ fn flow_children(
                     }
                 });
                 let style = child.marker_style.as_ref().unwrap_or(&child.style).clone();
+                let metrics = font_metrics(font, &style, child.node_id, diagnostics);
+                let baseline = child
+                    .first_local_baseline()
+                    .map_or(child.content_rect.y + metrics.above, |baseline| {
+                        child.rect.y + baseline
+                    });
                 child.list_marker = Some(ListMarker {
                     x: child.content_rect.x
                         - measure_text(font, &text, style.font_size)
                         - style.font_size * 0.5,
-                    y: child.content_rect.y,
+                    y: baseline - metrics.ascent,
+                    baseline,
                     text,
                     style,
                 });
@@ -406,20 +429,8 @@ fn flow_children(
                 cursor_y += pending.value();
                 pending = MarginStrut::default();
             }
-            flow = InlineFlow::new(
-                x,
-                finite_used(cursor_y, layout_box.node_id, "block flow y", diagnostics),
-                width,
-                line_height,
-            );
-        } else {
-            layout_inline(child, &mut flow, font, diagnostics);
         }
-    }
-    if flow.has_line {
-        cursor_y += flow.content_height();
-        at_start = false;
-        all_through = false;
+        index += 1;
     }
     let after = if at_start && collapse_top {
         // The entire empty chain adjoins the parent's top margin, even if a
@@ -448,12 +459,4 @@ fn place_block(layout_box: &mut LayoutBox, y: f64, diagnostics: &mut Vec<Diagnos
         "content y",
         diagnostics,
     );
-    for fragment in &mut layout_box.text_fragments {
-        fragment.y = finite_used(
-            y + fragment.y as f64,
-            layout_box.node_id,
-            "image text y",
-            diagnostics,
-        );
-    }
 }

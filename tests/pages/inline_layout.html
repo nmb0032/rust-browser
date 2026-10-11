@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Inline layout - Milestone 8.4</title>
+  <style>
+    body { margin: 0; color: #203040; background: #e6ebef; font: 16px/24px sans-serif; }
+    main { width: 500px; margin: 20px auto; padding: 20px; border: 2px solid #386080; background: white; }
+    h1 { font: 24px/32px sans-serif; margin: 0 0 20px; }
+    p { margin: 16px 0; }
+    #mixed { font: 16px/24px sans-serif; }
+    .large { font: 32px/40px sans-serif; color: #a52a2a; }
+    .small { font: 10px/16px sans-serif; color: #006040; }
+    #wrapped { width: 190px; line-height: 40px; }
+    .link { background: #fff0bb; border: 2px solid #805820; padding: 3px 5px; }
+    .inner { background: #c5e4cb; border: 1px solid #386040; padding: 2px; }
+    .align { width: 300px; border: 1px solid #386080; padding: 5px; }
+    #center { text-align: center; }
+    #right { text-align: right; }
+    #logical { direction: rtl; text-align: start; }
+    #images img { width: 24px; height: 30px; margin: 0 3px; border: 1px solid #386080; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Baseline-aware inline layout</h1>
+    <p id="mixed">Normal <span class="large">Large <span class="small">Small</span></span> Normal</p>
+    <p id="wrapped"><a class="link" href="auto_margins.html">Wrapped <span class="inner">decorated inline</span> link across lines</a></p>
+    <p id="center" class="align">Centered text<br>Final line</p>
+    <p id="right" class="align">Right aligned text<br>Final line</p>
+    <p id="logical" class="align">RTL start aligns right, without bidi reordering</p>
+    <p id="images">Alt fallback <img alt="H"> (intentionally no source): the image bottom margin edge shares the baseline.</p>
+    <p>Press F12: red fragment outlines, teal line rectangles, blue baselines.</p>
+  </main>
+</body>
+</html>

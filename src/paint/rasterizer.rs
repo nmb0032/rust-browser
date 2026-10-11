@@ -119,7 +119,7 @@ pub(crate) fn rasterize_display_list(
             }
             DisplayItem::Text {
                 x,
-                y,
+                baseline,
                 text,
                 size,
                 bold,
@@ -128,19 +128,23 @@ pub(crate) fn rasterize_display_list(
             }
             | DisplayItem::ColorText {
                 x,
-                y,
+                baseline,
                 text,
                 size,
                 bold,
                 italic,
                 ..
             } => {
-                let line_top = *y - scroll_offset;
-                if line_top + size * 1.25 <= 0.0 || line_top >= viewport_height {
+                let baseline = *baseline - scroll_offset;
+                let metrics = font
+                    .horizontal_line_metrics(*size)
+                    .expect("horizontal face");
+                if baseline - metrics.descent <= 0.0 || baseline - metrics.ascent >= viewport_height
+                {
                     continue;
                 }
 
-                let baseline = ((line_top + size * 1.25) * scale).round() as i32;
+                let baseline = (baseline * scale).round() as i32;
                 let (color, alpha) = match item {
                     DisplayItem::Text { color, .. } => (*color, 255),
                     DisplayItem::ColorText { color, .. } => color.to_srgb8(),
@@ -410,6 +414,7 @@ mod tests {
         let legacy = DisplayItem::Text {
             x: 0.0,
             y: 0.0,
+            baseline: font.horizontal_line_metrics(16.0).unwrap().ascent,
             text: "M".into(),
             size: 16.0,
             color: 0,
@@ -419,6 +424,7 @@ mod tests {
         let typed = DisplayItem::ColorText {
             x: 0.0,
             y: 0.0,
+            baseline: font.horizontal_line_metrics(16.0).unwrap().ascent,
             text: "M".into(),
             size: 16.0,
             color,
@@ -566,6 +572,7 @@ mod tests {
             DisplayItem::Text {
                 x: 24.0,
                 y: 100.0,
+                baseline: 100.0 + font.horizontal_line_metrics(32.0).unwrap().ascent,
                 text: "visible after scrolling".to_string(),
                 size: 32.0,
                 color: TEXT_COLOR,
@@ -625,6 +632,7 @@ mod tests {
                 &[DisplayItem::Text {
                     x: 4.0,
                     y: 0.0,
+                    baseline: font.horizontal_line_metrics(24.0).unwrap().ascent,
                     text: "A".to_string(),
                     size: 24.0,
                     color: TEXT_COLOR,
@@ -710,6 +718,7 @@ mod tests {
                 &[DisplayItem::Text {
                     x,
                     y: 0.0,
+                    baseline: font.horizontal_line_metrics(16.0).unwrap().ascent,
                     text: "A".into(),
                     size: 16.0,
                     color: TEXT_COLOR,

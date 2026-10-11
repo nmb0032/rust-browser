@@ -1843,11 +1843,11 @@ and the CSSOM parts covered here meet the conformance gate.
 
   **Remaining naive behavior:** This is box generation, not complete
   browser layout parity. The existing viewport gutter, height sizing,
-  word wrapping, and inline bounding rectangles remain. Step 8.3 replaces
-  additive vertical margins with adjoining margin sets.
-  Proper baseline-aligned line boxes, per-line inline
-  decoration fragments, Unicode line breaking, and `white-space` handling
-  remain unimplemented. Those remain for 8.4–8.5 and later steps;
+  basic space wrapping, and limited formatting model remain. Step 8.3
+  replaces additive vertical margins with adjoining margin sets; 8.4
+  adds real baseline-aligned lines and per-line inline decoration fragments.
+  Unicode line breaking, `white-space`, font selection, and shaping
+  remain for 8.5–8.6 and later steps;
   Milestone 8 is not complete.
 - [x] **8.2 Compute widths and auto margins.** Implement the CSS 2 width
   equations, including `margin: auto` centering.
@@ -1864,8 +1864,8 @@ and the CSSOM parts covered here meet the conformance gate.
   Negative margins, zero containing widths, padding, and borders participate.
   The containing block's CSS `direction` (`ltr` or `rtl`) selects the
   adjusted margin, not the child's direction. This minimal inherited
-  property is excluded from `all`; it does not implement bidi text or RTL
-  inline flow.
+  property is excluded from `all`; 8.4 also uses it for logical start/end
+  text alignment. It does not implement bidi text or RTL inline flow.
 
   Supported block images determine their width using the existing
   intrinsic/explicit/alt-fallback sizing path before solving their margins.
@@ -1893,9 +1893,10 @@ and the CSSOM parts covered here meet the conformance gate.
   **Supported scope, not browser parity:** This is the CSS2 equation for
   the existing horizontal normal-flow block/replaced-image subset, not
   complete CSS2 sizing. The viewport gutter, image sizing cap/alt fallback,
-  indefinite percentage-height fallback, naive
-  text wrapping/inline bounding boxes, and limited display types remain.
-  Step 8.3 adds vertical margin collapsing. No min/max/intrinsic sizing
+  indefinite percentage-height fallback, basic space-based wrapping,
+  and limited display types remain. Step 8.3 adds vertical margin
+  collapsing; 8.4 replaces naive inline bounds with baseline-aware
+  per-line fragments. No min/max/intrinsic sizing
   keywords, positioned/floated/
   table/flex/grid layout, writing modes, logical margins, HTML `dir`
   semantics, or bidi text are added. Those remain in later steps;
@@ -1953,17 +1954,104 @@ and the CSSOM parts covered here meet the conformance gate.
   **Supported scope, not full browser parity:** Indefinite percentage heights
   still report the existing diagnostic and behave as auto, including for
   collapse decisions. Phantom detection follows the currently supported
-  inline content/decorations; word splitting, NBSP/`white-space` behavior,
-  line-break heights, baselines, and per-line decorations remain naive.
+  inline content/decorations. Step 8.4 supplies real line metrics,
+  baseline alignment, per-line decorations, and correct explicit-break
+  termination without an unconditional trailing empty line.
+  Word splitting and NBSP/`white-space` behavior remain limited until 8.5.
   No `min-height`, clearance/floats, overflow-created formatting contexts,
   positioned/inline-block/table/flex/grid layout, or writing modes are added.
   Those require their later sizing/formatting/property milestones. The
   existing image sizing cap/alt fallback and viewport gutter remain.
-  Milestone 8 is not complete; stop here for review before 8.4.
-- [ ] **8.4 Implement inline layout.** Build line boxes with baselines,
+  Milestone 8 is not complete.
+- [x] **8.4 Implement inline layout.** Build line boxes with baselines,
   `line-height`, `vertical-align: baseline`, and `text-align`, and split inline
   boxes across lines.
   *You'll see:* mixed font sizes on one line align on a common baseline.
+
+  Inline runs now assemble explicit `LineBox` records (available rectangles
+  plus separately aligned content-advance rectangles) and per-line
+  `InlineFragment` border/content rectangles. A preorder formatting-box
+  identity keeps nested inline styles, generated content, and 8.1
+  block-in-inline continuations distinct even when they share a DOM node.
+  Basic collapsible spaces provide break opportunities, but adjacent
+  text/style nodes within an unbroken word remain one wrapping unit.
+  Inline opening/closing edges travel with their content; wrapped fragments
+  have horizontal margin/padding/border only at the first/last outer edges.
+  Continued ancestor backgrounds and borders paint separately on each line,
+  not over the empty space inside a union rectangle.
+
+  The selected bundled Noto Sans face supplies horizontal ascent, descent,
+  and normal line metrics. Each participant's extra leading is split equally
+  above/below its baseline, including negative leading. The containing
+  block's strut and active inline ancestors participate in each real line;
+  maximum above/below extents determine its baseline and height.
+  Non-replaced inline vertical padding/borders decorate font content boxes
+  without increasing line height, and vertical margins do not affect lines.
+  Replaced images contribute their full margin boxes and use their bottom
+  margin edge as the baseline. Outside list markers share the first content
+  line's baseline when one exists. Alt fallback text anchors its real font
+  descent to the replaced content bottom; it does not manufacture an
+  intrinsic image baseline.
+
+  Text fragments carry an explicit document baseline, font metric top,
+  advance width, and glyph ink bounds. Both legacy opaque and typed-color
+  display items preserve the baseline; rasterization scales/scrolls that
+  coordinate rather than synthesizing a baseline from font size. Small or
+  zero `line-height` therefore permits glyph overflow without losing the
+  real line as a margin-collapse separator. Empty undecorated continuations
+  stay phantom. `<br>` terminates the current line, consecutive breaks
+  create real empty lines, and a trailing break alone does not append a
+  phantom strut.
+
+  `text-align` supports left/right/center and inherited logical start/end,
+  resolved using the block container's inherited `direction`. Alignment
+  shifts nested text, images, and decorations together, including wrapped,
+  final, and break-ended lines. Free space remains signed for overflow and
+  negative margins; trailing collapsible whitespace contributes no advance.
+  The pinned modern property metadata treats `text-align` and
+  `vertical-align` as atomic shorthands. Typed `text-align-all`,
+  `text-align-last: auto`, `alignment-baseline: baseline`,
+  `baseline-shift: 0`, and `baseline-source: auto` participate in
+  inheritance/non-inheritance, CSS-wide values, variables, and cascade
+  rollback. Unsupported justification and other alignment values are
+  rejected, not silently mapped to left/baseline. All support remains
+  explicitly partial in the offline-generated coverage registry.
+
+  Hit testing uses per-line inline rectangles and text ink bounds, including
+  overflow, rather than wrapped union gaps; wrapped links retain navigation.
+  Node bounds still union real continuations, excluding anonymous/pseudo
+  boxes. Layout/value dumps expose lines, baselines, and slices.
+  F12 draws red fragment outlines, teal line rectangles, and blue baselines.
+  Relayout clears every fragment/line/baseline, and local block geometry
+  finalizes once without rerunning used-value diagnostics. Existing width
+  equations, adjoining margin sets, and size-container feedback/containment
+  remain in force.
+
+  **Visible check:** `cargo run -- tests/pages/inline_layout.html
+  --dump=layout` shows `Normal`, `Large`, and nested `Small` sharing
+  `baseline=150.416` despite their 16px/32px/10px font sizes.
+  Their line is 40px high with ascent 32.416 and descent 7.584.
+  The decorated link has two separate slices at baselines 200.208 and
+  240.208, with first/last edge flags. Centered content starts at x=254.752
+  and x=272.624; right-aligned content starts at x=323.232 and x=389.248.
+  The RTL `start` example aligns right without reordering text.
+  `--dump=values` exposes computed alignment and line/fragment geometry;
+  `--dump=display-list` retains the same baseline through paint.
+  Open without a dump and press F12 to inspect the overlay. The labeled
+  source-less image intentionally exercises alt fallback. Focused metric,
+  pixel, wrapping, slice, hit/link, break/phantom, image, zero-height,
+  inheritance/cascade, resize, pseudo/marker, diagnostic, container,
+  width/collapse, and CLI regressions cover the supported model.
+
+  **Supported scope, not full browser/WPT parity:** Only the bundled face
+  and baseline vertical alignment are selected; synthetic bold/italic
+  remain. UAX #14, complete CSS whitespace/NBSP handling, bidi/writing modes,
+  shaping/kerning/ligatures/font fallback, justification/hyphenation,
+  advanced vertical alignment, independent last-line alignment,
+  `box-decoration-break: clone`, and other formatting contexts remain
+  deferred. Existing image sizing caps and indefinite percentage-height
+  fallbacks remain. Milestone 8 is not complete.
+  **Stop here for user review before 8.5.**
 - [ ] **8.5 Break lines correctly.** Use Unicode line breaking (UAX #14) with
   `unicode-linebreak` and support `white-space`.
   *You'll see:* URLs, CJK text, and `<pre>` wrap correctly.

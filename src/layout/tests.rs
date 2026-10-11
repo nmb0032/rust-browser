@@ -352,13 +352,13 @@ fn anonymous_hit_testing_and_node_geometry_use_real_inline_continuations_not_wra
     let pseudo = find(tree.root(), "::before").unwrap();
     let fragment = &pseudo.children()[0].text_fragments()[0];
     assert_eq!(
-        tree.hit_test(fragment.x + 1.0, fragment.y + 1.0),
+        tree.hit_test(fragment.ink_rect.x + 1.0, fragment.ink_rect.y + 1.0),
         Some(link)
     );
     for piece in &links[1..] {
         let text = find(piece, "#text").unwrap();
         let fragment = &text.text_fragments()[0];
-        let hit = tree.hit_test(fragment.x + 1.0, fragment.y + 1.0);
+        let hit = tree.hit_test(fragment.ink_rect.x + 1.0, fragment.ink_rect.y + 1.0);
         assert_eq!(hit, text.dom_node_id());
         assert!(
             crate::engine::link_url(
@@ -398,7 +398,7 @@ fn anonymous_boxes_are_visible_in_value_dumps_and_debug_outlines_without_decorat
     {
         let rect = child.rect();
         assert!(debug.iter().any(|item| matches!(
-            item, DisplayItem::OutlineRect {x,y,w,h,..}
+            item, DisplayItem::OutlineRect {x,y,w,h,color:0xff0000}
             if (*x,*y,*w,*h)==(rect.x,rect.y,rect.width,rect.height)
         )));
         assert!(!plain.iter().any(|item| matches!(
@@ -419,8 +419,8 @@ fn anonymous_boxes_are_visible_in_value_dumps_and_debug_outlines_without_decorat
     let rect = section.children()[2].rect();
     let offset = rect.y as usize * 400 + (rect.x + rect.width - 1.0) as usize;
     assert_eq!(
-        pixels[offset], 0xff0000,
-        "anonymous block's full-width debug outline"
+        pixels[offset], 0x008080,
+        "the teal full-width line outline overlays the coincident anonymous block edge"
     );
 }
 
@@ -479,7 +479,12 @@ fn compatibility_box_sizing_uses_content_floor_and_replaced_dimensions() {
     );
     let image = find(tree.root(), "<img>").unwrap();
     assert_eq!(image.content_rect().width, 80.0);
-    assert_eq!(image.content_rect().height, 100.0);
+    let font = load_bundled_font().unwrap();
+    let metrics = super::inline::font_metrics(&font, image.style(), image.node_id, &mut Vec::new());
+    assert_eq!(
+        image.content_rect().height,
+        80.0 / (16.0 / (metrics.above + metrics.below))
+    );
 }
 
 #[test]
@@ -754,7 +759,10 @@ fn wrapped_link_hit_testing_uses_fragments_not_whitespace_between_lines() {
     assert!(fragments.iter().any(|fragment| fragment.y > fragments[0].y));
     for fragment in fragments {
         let hit = tree
-            .hit_test(fragment.x + fragment.width / 2.0, fragment.y + 1.0)
+            .hit_test(
+                fragment.ink_rect.x + fragment.ink_rect.width / 2.0,
+                fragment.ink_rect.y + 1.0,
+            )
             .unwrap();
         assert_eq!(Some(hit), text.dom_node_id());
         assert!(
@@ -769,7 +777,7 @@ fn wrapped_link_hit_testing_uses_fragments_not_whitespace_between_lines() {
     }
     let last = fragments.last().unwrap();
     let hit = tree
-        .hit_test(last.x + last.width + 3.0, last.y + 1.0)
+        .hit_test(last.x + last.width + 3.0, last.ink_rect.y + 1.0)
         .unwrap();
     assert!(
         crate::engine::link_url(
@@ -810,7 +818,18 @@ fn font_line_height_and_visible_border_shorthands_reach_box_geometry() {
     assert_eq!(div.rect().width, 110.0);
     assert_eq!(div.rect().height, 96.0);
     let text = find(div, "#text").unwrap();
-    assert_eq!(text.text_fragments()[0].height, 40.0);
+    let metrics = load_bundled_font()
+        .unwrap()
+        .horizontal_line_metrics(20.0)
+        .unwrap();
+    assert_eq!(
+        text.text_fragments()[0].height,
+        metrics.ascent - metrics.descent
+    );
+    assert_eq!(
+        text.text_fragments()[0].baseline,
+        div.line_boxes()[0].baseline
+    );
     assert_eq!(div.style().border_width.left, 0.0);
     assert_eq!(div.style().border_width.right, 6.0);
     let short = layout(
@@ -910,9 +929,17 @@ fn box_model_resolves_content_width_padding_border_and_margins() {
     assert_eq!(div.rect().y, 34.0);
     assert_eq!(div.content_rect().x, 86.0);
     assert_eq!(div.content_rect().y, 41.0);
-    assert_eq!(div.rect().height, 34.0);
+    let line_height = load_bundled_font()
+        .unwrap()
+        .horizontal_line_metrics(16.0)
+        .unwrap()
+        .new_line_size;
+    assert_eq!(div.rect().height, line_height + 14.0);
     // The div's 10px bottom and paragraph's 16px top collapse to 16px.
-    assert_eq!(find(tree.root(), "<p>").unwrap().rect().y, 84.0);
+    assert_eq!(
+        find(tree.root(), "<p>").unwrap().rect().y,
+        34.0 + line_height + 14.0 + 16.0
+    );
 }
 
 #[test]
@@ -926,7 +953,15 @@ fn auto_width_and_em_lengths_use_the_computed_font_size() {
     assert_eq!(div.rect().width, 360.0);
     assert_eq!(div.content_rect().x, 64.0);
     assert_eq!(div.content_rect().y, 64.0);
-    assert_eq!(div.rect().height, 65.0);
+    assert_eq!(
+        div.rect().height,
+        load_bundled_font()
+            .unwrap()
+            .horizontal_line_metrics(20.0)
+            .unwrap()
+            .new_line_size
+            + 40.0
+    );
 }
 
 #[test]
@@ -1064,7 +1099,16 @@ fn overflowing_unitless_line_height_reports_layout_diagnostics_and_keeps_finite_
     assert_eq!(target.rect().height, 0.0);
     assert!(target.actual_rect(2.0).is_some());
     let text = find(target, "#text").unwrap();
-    assert_eq!(text.text_fragments()[0].height, 0.0);
+    let metrics = load_bundled_font()
+        .unwrap()
+        .horizontal_line_metrics(16.0)
+        .unwrap();
+    assert_eq!(
+        text.text_fragments()[0].height,
+        metrics.ascent - metrics.descent
+    );
+    assert_eq!(target.line_boxes()[0].rect.height, 0.0);
+    assert!(text.text_fragments()[0].ink_rect.height > 0.0);
     assert_eq!(tree.diagnostics().len(), 2);
     for diagnostic in tree.diagnostics() {
         assert!(diagnostic.message.starts_with("line-height:"));

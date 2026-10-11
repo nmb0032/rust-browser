@@ -53,7 +53,8 @@ pub use cascade::{
     resolve_with_user_stylesheets, resolve_with_user_stylesheets_and_environment,
 };
 pub use computed::{
-    BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem, Direction, Display,
+    BaselineShift, BaselineSource, BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem,
+    Direction, Display, TextAlign, TextAlignLast, VerticalAlign,
 };
 pub use container::ContainerSnapshot;
 pub(crate) use stylesheets::report_css_errors;
@@ -77,6 +78,8 @@ pub use stylesheets::{
     collect_stylesheets_with_external, embedded_stylesheet_source,
 };
 
+#[cfg(test)]
+mod alignment_tests;
 #[cfg(test)]
 mod color_tests;
 #[cfg(test)]

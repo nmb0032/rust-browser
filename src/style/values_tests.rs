@@ -282,7 +282,15 @@ fn font_inheritance_distinguishes_unitless_line_height_from_absolute_computed_le
         ("1.5", LineHeight::Number(1.5), 60.0),
         ("150%", LineHeight::Length(Length::Px(30.0)), 30.0),
         ("1.5em", LineHeight::Length(Length::Px(30.0)), 30.0),
-        ("normal", LineHeight::Normal, 50.0),
+        (
+            "normal",
+            LineHeight::Normal,
+            crate::paint::load_bundled_font()
+                .unwrap()
+                .horizontal_line_metrics(40.0)
+                .unwrap()
+                .new_line_size,
+        ),
     ] {
         let document = parser::parse(&format!(
             "<div style='font:20px/{source} serif'>

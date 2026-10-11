@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use crate::{
@@ -21,13 +21,47 @@ pub enum Content {
     Items(Vec<ContentItem>),
 }
 
-/// Only the containing block's horizontal width equation uses this today.
-/// Text reordering and logical properties are not implemented.
+/// Used by the horizontal width equation and logical text alignment.
+/// Text reordering and logical box properties are not implemented.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Direction {
     #[default]
     Ltr,
     Rtl,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextAlign {
+    #[default]
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextAlignLast {
+    #[default]
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BaselineShift {
+    #[default]
+    Zero,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BaselineSource {
+    #[default]
+    Auto,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +150,11 @@ pub struct ComputedStyle {
     pub custom_properties: BTreeMap<String, Option<Arc<[TokenKind]>>>,
     pub display: Display,
     pub direction: Direction,
+    pub text_align: TextAlign,
+    pub text_align_last: TextAlignLast,
+    pub vertical_align: VerticalAlign,
+    pub baseline_shift: BaselineShift,
+    pub baseline_source: BaselineSource,
     pub box_sizing: BoxSizing,
     pub color: Option<u32>,
     pub background_color: Option<u32>,
@@ -155,6 +194,11 @@ impl Default for ComputedStyle {
             custom_properties: BTreeMap::new(),
             display: Display::Inline,
             direction: Direction::Ltr,
+            text_align: TextAlign::Start,
+            text_align_last: TextAlignLast::Auto,
+            vertical_align: VerticalAlign::Baseline,
+            baseline_shift: BaselineShift::Zero,
+            baseline_source: BaselineSource::Auto,
             box_sizing: BoxSizing::ContentBox,
             color: Some(0),
             background_color: None,
@@ -194,6 +238,8 @@ impl ComputedStyle {
         Self {
             custom_properties: parent.custom_properties.clone(),
             direction: parent.direction,
+            text_align: parent.text_align,
+            text_align_last: parent.text_align_last,
             color: parent.color,
             text_color: parent.text_color,
             text_fill_color: parent.text_fill_color,
@@ -211,7 +257,15 @@ impl ComputedStyle {
     }
 
     pub fn used_line_height(&self) -> f32 {
-        self.line_height.used(self.font_size)
+        if self.line_height == LineHeight::Normal {
+            static FONT: OnceLock<fontdue::Font> = OnceLock::new();
+            FONT.get_or_init(|| crate::paint::load_bundled_font().expect("bundled font"))
+                .horizontal_line_metrics(self.font_size)
+                .expect("horizontal face")
+                .new_line_size
+        } else {
+            self.line_height.used(self.font_size)
+        }
     }
 }
 

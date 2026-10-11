@@ -1,8 +1,16 @@
 use std::sync::Arc;
 
-use crate::{dom::ElementData, media::DecodedImage, style::ComputedStyle};
+use crate::{
+    dom::{ElementData, NodeId},
+    media::DecodedImage,
+    style::{ComputedStyle, Diagnostic},
+};
 
-use super::{Rect, TextFragment, inline::measure_text};
+use super::{
+    Rect, TextFragment,
+    inline::{glyph_bounds, measure_text},
+    tree::{finite_rect, finite_used},
+};
 
 const MAX_LAYOUT_DIMENSION: f32 = 1_000_000.0;
 
@@ -49,13 +57,42 @@ impl ImageContent {
         )
     }
 
-    pub(super) fn alt_fragment(&self, rect: Rect, style: &ComputedStyle) -> Option<TextFragment> {
+    pub(super) fn alt_fragment(
+        &self,
+        rect: Rect,
+        style: &ComputedStyle,
+        font: &fontdue::Font,
+        node: Option<NodeId>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<TextFragment> {
         if self.data.is_some() || self.alt.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return None;
         }
+        let metrics = font
+            .horizontal_line_metrics(style.font_size)
+            .expect("bundled horizontal face");
+        // The fallback is text inside a replaced box, not its intrinsic baseline.
+        // Anchor its font descent to the content bottom, including explicit sizes.
+        let baseline = finite_used(
+            rect.y as f64 + rect.height as f64 + metrics.descent as f64,
+            node,
+            "alt text baseline",
+            diagnostics,
+        );
         Some(TextFragment {
             x: rect.x,
-            y: rect.y,
+            y: finite_used(
+                baseline as f64 - metrics.ascent as f64,
+                node,
+                "alt text y",
+                diagnostics,
+            ),
+            baseline,
+            ink_rect: finite_rect(
+                glyph_bounds(font, &self.alt, style, rect.x, baseline),
+                node,
+                diagnostics,
+            ),
             width: rect.width,
             height: rect.height,
             text: self.alt.clone(),

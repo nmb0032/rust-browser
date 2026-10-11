@@ -119,6 +119,31 @@ fn margin_collapsing_and_containment_preserve_content_geometry_feedback() {
 }
 
 #[test]
+fn inline_line_metrics_and_alignment_feed_container_sizes_without_vertical_decoration_height() {
+    let mut frame = frame(
+        "<style>body{margin:0}#owner{container:owner / inline-size;width:100px;font:16px/20px serif;text-align:center}\
+             #large{font:32px/40px serif;padding:50px 0;border-top:10px solid}\
+             #child{width:50cqw;height:10px;margin:0}\
+             @container owner (width:100px){#child{color:blue}}</style>\
+             <section id='owner'>H<span id='large'>H</span><div id='child'></div></section>",
+    );
+    let tree = layout(&mut frame);
+    let owner = box_for(&tree, id(&frame, "owner"));
+    assert_eq!(owner.content_rect().width, 100.0);
+    assert_eq!(owner.content_rect().height, 50.0);
+    let anonymous = &owner.children()[0];
+    assert!(anonymous.is_anonymous());
+    assert_eq!(anonymous.line_boxes()[0].rect.height, 40.0);
+    let child = box_for(&tree, id(&frame, "child"));
+    assert_eq!(child.content_rect().width, 50.0);
+    assert_eq!(child.style().color, Some(0x0000ff));
+    assert_eq!(child.rect().y, anonymous.rect().y + 40.0);
+    assert_eq!(layout(&mut frame), tree);
+    assert!(frame.stylesheets.diagnostics.is_empty());
+    assert!(tree.diagnostics().is_empty());
+}
+
+#[test]
 fn anonymous_wrappers_and_inline_continuations_never_replace_real_container_geometry() {
     let mut frame = frame(
         "<style>\

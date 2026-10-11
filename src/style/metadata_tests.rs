@@ -49,6 +49,11 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::BackgroundImage => format!("{:?}", style.background_image),
         P::Display => format!("{:?}", style.display),
         P::Direction => format!("{:?}", style.direction),
+        P::TextAlignAll => format!("{:?}", style.text_align),
+        P::TextAlignLast => format!("{:?}", style.text_align_last),
+        P::AlignmentBaseline => format!("{:?}", style.vertical_align),
+        P::BaselineShift => format!("{:?}", style.baseline_shift),
+        P::BaselineSource => format!("{:?}", style.baseline_source),
         P::BoxSizing => format!("{:?}", style.box_sizing),
         P::FontSize => format!("{:?}", style.font_size),
         P::FontFamily => format!("{:?}", style.font_family),
@@ -178,17 +183,17 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 52, 706, 63]);
-    assert_eq!(longhands.len(), 37);
+    assert_eq!(counts, [0, 59, 699, 63]);
+    assert_eq!(longhands.len(), 42);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 36);
+    assert_eq!(all.len(), 41);
     longhands.remove(&Property::Direction);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **51 partial**, **706 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **58 partial**, **699 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**37 longhands**, **14 shorthands**"));
+    assert!(report.contains("**42 longhands**, **16 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("height percentage/containment"));
@@ -278,6 +283,8 @@ fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule()
         &[
             "color",
             "-webkit-text-fill-color",
+            "text-align-all",
+            "text-align-last",
             "font-size",
             "font-family",
             "font-weight",

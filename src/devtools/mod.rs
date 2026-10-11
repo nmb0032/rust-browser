@@ -57,6 +57,50 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
         .unwrap();
         writeln!(
             output,
+            "  computed text-align: {:?}",
+            layout_box.style().text_align
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed text-align-last: {:?}",
+            layout_box.style().text_align_last
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed vertical-align: {:?}",
+            layout_box.style().vertical_align
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed baseline-shift: {:?}",
+            layout_box.style().baseline_shift
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed baseline-source: {:?}",
+            layout_box.style().baseline_source
+        )
+        .unwrap();
+        for line in layout_box.line_boxes() {
+            writeln!(output, "  used line: {line:?}").unwrap();
+        }
+        for fragment in layout_box.inline_fragments() {
+            writeln!(output, "  used inline-fragment: {fragment:?}").unwrap();
+        }
+        for fragment in layout_box.text_fragments() {
+            writeln!(
+                output,
+                "  used text: {:?} baseline={} ink={:?}",
+                fragment.text, fragment.baseline, fragment.ink_rect
+            )
+            .unwrap();
+        }
+        writeln!(
+            output,
             "  computed margins: {:?}",
             layout_box.style().margin
         )
@@ -138,6 +182,11 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
         };
         writeln!(output, "  display: {:?}", style.display).unwrap();
         writeln!(output, "  direction: {:?}", style.direction).unwrap();
+        writeln!(output, "  text-align: {:?}", style.text_align).unwrap();
+        writeln!(output, "  text-align-last: {:?}", style.text_align_last).unwrap();
+        writeln!(output, "  vertical-align: {:?}", style.vertical_align).unwrap();
+        writeln!(output, "  baseline-shift: {:?}", style.baseline_shift).unwrap();
+        writeln!(output, "  baseline-source: {:?}", style.baseline_source).unwrap();
         if style.box_sizing != crate::style::BoxSizing::ContentBox {
             writeln!(output, "  box-sizing: {:?}", style.box_sizing).unwrap();
         }
@@ -261,6 +310,11 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
                 )
                 .unwrap();
                 writeln!(output, "    font-size: Px({:?})", style.font_size).unwrap();
+                writeln!(output, "    line-height: {:?}", style.line_height).unwrap();
+                writeln!(output, "    text-align: {:?}", style.text_align).unwrap();
+                writeln!(output, "    vertical-align: {:?}", style.vertical_align).unwrap();
+                writeln!(output, "    baseline-shift: {:?}", style.baseline_shift).unwrap();
+                writeln!(output, "    baseline-source: {:?}", style.baseline_source).unwrap();
                 writeln!(output, "    width: {:?}", style.width).unwrap();
                 let content = format!("{:?}", style.content);
                 writeln!(
@@ -517,6 +571,32 @@ fn dump_layout_box(layout_box: &LayoutBox, depth: usize) {
         rect.width,
         rect.height
     );
+    for line in layout_box.line_boxes() {
+        println!(
+            "{indent}  line x={:.3} y={:.3} width={:.3} height={:.3} baseline={:.3} ascent={:.3} descent={:.3} content-x={:.3} content-width={:.3}",
+            line.rect.x,
+            line.rect.y,
+            line.rect.width,
+            line.rect.height,
+            line.baseline,
+            line.ascent,
+            line.descent,
+            line.content_rect.x,
+            line.content_rect.width
+        );
+    }
+    for fragment in layout_box.inline_fragments() {
+        println!(
+            "{indent}  inline-fragment {:?} baseline={:.3} first={} last={}",
+            fragment.rect, fragment.baseline, fragment.first, fragment.last
+        );
+    }
+    for fragment in layout_box.text_fragments() {
+        println!(
+            "{indent}  text {:?} baseline={:.3} ink={:?}",
+            fragment.text, fragment.baseline, fragment.ink_rect
+        );
+    }
 
     for child in layout_box.children() {
         dump_layout_box(child, depth + 1);

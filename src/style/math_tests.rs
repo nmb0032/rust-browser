@@ -56,13 +56,18 @@ fn root_font_and_line_height_dependencies_resolve_in_css_order() {
         .unwrap();
     let root = result.styles.get(root).unwrap();
     assert_eq!(root.font_size, 32.0);
-    assert_eq!(root.used_line_height(), 40.0);
+    let initial_line = paint::load_bundled_font()
+        .unwrap()
+        .horizontal_line_metrics(16.0)
+        .unwrap()
+        .new_line_size;
+    assert_eq!(root.used_line_height(), initial_line * 2.0);
     let target = result.styles.get(id(&document, "target")).unwrap();
     assert_eq!(target.font_size, 42.0);
     assert_eq!(target.line_height, LineHeight::Length(Length::Px(60.0)));
     assert_eq!(target.width, Some(Length::Px(64.0)));
     assert_eq!(target.margin.top, Length::Px(60.0).into());
-    assert_eq!(target.margin.right, Length::Px(40.0).into());
+    assert_eq!(target.margin.right, Length::Px(initial_line * 2.0).into());
     assert_eq!(target.padding, Edges::all(Length::Px(42.0)));
     let child = result.styles.get(id(&document, "child")).unwrap();
     assert_eq!(child.width, target.width);
@@ -129,8 +134,15 @@ fn font_units_use_the_bundled_face_metrics_and_initial_root_special_cases() {
                 .is_some_and(|e| e.tag_name() == "html")
         })
         .unwrap();
-    assert_eq!(result.styles.get(root).unwrap().font_size, 40.0);
-    assert_eq!(result.styles.get(root).unwrap().used_line_height(), 40.0);
+    let initial_line = font.horizontal_line_metrics(16.0).unwrap().new_line_size;
+    assert_eq!(
+        result.styles.get(root).unwrap().font_size,
+        initial_line * 2.0
+    );
+    assert_eq!(
+        result.styles.get(root).unwrap().used_line_height(),
+        initial_line * 2.0
+    );
 }
 
 #[test]

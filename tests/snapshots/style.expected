@@ -1,6 +1,11 @@
 Element NodeId(1) <p> id=Some("target")
   display: Block
   direction: Ltr
+  text-align: Start
+  text-align-last: Auto
+  vertical-align: Baseline
+  baseline-shift: Zero
+  baseline-source: Auto
   color: Rgb(0)
   background-color: Rgb(660510)
   background-image: None
