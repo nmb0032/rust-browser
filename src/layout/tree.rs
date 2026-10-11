@@ -242,7 +242,20 @@ impl LayoutTree {
                 .text_fragments
                 .iter()
                 .rev()
-                .any(|fragment| contains(fragment.ink_rect, x, y))
+                .any(|fragment| {
+                    contains(fragment.ink_rect, x, y)
+                        || fragment.text.chars().all(|c| matches!(c, ' ' | '\t'))
+                            && contains(
+                                Rect {
+                                    x: fragment.x,
+                                    y: fragment.y,
+                                    width: fragment.width,
+                                    height: fragment.height,
+                                },
+                                x,
+                                y,
+                            )
+                })
                 .then_some(node_id);
             if glyph_hit.is_some() || layout_box.kind == BoxKind::Text {
                 return glyph_hit;
@@ -712,8 +725,11 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>) {
     if run.iter().all(|child| {
         child.kind == BoxKind::Text
             && child.text.as_ref().is_none_or(|text| {
-                text.chars()
-                    .all(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c'))
+                text.chars().all(|c| match c {
+                    ' ' | '\t' | '\r' => !child.style.white_space_collapse.preserves_spaces(),
+                    '\n' => !child.style.white_space_collapse.preserves_breaks(),
+                    _ => false,
+                })
             })
     }) {
         run.clear();

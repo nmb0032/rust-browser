@@ -26,6 +26,58 @@ fn dump(format: &str) -> String {
 }
 
 #[test]
+fn unicode_line_breaking_demo_exposes_url_cjk_pre_modes_and_geometry_in_cli() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/line_breaking.html");
+    let run = |format: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_rust-browser"))
+            .arg(&path)
+            .arg(format!("--dump={format}"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "{output:?}"
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let layout = run("layout");
+    assert_eq!(layout, run("layout"));
+    for text in [
+        "https://",
+        "example.com/a-",
+        "你好，",
+        "first",
+        "second",
+        "last",
+        "\\t",
+    ] {
+        assert!(
+            layout.contains(&format!("text \"{text}\"")),
+            "{text}: {layout}"
+        );
+    }
+    assert!(layout.contains("first=true last=false"));
+    assert!(layout.contains("first=false last=true"));
+    assert!(layout.contains("content-width=28.800"));
+    let values = run("values");
+    assert_eq!(values, run("values"));
+    for value in [
+        "computed white-space-collapse: Collapse",
+        "computed white-space-collapse: Preserve",
+        "computed white-space-collapse: PreserveBreaks",
+        "computed white-space-collapse: BreakSpaces",
+        "computed text-wrap-mode: Nowrap",
+        "computed text-wrap-mode: Wrap",
+        "used line: LineBox",
+        "used inline-fragment: InlineFragment",
+    ] {
+        assert!(values.contains(value), "{value}: {values}");
+    }
+    let display = run("display-list");
+    assert!(!display.contains("co\\u{ad}operate"));
+    assert!(!display.contains("\\u{200b}"));
+}
+#[test]
 fn inline_layout_demo_exposes_shared_baselines_sliced_fragments_and_alignment_in_cli() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pages/inline_layout.html");
     let run = |format: &str| {

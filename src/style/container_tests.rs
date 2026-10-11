@@ -144,6 +144,49 @@ fn inline_line_metrics_and_alignment_feed_container_sizes_without_vertical_decor
 }
 
 #[test]
+fn unicode_wrapping_and_preserved_runs_feed_containers_without_resize_or_baseline_drift() {
+    let mut frame = frame(
+        "<!doctype html><style>body{margin:0}#owner{container:owner / inline-size;\
+         width:50%;font:16px/20px serif;white-space:pre-wrap}#child{width:50cqw;height:10px}\
+         @container owner (width >= 200px){#child{color:blue}}</style>\
+         <section id='owner'>你好，世界 /one/two/three\tlast\n \
+         <div id='child'></div>  </section>",
+    );
+    let mut narrow = None;
+    for (viewport, width) in [(248.0, 100.0), (848.0, 400.0), (248.0, 100.0)] {
+        frame.set_media_environment(MediaEnvironment::new(viewport, 600.0));
+        let tree = layout(&mut frame);
+        let owner = box_for(&tree, id(&frame, "owner"));
+        let child = box_for(&tree, id(&frame, "child"));
+        assert_eq!(owner.content_rect().width, width);
+        assert_eq!(child.content_rect().width, width / 2.0);
+        assert_eq!(
+            child.style().color,
+            Some(if width >= 200.0 { 0xff } else { 0 })
+        );
+        assert_eq!(owner.children()[2].line_boxes().len(), 1); // preserved-only anonymous run
+        let anonymous = &owner.children()[0];
+        let line_height: f32 = anonymous
+            .line_boxes()
+            .iter()
+            .map(|line| line.rect.height)
+            .sum();
+        assert_eq!(owner.content_rect().height, line_height + 30.0);
+        assert_eq!(child.rect().y - anonymous.rect().y, line_height);
+        assert_eq!(layout(&mut frame), tree);
+        if width == 100.0 {
+            if let Some(previous) = narrow.take() {
+                assert_eq!(tree, previous);
+            } else {
+                narrow = Some(tree.clone());
+            }
+        }
+        assert!(tree.diagnostics().is_empty());
+        assert!(frame.stylesheets.diagnostics.is_empty());
+    }
+}
+
+#[test]
 fn anonymous_wrappers_and_inline_continuations_never_replace_real_container_geometry() {
     let mut frame = frame(
         "<style>\

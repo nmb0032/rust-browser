@@ -2,7 +2,8 @@
 // @webref/css 8.7.6, MIT; see tools/css-spec/LICENSE and provenance.json.
 // Snapshot SHA-256: 4860d2a9ad90814a61888e8b2d879651fd523c0d3926eecfe4548b4dd60a20eb
 use super::{
-    BaselineSource, BoxSizing, Direction, Display, TextAlign, TextAlignLast, VerticalAlign,
+    BaselineSource, BoxSizing, Direction, Display, TextAlign, TextAlignLast, TextWrapMode,
+    VerticalAlign, WhiteSpaceCollapse,
     declarations::{Property, Value},
     metadata::{Grammar, PropertyMetadata, Support, SyntaxMetadata},
 };
@@ -11828,8 +11829,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["nowrap", "wrap"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "text-wrap-style",
@@ -12600,8 +12601,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &["white-space-collapse", "text-wrap-mode"],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::SemanticSubset,
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "white-space-collapse",
@@ -12617,8 +12618,8 @@ pub static PROPERTIES: &[PropertyMetadata] = &[
         alias_of: None,
         longhands: &[],
         reset_longhands: &[],
-        grammar: Grammar::Unsupported,
-        support: Support::Unimplemented,
+        grammar: Grammar::Keywords(&["break-spaces", "collapse", "preserve", "preserve-breaks"]),
+        support: Support::Partial,
     },
     PropertyMetadata {
         name: "white-space-trim",
@@ -18034,6 +18035,7 @@ pub(super) enum Parser {
     Container,
     TextAlign,
     VerticalAlign,
+    WhiteSpace,
 }
 pub(super) fn parser(name: &str) -> Option<Parser> {
     Some(match name {
@@ -18094,7 +18096,10 @@ pub(super) fn parser(name: &str) -> Option<Parser> {
         "text-align" => Parser::TextAlign,
         "text-align-all" => Parser::Longhand,
         "text-align-last" => Parser::Longhand,
+        "text-wrap-mode" => Parser::Longhand,
         "vertical-align" => Parser::VerticalAlign,
+        "white-space" => Parser::WhiteSpace,
+        "white-space-collapse" => Parser::Longhand,
         "width" => Parser::Longhand,
         _ => return None,
     })
@@ -18113,6 +18118,8 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
             Property::Display,
             Property::TextAlignAll,
             Property::TextAlignLast,
+            Property::WhiteSpaceCollapse,
+            Property::TextWrapMode,
             Property::AlignmentBaseline,
             Property::BaselineShift,
             Property::BaselineSource,
@@ -18260,11 +18267,14 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
         "text-align" => vec![Property::TextAlignAll, Property::TextAlignLast],
         "text-align-all" => vec![Property::TextAlignAll],
         "text-align-last" => vec![Property::TextAlignLast],
+        "text-wrap-mode" => vec![Property::TextWrapMode],
         "vertical-align" => vec![
             Property::AlignmentBaseline,
             Property::BaselineShift,
             Property::BaselineSource,
         ],
+        "white-space" => vec![Property::WhiteSpaceCollapse, Property::TextWrapMode],
+        "white-space-collapse" => vec![Property::WhiteSpaceCollapse],
         "width" => vec![Property::Width],
         _ => return None,
     })
@@ -18281,6 +18291,8 @@ impl Property {
             Self::Direction => "direction",
             Self::TextAlignAll => "text-align-all",
             Self::TextAlignLast => "text-align-last",
+            Self::WhiteSpaceCollapse => "white-space-collapse",
+            Self::TextWrapMode => "text-wrap-mode",
             Self::AlignmentBaseline => "alignment-baseline",
             Self::BaselineShift => "baseline-shift",
             Self::BaselineSource => "baseline-source",
@@ -18327,6 +18339,8 @@ impl Property {
             Self::Direction => true,
             Self::TextAlignAll => true,
             Self::TextAlignLast => true,
+            Self::WhiteSpaceCollapse => true,
+            Self::TextWrapMode => true,
             Self::AlignmentBaseline => false,
             Self::BaselineShift => false,
             Self::BaselineSource => false,
@@ -18373,6 +18387,8 @@ impl Property {
             Self::Direction => false,
             Self::TextAlignAll => false,
             Self::TextAlignLast => false,
+            Self::WhiteSpaceCollapse => false,
+            Self::TextWrapMode => false,
             Self::AlignmentBaseline => false,
             Self::BaselineShift => false,
             Self::BaselineSource => false,
@@ -18420,6 +18436,8 @@ pub(super) fn initial_css(property: Property) -> &'static str {
         Property::Direction => "ltr",
         Property::TextAlignAll => "start",
         Property::TextAlignLast => "auto",
+        Property::WhiteSpaceCollapse => "collapse",
+        Property::TextWrapMode => "wrap",
         Property::AlignmentBaseline => "baseline",
         Property::BaselineShift => "0",
         Property::BaselineSource => "auto",
@@ -18466,6 +18484,8 @@ pub(super) fn simple(property: Property) -> bool {
             | Property::Direction
             | Property::TextAlignAll
             | Property::TextAlignLast
+            | Property::WhiteSpaceCollapse
+            | Property::TextWrapMode
             | Property::AlignmentBaseline
             | Property::BaselineSource
             | Property::BoxSizing
@@ -18523,6 +18543,18 @@ pub(super) fn simple_value(property: Property, tokens: &[Component]) -> Option<V
         }),
         Property::TextAlignLast => Some(match token.ident()?.to_ascii_lowercase().as_str() {
             "auto" => Value::TextAlignLast(TextAlignLast::Auto),
+            _ => return None,
+        }),
+        Property::WhiteSpaceCollapse => Some(match token.ident()?.to_ascii_lowercase().as_str() {
+            "break-spaces" => Value::WhiteSpaceCollapse(WhiteSpaceCollapse::BreakSpaces),
+            "collapse" => Value::WhiteSpaceCollapse(WhiteSpaceCollapse::Collapse),
+            "preserve" => Value::WhiteSpaceCollapse(WhiteSpaceCollapse::Preserve),
+            "preserve-breaks" => Value::WhiteSpaceCollapse(WhiteSpaceCollapse::PreserveBreaks),
+            _ => return None,
+        }),
+        Property::TextWrapMode => Some(match token.ident()?.to_ascii_lowercase().as_str() {
+            "nowrap" => Value::TextWrapMode(TextWrapMode::Nowrap),
+            "wrap" => Value::TextWrapMode(TextWrapMode::Wrap),
             _ => return None,
         }),
         Property::AlignmentBaseline => Some(match token.ident()?.to_ascii_lowercase().as_str() {
@@ -18621,6 +18653,9 @@ pub(super) static SAMPLES: &[(&str, &str)] = &[
     ("text-align", "center"),
     ("text-align-all", "center"),
     ("text-align-last", "auto"),
+    ("text-wrap-mode", "nowrap"),
     ("vertical-align", "baseline"),
+    ("white-space", "pre-wrap"),
+    ("white-space-collapse", "preserve"),
     ("width", "42px"),
 ];

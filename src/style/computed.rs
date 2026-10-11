@@ -47,6 +47,32 @@ pub enum TextAlignLast {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WhiteSpaceCollapse {
+    #[default]
+    Collapse,
+    Preserve,
+    PreserveBreaks,
+    BreakSpaces,
+}
+
+impl WhiteSpaceCollapse {
+    pub(crate) fn preserves_spaces(self) -> bool {
+        matches!(self, Self::Preserve | Self::BreakSpaces)
+    }
+
+    pub(crate) fn preserves_breaks(self) -> bool {
+        self != Self::Collapse
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextWrapMode {
+    #[default]
+    Wrap,
+    Nowrap,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VerticalAlign {
     #[default]
     Baseline,
@@ -152,6 +178,8 @@ pub struct ComputedStyle {
     pub direction: Direction,
     pub text_align: TextAlign,
     pub text_align_last: TextAlignLast,
+    pub white_space_collapse: WhiteSpaceCollapse,
+    pub text_wrap_mode: TextWrapMode,
     pub vertical_align: VerticalAlign,
     pub baseline_shift: BaselineShift,
     pub baseline_source: BaselineSource,
@@ -196,6 +224,8 @@ impl Default for ComputedStyle {
             direction: Direction::Ltr,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
+            white_space_collapse: WhiteSpaceCollapse::Collapse,
+            text_wrap_mode: TextWrapMode::Wrap,
             vertical_align: VerticalAlign::Baseline,
             baseline_shift: BaselineShift::Zero,
             baseline_source: BaselineSource::Auto,
@@ -240,6 +270,8 @@ impl ComputedStyle {
             direction: parent.direction,
             text_align: parent.text_align,
             text_align_last: parent.text_align_last,
+            white_space_collapse: parent.white_space_collapse,
+            text_wrap_mode: parent.text_wrap_mode,
             color: parent.color,
             text_color: parent.text_color,
             text_fill_color: parent.text_fill_color,

@@ -12,6 +12,9 @@ use super::{
     },
 };
 
+#[path = "line_break.rs"]
+mod breaking;
+
 #[derive(Clone, Copy)]
 pub(super) struct FontMetrics {
     pub(super) ascent: f32,
@@ -72,11 +75,14 @@ struct BoxData {
     fragments: Vec<InlineFragment>,
 }
 
+#[derive(Clone)]
 enum Token {
     Begin(usize),
     End(usize),
     Text(usize, String, f32),
-    Space(usize, f32),
+    Space(usize, char, f32, bool),
+    Control(usize, char),
+    Omitted,
     Image(usize),
     Break(usize),
 }
@@ -92,12 +98,12 @@ impl Token {
                 let b = &boxes[*id];
                 b.padding.right as f64 + b.border.right as f64 + b.margin.right as f64
             }
-            Self::Text(_, _, width) | Self::Space(_, width) => *width as f64,
+            Self::Text(_, _, width) | Self::Space(_, _, width, _) => *width as f64,
             Self::Image(id) => {
                 let b = &boxes[*id];
                 b.margin.left as f64 + b.rect.width as f64 + b.margin.right as f64
             }
-            Self::Break(_) => 0.0,
+            Self::Break(_) | Self::Control(..) | Self::Omitted => 0.0,
         }
     }
 
@@ -118,7 +124,8 @@ impl Token {
                 let b = &boxes[*id];
                 b.padding.right != 0.0 || b.border.right != 0.0 || b.margin.right != 0.0
             }
-            Self::Space(..) => false,
+            Self::Space(_, _, _, preserved) => *preserved,
+            Self::Control(..) | Self::Omitted => false,
         }
     }
 }
@@ -250,41 +257,14 @@ fn collect(
     boxes.push(data);
     if layout.tag_name == "<br>" {
         tokens.push(Token::Break(id));
+    } else if layout.tag_name == "<wbr>" {
+        tokens.push(Token::Control(id, '\u{200b}'));
     } else if layout.kind == BoxKind::Text {
-        // Preserve word boundaries across text/style nodes. CSS whitespace
-        // collapsing is deliberately the existing basic subset, not UAX #14.
-        let text = layout.text.as_deref().unwrap_or_default();
-        let mut word = String::new();
-        for character in text.chars() {
-            if character.is_whitespace() {
-                if !word.is_empty() {
-                    let advance = finite_used(
-                        measure_text(font, &word, style.font_size) as f64,
-                        layout.node_id,
-                        "text advance",
-                        diagnostics,
-                    );
-                    tokens.push(Token::Text(id, std::mem::take(&mut word), advance));
-                }
-                if !matches!(tokens.last(), Some(Token::Space(..))) {
-                    tokens.push(Token::Space(
-                        id,
-                        font.metrics(' ', style.font_size).advance_width,
-                    ));
-                }
-            } else {
-                word.push(character);
-            }
-        }
-        if !word.is_empty() {
-            let advance = finite_used(
-                measure_text(font, &word, style.font_size) as f64,
-                layout.node_id,
-                "text advance",
-                diagnostics,
-            );
-            tokens.push(Token::Text(id, word, advance));
-        }
+        tokens.push(Token::Text(
+            id,
+            layout.text.clone().unwrap_or_default(),
+            0.0,
+        ));
     } else {
         tokens.push(Token::Begin(id));
         for child in &layout.children {
@@ -424,13 +404,26 @@ impl Assembly<'_> {
             }
             Token::Text(id, text, width) => {
                 self.contribute(self.boxes[id].metrics);
-                self.items.push((Token::Text(id, text, width), self.x));
+                if let Some((Token::Text(previous_id, previous_text, previous_width), previous_x)) =
+                    self.items.last_mut()
+                    && *previous_id == id
+                    && (*previous_x + *previous_width - self.x).abs() < 0.001
+                {
+                    previous_text.push_str(&text);
+                    *previous_width += width;
+                } else {
+                    self.items.push((Token::Text(id, text, width), self.x));
+                }
                 self.advance(width as f64, self.boxes[id].node);
             }
-            Token::Space(id, width) => {
+            Token::Space(id, character, width, preserved) => {
                 self.contribute(self.boxes[id].metrics);
                 for index in 0..self.active.len() {
                     self.contribute(self.boxes[self.active[index]].metrics);
+                }
+                if preserved {
+                    self.items
+                        .push((Token::Space(id, character, width, true), self.x));
                 }
                 self.advance(width as f64, self.boxes[id].node);
             }
@@ -438,64 +431,14 @@ impl Assembly<'_> {
                 self.contribute(self.boxes[id].metrics);
                 self.items.push((Token::Break(id), self.x));
             }
+            Token::Control(..) | Token::Omitted => {}
         }
     }
 
-    fn group(&mut self, tokens: Vec<Token>, separator: Option<Token>) {
-        let real = tokens.iter().any(|token| token.real(self.boxes));
-        let advance: f64 = tokens.iter().map(|token| token.width(self.boxes)).sum();
-        let has_content = tokens
-            .iter()
-            .any(|token| matches!(token, Token::Text(..) | Token::Image(_)));
-        let use_space = self.real && has_content && separator.is_some();
-        let gap = if use_space {
-            separator
-                .as_ref()
-                .map_or(0.0, |token| token.width(self.boxes))
-        } else {
-            0.0
-        };
-        let wrapped = self.real
-            && real
-            && has_content
-            && self.x as f64 + gap + advance > self.origin as f64 + self.width as f64;
-        if wrapped {
-            self.finish();
-        }
-        let mut separator = separator.filter(|_| use_space && !wrapped);
-        let mut space_path = Vec::new();
-        if let Some(Token::Space(id, _)) = &separator {
-            let mut parent = self.boxes[*id].parent;
-            while let Some(id) = parent {
-                space_path.push(id);
-                parent = self.boxes[id].parent;
-            }
-            space_path.reverse();
-        }
-        let forced = tokens.iter().any(|token| matches!(token, Token::Break(_)));
-        for token in tokens {
-            // A surviving space belongs to its original inline ancestors,
-            // even when opening/closing style boundaries surround that space.
-            if self.active == space_path
-                && let Some(space) = separator.take()
-            {
-                self.add(space);
-            }
-            self.add(token);
-        }
-        if let Some(space) = separator {
-            self.add(space);
-        }
-        if forced {
-            self.finish();
-        }
-    }
-
-    fn finish(&mut self) {
+    fn finish(&mut self, advance: f64) {
         if !self.real {
             return;
         }
-        let advance = self.x as f64 - self.origin as f64;
         let remaining = self.width as f64 - advance;
         let align = match (self.align, self.direction) {
             (TextAlign::Start, Direction::Ltr) | (TextAlign::End, Direction::Rtl) => {
@@ -616,6 +559,13 @@ impl Assembly<'_> {
             });
         }
         for (token, x) in self.items.drain(..) {
+            let whitespace = matches!(token, Token::Space(..));
+            let token = match token {
+                Token::Space(id, character, width, true) => {
+                    Token::Text(id, character.to_string(), width)
+                }
+                token => token,
+            };
             match token {
                 Token::Text(id, text, width) => {
                     let b = &mut self.boxes[id];
@@ -632,7 +582,18 @@ impl Assembly<'_> {
                         b.node,
                         self.diagnostics,
                     );
-                    b.rect = finite_rect(b.rect.union(ink_rect), b.node, self.diagnostics);
+                    let advance_rect = Rect {
+                        x,
+                        y,
+                        width,
+                        height: b.metrics.ascent + b.metrics.descent,
+                    };
+                    b.rect = finite_rect(
+                        b.rect
+                            .union(if whitespace { advance_rect } else { ink_rect }),
+                        b.node,
+                        self.diagnostics,
+                    );
                     b.content = b.rect;
                     b.text.push(TextFragment {
                         x,
@@ -764,42 +725,7 @@ pub(super) fn layout_inline_run(
         items: Vec::new(),
         lines: Vec::new(),
     };
-    let mut group = Vec::new();
-    let mut separator = None;
-    let mut contains_image = false;
-    for token in tokens {
-        if matches!(token, Token::Space(..)) {
-            if group
-                .iter()
-                .any(|token| matches!(token, Token::Text(..) | Token::Image(_)))
-            {
-                assembly.group(take_before_openings(&mut group), separator.take());
-                contains_image = false;
-            }
-            if separator.is_none() {
-                separator = Some(token);
-            }
-        } else {
-            if (matches!(token, Token::Image(_))
-                && group
-                    .iter()
-                    .any(|token| matches!(token, Token::Text(..) | Token::Image(_))))
-                || (matches!(token, Token::Text(..)) && contains_image)
-            {
-                assembly.group(take_before_openings(&mut group), separator.take());
-                contains_image = false;
-            }
-            contains_image |= matches!(token, Token::Image(_));
-            let forced = matches!(token, Token::Break(_));
-            group.push(token);
-            if forced {
-                assembly.group(std::mem::take(&mut group), separator.take());
-                contains_image = false;
-            }
-        }
-    }
-    assembly.group(group, separator); // an empty/end-only group ignores trailing whitespace
-    assembly.finish();
+    breaking::layout(tokens, style, &mut assembly);
     let height = assembly.y as f64 - y as f64;
     let lines = std::mem::take(&mut assembly.lines);
     drop(assembly);
@@ -808,15 +734,6 @@ pub(super) fn layout_inline_run(
         install(child, &mut data, font, diagnostics);
     }
     (lines, height)
-}
-
-fn take_before_openings(group: &mut Vec<Token>) -> Vec<Token> {
-    let split = group
-        .iter()
-        .rposition(|token| !matches!(token, Token::Begin(_)))
-        .map_or(0, |index| index + 1);
-    let openings = group.split_off(split);
-    std::mem::replace(group, openings)
 }
 
 fn install(
@@ -859,6 +776,9 @@ pub(super) fn glyph_bounds(
     let mut pen = x;
     let mut bounds = Rect::default();
     for character in text.chars() {
+        if nonprinting(character) || character == '\t' {
+            continue;
+        }
         let metrics = font.metrics(character, style.font_size);
         if metrics.width != 0 && metrics.height != 0 {
             bounds = bounds.union(Rect {
@@ -881,6 +801,12 @@ pub(super) fn glyph_bounds(
 
 pub(super) fn measure_text(font: &fontdue::Font, text: &str, font_size: f32) -> f32 {
     text.chars()
+        .filter(|&character| !nonprinting(character))
         .map(|character| font.metrics(character, font_size).advance_width as f64)
         .sum::<f64>() as f32
+}
+
+pub(crate) fn nonprinting(c: char) -> bool {
+    matches!(c as u32, 0x00ad | 0x034f | 0x061c | 0x180e | 0x200b..=0x200f
+        | 0x202a..=0x202e | 0x2060..=0x206f | 0xfe00..=0xfe0f | 0xfeff | 0xe0100..=0xe01ef)
 }

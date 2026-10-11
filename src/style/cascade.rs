@@ -2007,6 +2007,8 @@ fn computed_value(
         P::Direction => Value::Direction(style.direction),
         P::TextAlignAll => Value::TextAlign(style.text_align),
         P::TextAlignLast => Value::TextAlignLast(style.text_align_last),
+        P::WhiteSpaceCollapse => Value::WhiteSpaceCollapse(style.white_space_collapse),
+        P::TextWrapMode => Value::TextWrapMode(style.text_wrap_mode),
         P::AlignmentBaseline => Value::VerticalAlign(style.vertical_align),
         P::BaselineShift => Value::BaselineShift(style.baseline_shift),
         P::BaselineSource => Value::BaselineSource(style.baseline_source),
@@ -2061,6 +2063,10 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         (P::Direction, Value::Direction(direction)) => style.direction = direction,
         (P::TextAlignAll, Value::TextAlign(align)) => style.text_align = align,
         (P::TextAlignLast, Value::TextAlignLast(align)) => style.text_align_last = align,
+        (P::WhiteSpaceCollapse, Value::WhiteSpaceCollapse(mode)) => {
+            style.white_space_collapse = mode
+        }
+        (P::TextWrapMode, Value::TextWrapMode(mode)) => style.text_wrap_mode = mode,
         (P::AlignmentBaseline, Value::VerticalAlign(align)) => style.vertical_align = align,
         (P::BaselineShift, Value::BaselineShift(shift)) => style.baseline_shift = shift,
         (P::BaselineSource, Value::BaselineSource(source)) => style.baseline_source = source,

@@ -278,6 +278,9 @@ fn draw_text(
     let mut pen_x = run.start_x as f32;
 
     for character in run.text.chars() {
+        if crate::layout::nonprinting(character) || character == '\t' {
+            continue;
+        }
         let (metrics, bitmap) = font.rasterize(character, run.px);
         let top = run.baseline_y - (metrics.ymin + metrics.height as i32);
         let left = pen_x + metrics.xmin as f32;

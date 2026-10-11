@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Milestone 8.5: Unicode lines and whitespace</title>
+<style>
+body { margin: 0; font: 16px/24px sans-serif; }
+main { width: 420px; margin: auto; }
+h1 { font-size: 24px; }
+h2 { font-size: 18px; margin: 20px 0 8px; }
+p { margin: 8px 0; }
+.sample { width: 160px; padding: 8px; border: 1px solid #667788; margin: 8px 0; }
+#url a { background: #e8f0ff; padding: 0 2px; border: 1px solid #8899bb; }
+#cjk { width: 32px; }
+#nowrap { white-space: nowrap; }
+#prewrap { white-space: pre-wrap; }
+#preline { white-space: pre-line; }
+#spaces { white-space: break-spaces; width: 48px; }
+#controls { width: 64px; }
+pre { margin: 8px 0; }
+</style>
+<main>
+<h1>Unicode lines and whitespace</h1>
+<p>Resize the window; press F12 for line boxes, baselines and inline slices.</p>
+<h2>URLs: legal slash and hyphen breaks</h2>
+<div class="sample" id="url"><a href="#url">https://example.com/a-long/path/to/resource</a></div>
+<h2>CJK punctuation stays with its neighbors</h2>
+<div class="sample" id="cjk">你好，世界（你好）再见。</div>
+<p>The bundled font may show missing CJK glyph boxes. Font selection and fallback remain step 8.6; line geometry is Unicode-aware.</p>
+<h2>Normal: collapse and wrap</h2>
+<div class="sample" id="normal">  alpha   beta
+gamma   delta  </div>
+<h2>Nowrap: only explicit breaks</h2>
+<div class="sample" id="nowrap">alpha beta gamma delta<br>forced break</div>
+<h2>Pre: preserve spaces, tabs and lines, no soft wrapping</h2>
+<pre class="sample" id="pre">first
+	second
+
+last  </pre>
+<h2>Pre-wrap: preserved trailing spaces hang at soft breaks</h2>
+<div class="sample" id="prewrap">  alpha   beta
+gamma   delta  </div>
+<h2>Pre-line: collapse spaces, preserve lines</h2>
+<div class="sample" id="preline">  alpha   beta
+
+gamma   delta  </div>
+<h2>Break-spaces: each space occupies width and can wrap</h2>
+<div class="sample" id="spaces">a          b  </div>
+<h2>Nonbreaking space, zero-width space, soft hyphen</h2>
+<div class="sample" id="controls">a&nbsp;b a&#x200b;b co&shy;operate</div>
+</main>

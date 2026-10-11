@@ -1812,7 +1812,9 @@ and the CSSOM parts covered here meet the conformance gate.
 
   Box construction groups leading, intervening, and trailing inline runs
   whenever the containing block has block-level children. Collapsible
-  whitespace-only text runs create no wrapper; pure inline and pure block
+  whitespace-only text runs create no wrapper; 8.5 retains whitespace-only
+  runs when their inherited mode preserves spaces or segment breaks.
+  Pure inline and pure block
   content retain their formatting. In-flow blocks inside inline ancestors
   (including generated block pseudos) are lifted to the containing block,
   splitting every intervening inline ancestor into real continuations.
@@ -1843,11 +1845,10 @@ and the CSSOM parts covered here meet the conformance gate.
 
   **Remaining naive behavior:** This is box generation, not complete
   browser layout parity. The existing viewport gutter, height sizing,
-  basic space wrapping, and limited formatting model remain. Step 8.3
-  replaces additive vertical margins with adjoining margin sets; 8.4
-  adds real baseline-aligned lines and per-line inline decoration fragments.
-  Unicode line breaking, `white-space`, font selection, and shaping
-  remain for 8.5–8.6 and later steps;
+  and limited formatting model remain. Steps 8.3–8.5 supply adjoining
+  margin sets, baseline-aligned lines, sliced inline decorations, Unicode
+  line breaking, and the supported CSS whitespace modes.
+  Font selection and shaping remain for 8.6 and later steps;
   Milestone 8 is not complete.
 - [x] **8.2 Compute widths and auto margins.** Implement the CSS 2 width
   equations, including `margin: auto` centering.
@@ -1893,10 +1894,9 @@ and the CSSOM parts covered here meet the conformance gate.
   **Supported scope, not browser parity:** This is the CSS2 equation for
   the existing horizontal normal-flow block/replaced-image subset, not
   complete CSS2 sizing. The viewport gutter, image sizing cap/alt fallback,
-  indefinite percentage-height fallback, basic space-based wrapping,
-  and limited display types remain. Step 8.3 adds vertical margin
-  collapsing; 8.4 replaces naive inline bounds with baseline-aware
-  per-line fragments. No min/max/intrinsic sizing
+  indefinite percentage-height fallback and limited display types remain.
+  Steps 8.3–8.5 add vertical margin collapsing, baseline-aware per-line
+  fragments, Unicode wrapping, and CSS whitespace. No min/max/intrinsic sizing
   keywords, positioned/floated/
   table/flex/grid layout, writing modes, logical margins, HTML `dir`
   semantics, or bidi text are added. Those remain in later steps;
@@ -1957,7 +1957,9 @@ and the CSSOM parts covered here meet the conformance gate.
   inline content/decorations. Step 8.4 supplies real line metrics,
   baseline alignment, per-line decorations, and correct explicit-break
   termination without an unconditional trailing empty line.
-  Word splitting and NBSP/`white-space` behavior remain limited until 8.5.
+  Step 8.5 supplies Unicode opportunities, noncollapsing/nonbreaking NBSP,
+  and typed CSS whitespace modes. Preserved whitespace establishes real
+  lines (even with zero line-height); collapsed-only runs stay phantom.
   No `min-height`, clearance/floats, overflow-created formatting contexts,
   positioned/inline-block/table/flex/grid layout, or writing modes are added.
   Those require their later sizing/formatting/property milestones. The
@@ -1973,8 +1975,8 @@ and the CSSOM parts covered here meet the conformance gate.
   `InlineFragment` border/content rectangles. A preorder formatting-box
   identity keeps nested inline styles, generated content, and 8.1
   block-in-inline continuations distinct even when they share a DOM node.
-  Basic collapsible spaces provide break opportunities, but adjacent
-  text/style nodes within an unbroken word remain one wrapping unit.
+  Step 8.5 replaces the initial space-only grouping with buffered Unicode
+  opportunities; text/style/pseudo boundaries still do not break words.
   Inline opening/closing edges travel with their content; wrapped fragments
   have horizontal margin/padding/border only at the first/last outer edges.
   Continued ancestor backgrounds and borders paint separately on each line,
@@ -2045,16 +2047,107 @@ and the CSSOM parts covered here meet the conformance gate.
 
   **Supported scope, not full browser/WPT parity:** Only the bundled face
   and baseline vertical alignment are selected; synthetic bold/italic
-  remain. UAX #14, complete CSS whitespace/NBSP handling, bidi/writing modes,
-  shaping/kerning/ligatures/font fallback, justification/hyphenation,
+  remain. Step 8.5 adds UAX #14 and the documented CSS whitespace subset.
+  Bidi/writing modes, shaping/kerning/ligatures/font fallback,
+  justification/automatic hyphenation,
   advanced vertical alignment, independent last-line alignment,
   `box-decoration-break: clone`, and other formatting contexts remain
   deferred. Existing image sizing caps and indefinite percentage-height
   fallbacks remain. Milestone 8 is not complete.
-  **Stop here for user review before 8.5.**
-- [ ] **8.5 Break lines correctly.** Use Unicode line breaking (UAX #14) with
+- [x] **8.5 Break lines correctly.** Use Unicode line breaking (UAX #14) with
   `unicode-linebreak` and support `white-space`.
   *You'll see:* URLs, CJK text, and `<pre>` wrap correctly.
+
+  Inline collection retains formatting-box ownership and UTF-8 text.
+  CSS whitespace normalization runs across text, styled inline, and generated
+  pseudo boundaries before a single `unicode-linebreak` pass (Unicode 15.0)
+  over the logical stream. Byte offsets map back to scalar/box events without
+  splitting multibyte characters or creating opportunities at style changes.
+  Buffered intervals end only at legal opportunities; greedy fitting retains
+  the last legal boundary, then remeasures the pending interval at the new
+  line origin. Unbreakable content can overflow: there is no break-all or
+  overflow-wrap fallback. Unicode glue, word joiners, combining sequences,
+  zero-width spaces, URL slashes/hyphens, and CJK punctuation are respected.
+  Replaced images retain the CSS atomic-inline opportunity exceptions.
+  `<wbr>` is a zero-width opportunity; soft hyphen is invisible unless its
+  opportunity is selected, when a bundled-face `-` contributes advance,
+  ink, baseline metrics, and its owner's inline decorations.
+
+  The pinned metadata treats `white-space` as an atomic shorthand for typed,
+  inherited `white-space-collapse` and `text-wrap-mode`. Supported modes are
+  normal, nowrap, pre, pre-wrap, pre-line, and break-spaces, plus combinations
+  of collapse/preserve/preserve-breaks/break-spaces with wrap/nowrap.
+  Variables, CSS-wide values, origin/layer rollback, text and pseudo inheritance,
+  anonymous wrappers, generated metadata/coverage, and style/value dumps use
+  the same longhand pipeline. Unsupported trimming, discard, preserve-spaces,
+  and advanced wrapping/tailoring values are rejected rather than defaulted.
+  `white-space-trim` and the larger CSS Text 3/4 property umbrella are not added.
+  The UA gives `<pre>` preserving, nonwrapping whitespace and a computed
+  monospace family (actual font selection still belongs to 8.6).
+
+  Normal/nowrap collapse spaces and tabs, transform segment breaks, and trim
+  line-edge spaces. Pre-line collapses spaces/tabs but preserves LF breaks.
+  Pre preserves spaces/tabs/breaks without soft wrapping. Pre-wrap preserves
+  them and wraps, with trailing whitespace hanging at soft breaks and
+  conditionally hanging at forced breaks/end-of-block. Break-spaces counts
+  trailing spaces in sizing/alignment and permits breaks between preserved
+  spaces, without discarding or hanging them. Preserved tabs advance to
+  eight-space stops measured in the block container's font from the line
+  origin; stops less than 0.5ch away are skipped. Tabs are remeasured after
+  wrapping and never painted as missing glyphs. No `tab-size` property is added.
+  Preserved-only runs retain anonymous blocks, real lines, baseline/advance
+  geometry, and whitespace hit surfaces, preventing phantom margin collapse.
+  Collapsed-only runs do not invent lines. `<br>` and Unicode mandatory breaks
+  override nowrap; trailing/consecutive LF breaks keep the correct line counts
+  without an extra terminal strut. Resize, container feedback, per-line edge
+  slicing, and one-time local-to-document geometry finalization remain intact.
+
+  **Whitespace scope and public references:** The behavior follows
+  [CSS Text 3 whitespace phases and segment-break transformation](https://www.w3.org/TR/css-text-3/#white-space-processing),
+  [tab positioning](https://www.w3.org/TR/css-text-3/#white-space-phase-2),
+  and [line-breaking scope](https://www.w3.org/TR/css-text-3/#line-break-details),
+  with the pinned CSS Text 4 shorthand/longhand structure.
+  Only document spaces, tabs, and LF segment breaks collapse, not Rust's
+  entire `char::is_whitespace()` set. NBSP and other Unicode separators remain
+  distinct; trailing other separators hang where required, with the Ogham
+  trailing-removal exception. The HTML document/fragment tokenizer already
+  normalizes source CR and CRLF to LF. CR inserted directly into the DOM or
+  through a character reference remains CR and is treated as a space by CSS;
+  layout does not incorrectly normalize these DOM values a second time.
+  Unicode BK/NL characters retain their mandatory-break behavior.
+  CSS Text 3 leaves segment-break deletion heuristics UA-defined: this engine
+  conservatively deletes collapsible LF between adjacent Han/Kana/CJK
+  punctuation ranges (excluding ideographic space), or next to ZWSP, across
+  inline boundaries; other contexts, including Hangul, get a space.
+  Language-aware and font/script-dependent refinements are not claimed.
+
+  **Visible check:** `cargo run -- tests/pages/line_breaking.html --dump=layout`
+  shows `https://` and `example.com/a-` on separate URL lines with sliced link
+  decorations, and `你好，` occupying 28.800px in a 32px CJK line.
+  The pre example has four 24px lines, a real tab stop, and a preserved blank
+  line, without soft wrapping. All six modes and nonbreaking/discretionary
+  examples are labeled. `--dump=values` exposes the typed whitespace longhands,
+  lines, and inline slices. Open without a dump and use F12 for the overlay.
+  The bundled face lacks the CJK glyphs (verified glyph index zero): boxes may
+  appear instead of ideographs, but the Unicode line geometry is correct.
+  Font fallback remains 8.6, not part of this step.
+
+  Focused tests pin public crate/UAX opportunity indices and numeric geometry,
+  style/pseudo boundaries, UTF-8/combining sequences, Unicode separators and
+  controls, discretionary hyphens, all modes and cascade paths, tabs, CR/LF,
+  consecutive/trailing newlines, hanging/alignment/hits/raster output,
+  preserved anonymous runs and margin separation, container/resize stability,
+  long-content finite geometry, generated metadata, and CLI demonstrations.
+
+  **Remaining limitations:** This is the supported horizontal block/inline
+  model, not full browser/WPT parity. Shaping, kerning, ligatures, font
+  fallback/selection, and full script-sensitive typographic units remain 8.6;
+  bidi/writing modes remain 8.14. Dictionary/orthographic segmentation,
+  word-break/line-break tailoring, automatic hyphenation, text transforms,
+  and justification remain 8.16. Advanced whitespace trimming, additional
+  collapsing modes, intrinsic sizing, and other formatting contexts are
+  unimplemented and reported as partial coverage. Milestone 8 remains incomplete.
+  **Stop here for user review before 8.6.**
 - [ ] **8.6 Shape text.** Use `rustybuzz` or `swash` for shaping, discover
   system fonts with `fontdb`, and add font fallback.
   *You'll see:* ligatures, kerning, and non-Latin scripts render correctly.

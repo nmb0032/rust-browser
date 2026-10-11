@@ -13,7 +13,7 @@ use crate::css::{
 
 use super::{
     BaselineShift, BaselineSource, BoxSizing, Content, ContentItem, Direction, Display, TextAlign,
-    TextAlignLast, VerticalAlign,
+    TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -30,6 +30,8 @@ pub(super) enum Property {
     Direction,
     TextAlignAll,
     TextAlignLast,
+    WhiteSpaceCollapse,
+    TextWrapMode,
     AlignmentBaseline,
     BaselineShift,
     BaselineSource,
@@ -72,6 +74,8 @@ pub(super) enum Value {
     Direction(Direction),
     TextAlign(TextAlign),
     TextAlignLast(TextAlignLast),
+    WhiteSpaceCollapse(WhiteSpaceCollapse),
+    TextWrapMode(TextWrapMode),
     VerticalAlign(VerticalAlign),
     BaselineShift(BaselineShift),
     BaselineSource(BaselineSource),
@@ -197,6 +201,7 @@ pub(super) fn parse_tokens_with_context(
             value(Property::TextAlignAll, &tokens)?,
             initial_value(Property::TextAlignLast),
         ]),
+        Parser::WhiteSpace => white_space(&tokens),
         Parser::VerticalAlign => {
             // Only the baseline shorthand subset; all targets reset atomically.
             let alignment = value(Property::AlignmentBaseline, &tokens)?;
@@ -291,6 +296,52 @@ pub(super) fn properties(name: &str) -> Option<Vec<Property>> {
     generated_properties::properties(name)
 }
 
+fn white_space(tokens: &[Component]) -> Option<Vec<Value>> {
+    use TextWrapMode::{Nowrap, Wrap};
+    use WhiteSpaceCollapse::{BreakSpaces, Collapse, Preserve, PreserveBreaks};
+    let modes = match tokens {
+        [token] => match token.ident()?.to_ascii_lowercase().as_str() {
+            "normal" => Some((Collapse, Wrap)),
+            "nowrap" => Some((Collapse, Nowrap)),
+            "pre" => Some((Preserve, Nowrap)),
+            "pre-wrap" => Some((Preserve, Wrap)),
+            "pre-line" => Some((PreserveBreaks, Wrap)),
+            "break-spaces" => Some((BreakSpaces, Wrap)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let (collapse, wrap) = if let Some(modes) = modes {
+        modes
+    } else {
+        if tokens.is_empty() || tokens.len() > 2 {
+            return None;
+        }
+        let mut collapse = None;
+        let mut wrap = None;
+        for token in tokens {
+            let one = std::slice::from_ref(token);
+            if let Some(Value::WhiteSpaceCollapse(mode)) = value(Property::WhiteSpaceCollapse, one)
+            {
+                if collapse.replace(mode).is_some() {
+                    return None;
+                }
+            } else if let Some(Value::TextWrapMode(mode)) = value(Property::TextWrapMode, one) {
+                if wrap.replace(mode).is_some() {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+        (collapse.unwrap_or(Collapse), wrap.unwrap_or(Wrap))
+    };
+    Some(vec![
+        Value::WhiteSpaceCollapse(collapse),
+        Value::TextWrapMode(wrap),
+    ])
+}
+
 fn border_properties(side: Side) -> [Property; 3] {
     [
         Property::BorderWidth(side),
@@ -329,6 +380,8 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::Direction
         | P::TextAlignAll
         | P::TextAlignLast
+        | P::WhiteSpaceCollapse
+        | P::TextWrapMode
         | P::AlignmentBaseline
         | P::BaselineSource
         | P::BoxSizing
@@ -337,6 +390,7 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         P::BaselineShift => {
             (token.number()? == 0.0).then_some(Value::BaselineShift(BaselineShift::Zero))
         }
+
         P::Width | P::Height | P::Margin(_) if lower == "auto" => Some(Value::Auto),
         P::FontSize => font_size(token),
         P::Width | P::Height | P::Margin(_) | P::Padding(_) | P::BorderWidth(_) => {

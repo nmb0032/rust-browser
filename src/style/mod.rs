@@ -54,7 +54,7 @@ pub use cascade::{
 };
 pub use computed::{
     BaselineShift, BaselineSource, BoxSizing, ComputedStyle, ComputedStyles, Content, ContentItem,
-    Direction, Display, TextAlign, TextAlignLast, VerticalAlign,
+    Direction, Display, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
 };
 pub use container::ContainerSnapshot;
 pub(crate) use stylesheets::report_css_errors;
@@ -104,3 +104,5 @@ mod tests;
 mod values_tests;
 #[cfg(test)]
 mod variables_tests;
+#[cfg(test)]
+mod whitespace_tests;

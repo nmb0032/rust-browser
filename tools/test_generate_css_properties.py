@@ -16,14 +16,16 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 42)
-        self.assertEqual(len(supported), 59)
+        self.assertEqual(len(longhands), 44)
+        self.assertEqual(len(supported), 62)
         self.assertNotIn("direction", supported["all"]["targets"])
         self.assertEqual(supported["-webkit-box-sizing"]["targets"], ["box-sizing"])
         self.assertNotIn("initial", properties["-webkit-box-sizing"])
         self.assertEqual(supported["margin"]["targets"],
                          ["margin-top", "margin-right", "margin-bottom", "margin-left"])
         self.assertEqual(supported["container"]["targets"], ["container-name", "container-type"])
+        self.assertEqual(supported["white-space"]["targets"], ["white-space-collapse", "text-wrap-mode"])
+        self.assertNotIn("white-space-trim", supported)
         self.assertEqual(supported["background"]["targets"],
                          ["background-color", "background-image"])
         self.assertIn("font-variant-ligatures", supported["font"]["missing"])

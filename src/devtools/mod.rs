@@ -69,6 +69,18 @@ pub fn format_values(tree: &LayoutTree, device_scale: f32) -> String {
         .unwrap();
         writeln!(
             output,
+            "  computed white-space-collapse: {:?}",
+            layout_box.style().white_space_collapse
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  computed text-wrap-mode: {:?}",
+            layout_box.style().text_wrap_mode
+        )
+        .unwrap();
+        writeln!(
+            output,
             "  computed vertical-align: {:?}",
             layout_box.style().vertical_align
         )
@@ -184,6 +196,13 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
         writeln!(output, "  direction: {:?}", style.direction).unwrap();
         writeln!(output, "  text-align: {:?}", style.text_align).unwrap();
         writeln!(output, "  text-align-last: {:?}", style.text_align_last).unwrap();
+        writeln!(
+            output,
+            "  white-space-collapse: {:?}",
+            style.white_space_collapse
+        )
+        .unwrap();
+        writeln!(output, "  text-wrap-mode: {:?}", style.text_wrap_mode).unwrap();
         writeln!(output, "  vertical-align: {:?}", style.vertical_align).unwrap();
         writeln!(output, "  baseline-shift: {:?}", style.baseline_shift).unwrap();
         writeln!(output, "  baseline-source: {:?}", style.baseline_source).unwrap();
@@ -312,6 +331,13 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
                 writeln!(output, "    font-size: Px({:?})", style.font_size).unwrap();
                 writeln!(output, "    line-height: {:?}", style.line_height).unwrap();
                 writeln!(output, "    text-align: {:?}", style.text_align).unwrap();
+                writeln!(
+                    output,
+                    "    white-space-collapse: {:?}",
+                    style.white_space_collapse
+                )
+                .unwrap();
+                writeln!(output, "    text-wrap-mode: {:?}", style.text_wrap_mode).unwrap();
                 writeln!(output, "    vertical-align: {:?}", style.vertical_align).unwrap();
                 writeln!(output, "    baseline-shift: {:?}", style.baseline_shift).unwrap();
                 writeln!(output, "    baseline-source: {:?}", style.baseline_source).unwrap();

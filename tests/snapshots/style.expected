@@ -3,6 +3,8 @@ Element NodeId(1) <p> id=Some("target")
   direction: Ltr
   text-align: Start
   text-align-last: Auto
+  white-space-collapse: Collapse
+  text-wrap-mode: Wrap
   vertical-align: Baseline
   baseline-shift: Zero
   baseline-source: Auto

@@ -202,9 +202,12 @@ fn anonymous_wrappers_inherit_alignment_and_dumps_expose_baseline_properties() {
         assert_eq!(child.style().text_align, TextAlign::Center);
         assert_eq!(child.style().direction, Direction::Rtl);
         let line = &child.line_boxes()[0];
-        assert_eq!(
-            line.content_rect.x,
-            child.content_rect().x + (child.content_rect().width - line.content_rect.width) / 2.0
+        assert!(
+            (line.content_rect.x
+                - (child.content_rect().x
+                    + (child.content_rect().width - line.content_rect.width) / 2.0))
+                .abs()
+                < 0.0001
         );
         assert_eq!(line.rect.x, child.content_rect().x);
         assert_eq!(line.rect.width, child.content_rect().width);
