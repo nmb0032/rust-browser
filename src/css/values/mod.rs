@@ -12,6 +12,9 @@ pub use math::{AbsoluteUnit, Angle, Dimension, MathExpression, RelativeUnit, Res
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Length {
+    MinContent,
+    MaxContent,
+    FitContent(Option<Box<Length>>),
     Px(f32),
     Em(f32),
     Percent(f32),
@@ -135,6 +138,7 @@ impl Length {
 
     pub fn used(&self, context: &LengthContext, reference: f32) -> Option<UsedLength> {
         let value = match self {
+            Self::MinContent | Self::MaxContent | Self::FitContent(_) => return None,
             Self::Px(value) => *value,
             Self::Em(value) => value * context.font_size,
             Self::Percent(value) => value * reference / 100.0,
@@ -147,6 +151,11 @@ impl Length {
 
     pub fn computed(&self, context: &LengthContext) -> Option<ComputedLength> {
         match self {
+            Self::MinContent | Self::MaxContent => Some(ComputedLength(self.clone())),
+            Self::FitContent(limit) => Some(ComputedLength(Self::FitContent(match limit {
+                Some(v) => Some(Box::new(v.computed(context)?.0)),
+                None => None,
+            }))),
             Self::Percent(_) => Some(ComputedLength(self.clone())),
             Self::Math(expression) if expression.has_percentage() => {
                 Some(ComputedLength(Self::Math(expression.computed(context)?)))
@@ -160,6 +169,14 @@ impl Length {
     pub fn has_percentage(&self) -> bool {
         matches!(self, Self::Percent(_))
             || matches!(self, Self::Math(expression) if expression.has_percentage())
+            || matches!(self, Self::FitContent(Some(limit)) if limit.has_percentage())
+    }
+
+    pub fn intrinsic(&self) -> bool {
+        matches!(
+            self,
+            Self::MinContent | Self::MaxContent | Self::FitContent(_)
+        )
     }
 
     pub(crate) fn is_nonnegative(&self) -> bool {
@@ -171,6 +188,7 @@ impl Length {
             | Self::Absolute(value, _) => *value >= 0.0,
             // Range restrictions on math results apply after evaluation.
             Self::Math(_) => true,
+            Self::MinContent | Self::MaxContent | Self::FitContent(_) => true,
         }
     }
 }

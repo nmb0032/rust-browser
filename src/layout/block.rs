@@ -1,12 +1,12 @@
 use crate::{
     css::container::ContainerType,
-    style::{Diagnostic, Direction, Display},
+    style::{AlignKeyword, Alignment, Diagnostic, Direction, Display},
 };
 
 use super::{
     BoxKind, LayoutBox, ListMarker, Rect,
     inline::{font_metrics, layout_inline_run},
-    tree::{finite_used, resolve_edges, resolve_length, resolve_margins},
+    tree::{finite_used, resolve_edges, resolve_margins},
 };
 
 /// An adjoining set must retain both extrema until all its members are known.
@@ -54,7 +54,7 @@ struct ChildrenFlow {
 #[derive(Clone, Copy)]
 enum BlockMode {
     Root(Option<f32>),
-    Flow(Option<f32>, f32),
+    Flow(Option<f32>, f32, Alignment),
     Positioned {
         width: f32,
         height: Option<f32>,
@@ -75,16 +75,31 @@ fn layout_block(
     floats: &mut super::floats::FloatContext,
 ) -> BlockFlow {
     let percentage_reference = match mode {
-        BlockMode::Flow(_, reference) => reference,
+        BlockMode::Flow(_, reference, _) => reference,
         BlockMode::Positioned {
             percentage_reference,
             ..
         } => percentage_reference,
         _ => available_width,
     };
-    if layout_box.style.writing_mode.vertical() {
+    let mut self_align = match mode {
+        BlockMode::Flow(_, _, parent)
+            if layout_box.style.justify_self.keyword == AlignKeyword::Auto =>
+        {
+            parent
+        }
+        BlockMode::Flow(..) => layout_box.style.justify_self,
+        _ => Alignment::default(),
+    };
+    if layout_box.style.writing_mode.vertical() && layout_box.image.is_none() {
+        if !matches!(
+            self_align.keyword,
+            AlignKeyword::Auto | AlignKeyword::Normal | AlignKeyword::Stretch
+        ) {
+            diagnostics.push(Diagnostic { node_id: layout_box.node_id, message: "native block justify-self uses default sizing/placement; orthogonal block self-alignment remains unsupported".into() });
+        }
         let (height, forced_width, forced_height) = match mode {
-            BlockMode::Root(height) | BlockMode::Flow(height, _) => (height, None, None),
+            BlockMode::Root(height) | BlockMode::Flow(height, _, _) => (height, None, None),
             BlockMode::Positioned { width, height, .. } => (height, Some(width), height),
         };
         super::writing::layout(
@@ -104,7 +119,7 @@ fn layout_block(
             through: false,
         };
     }
-    let reference_width = if let BlockMode::Flow(_, reference) = mode {
+    let reference_width = if let BlockMode::Flow(_, reference, _) = mode {
         reference
     } else {
         available_width
@@ -115,7 +130,7 @@ fn layout_block(
         _ => true,
     };
     let containing_height = match mode {
-        BlockMode::Root(height) | BlockMode::Flow(height, _) => height,
+        BlockMode::Root(height) | BlockMode::Flow(height, _, _) => height,
         BlockMode::Positioned { .. } => None,
     };
     let style = &layout_box.style;
@@ -142,19 +157,13 @@ fn layout_block(
         "vertical decorations",
         diagnostics,
     );
-    let explicit_width = style.width.as_ref().map(|length| {
-        style.box_sizing.content_size(
-            resolve_length(
-                length,
-                style.font_size,
-                reference_width,
-                layout_box.node_id,
-                "width",
-                diagnostics,
-            ),
-            horizontal,
-        )
-    });
+    let explicit_width = super::sizing::definite_size(
+        layout_box,
+        style.width.as_ref(),
+        Some(reference_width),
+        horizontal,
+        diagnostics,
+    );
     let explicit_width = if style.display.is_table()
         && explicit_width.is_none()
         && !matches!(mode, BlockMode::Positioned { .. })
@@ -170,23 +179,70 @@ fn layout_block(
     } else {
         explicit_width
     };
-    let explicit_height = style
-        .height
-        .as_ref()
-        .filter(|length| !length.has_percentage() || containing_height.is_some())
-        .map(|length| {
-            style.box_sizing.content_size(
-                resolve_length(
-                    length,
-                    style.font_size,
-                    containing_height.unwrap_or(0.0),
-                    layout_box.node_id,
-                    "height",
-                    diagnostics,
-                ),
-                vertical,
-            )
-        });
+    let explicit_height = super::sizing::definite_height(
+        layout_box,
+        style.height.as_ref(),
+        containing_height,
+        vertical,
+        diagnostics,
+    );
+    let ratio_width = if explicit_width.is_none() && style.width.is_none() {
+        explicit_height
+            .and_then(|h| super::sizing::ratio_width(layout_box, h, horizontal, vertical))
+    } else {
+        None
+    };
+    let explicit_width = explicit_width.or_else(|| {
+        if style.width.is_none() {
+            explicit_height
+                .and_then(|h| super::sizing::ratio_width(layout_box, h, horizontal, vertical))
+        } else {
+            None
+        }
+    });
+    match self_align.keyword {
+        AlignKeyword::Baseline | AlignKeyword::LastBaseline => {
+            diagnostics.push(Diagnostic {
+                node_id: layout_box.node_id,
+                message: "block justify-self baseline group uses positional fallback".into(),
+            });
+            self_align.keyword = if self_align.keyword == AlignKeyword::LastBaseline {
+                AlignKeyword::End
+            } else {
+                AlignKeyword::Start
+            };
+        }
+        AlignKeyword::SelfStart | AlignKeyword::SelfEnd => {
+            let start_left = style.direction == Direction::Ltr;
+            self_align.keyword = if start_left == (self_align.keyword == AlignKeyword::SelfStart) {
+                AlignKeyword::Left
+            } else {
+                AlignKeyword::Right
+            };
+        }
+        _ => {}
+    }
+    let positional = !matches!(
+        self_align.keyword,
+        AlignKeyword::Auto | AlignKeyword::Normal | AlignKeyword::Stretch
+    );
+    let explicit_width = explicit_width.or_else(|| {
+        if positional && layout_box.image.is_none() {
+            let intrinsic = super::positioning::intrinsic_content(
+                layout_box,
+                reference_width,
+                font,
+                diagnostics,
+            );
+            let available = available_width
+                - horizontal
+                - margins.left.unwrap_or(0.0)
+                - margins.right.unwrap_or(0.0);
+            Some(available.max(intrinsic.0).min(intrinsic.1))
+        } else {
+            None
+        }
+    });
     let explicit_height = match mode {
         BlockMode::Positioned { height, .. } => height,
         _ => explicit_height,
@@ -217,6 +273,30 @@ fn layout_block(
             font,
         )
     });
+    replaced_size = replaced_size.map(|size| {
+        super::sizing::constrain_replaced(
+            layout_box,
+            if explicit_height.is_none() {
+                (
+                    size.0,
+                    super::sizing::ratio_height(layout_box, size.0, horizontal, vertical)
+                        .unwrap_or(size.1),
+                )
+            } else if explicit_width.is_none() && explicit_height.is_some() {
+                (
+                    super::sizing::ratio_width(layout_box, size.1, horizontal, vertical)
+                        .unwrap_or(size.0),
+                    size.1,
+                )
+            } else {
+                size
+            },
+            (explicit_width.is_some(), explicit_height.is_some()),
+            (Some(reference_width), containing_height),
+            (horizontal, vertical),
+            diagnostics,
+        )
+    });
     let (mut width, mut left, mut right) = if let BlockMode::Positioned { width, .. } = mode {
         (
             f64::from(width),
@@ -237,12 +317,20 @@ fn layout_block(
         )
     };
     if !matches!(mode, BlockMode::Positioned { .. }) {
+        let automatic_minimum = if ratio_width.is_some()
+            && layout_box.image.is_none()
+            && !layout_box.style.overflow_x.scroll_container()
+        {
+            super::positioning::intrinsic_content(layout_box, reference_width, font, diagnostics).0
+        } else {
+            0.0
+        };
         let bounds = super::sizing::bounds(
             layout_box,
             true,
             Some(reference_width),
             horizontal,
-            0.0,
+            automatic_minimum,
             diagnostics,
         );
         let constrained = (width as f32).clamp(bounds.0, bounds.1);
@@ -285,6 +373,13 @@ fn layout_block(
         } else {
             width
         };
+    let explicit_height = explicit_height.or_else(|| {
+        if layout_box.style.height.is_none() && layout_box.image.is_none() {
+            super::sizing::ratio_height(layout_box, width, horizontal, vertical)
+        } else {
+            None
+        }
+    });
     if let Some(image) = &layout_box.image
         && explicit_height.is_none()
         && replaced_size.is_some_and(|size| size.0 != width)
@@ -297,6 +392,30 @@ fn layout_block(
             metrics.above + metrics.below,
             font,
         ));
+    }
+    if positional && let (Some(raw_left), Some(raw_right)) = (margins.left, margins.right) {
+        let remaining = available_width - horizontal - width - raw_left - raw_right;
+        let mut physical = self_align;
+        if physical.safe && remaining < 0.0 {
+            physical.keyword = AlignKeyword::Start;
+        }
+        physical.keyword = match physical.keyword {
+            AlignKeyword::Start | AlignKeyword::FlexStart
+                if containing_direction == Direction::Rtl =>
+            {
+                AlignKeyword::End
+            }
+            AlignKeyword::End | AlignKeyword::FlexEnd if containing_direction == Direction::Rtl => {
+                AlignKeyword::Start
+            }
+            AlignKeyword::Left => AlignKeyword::Start,
+            AlignKeyword::Right => AlignKeyword::End,
+            keyword => keyword,
+        };
+        physical.safe = false;
+        let offset = super::flex::distribution(physical, remaining, 1, false).0;
+        left = (raw_left + offset) as f64;
+        right = (raw_right + remaining - offset) as f64;
     }
     let margin = crate::css::values::Edges {
         left: finite_used(
@@ -454,7 +573,15 @@ fn layout_block(
             false,
             containing_height,
             vertical,
-            0.0,
+            if layout_box.image.is_none()
+                && layout_box.style.height.is_none()
+                && explicit_height.is_some()
+                && !layout_box.style.overflow_y.scroll_container()
+            {
+                natural_height.max(0.0) as f32
+            } else {
+                0.0
+            },
             diagnostics,
         )
     });
@@ -465,6 +592,52 @@ fn layout_block(
         } else {
             height
         };
+    if layout_box.image.is_none()
+        && !layout_box.style.display.is_item_container()
+        && !layout_box.style.display.is_table()
+    {
+        let align = layout_box.style.align_content;
+        let remaining = height - natural_height as f32;
+        let keyword = if align.keyword == crate::style::AlignKeyword::LastBaseline {
+            crate::style::AlignKeyword::End
+        } else {
+            align.keyword
+        };
+        let offset = super::flex::distribution(
+            crate::style::Alignment {
+                keyword,
+                safe: align.safe,
+            },
+            remaining,
+            1,
+            false,
+        )
+        .0;
+        if offset != 0.0 {
+            for child in &mut layout_box.children {
+                if child.local_root() {
+                    place_block(child, (child.rect.y + offset) as f64, diagnostics);
+                } else {
+                    super::positioning::translate(child, 0.0, offset, diagnostics);
+                }
+            }
+            for line in &mut layout_box.line_boxes {
+                line.rect.y += offset;
+                line.content_rect.y += offset;
+                line.baseline += offset;
+            }
+        }
+        if matches!(
+            align.keyword,
+            crate::style::AlignKeyword::SpaceBetween
+                | crate::style::AlignKeyword::SpaceAround
+                | crate::style::AlignKeyword::SpaceEvenly
+                | crate::style::AlignKeyword::Baseline
+                | crate::style::AlignKeyword::LastBaseline
+        ) {
+            diagnostics.push(Diagnostic { node_id: layout_box.node_id, message: "block align-content uses positional fallback; distributed content and shared block baseline groups are not implemented".into() });
+        }
+    }
     if !matches!(mode, BlockMode::Positioned { .. })
         && containing_height.is_none()
         && layout_box
@@ -578,7 +751,7 @@ pub(super) fn layout_sized_in(
         diagnostics,
         &mut super::floats::FloatContext::default(),
     );
-    if layout_box.style.display == Display::ListItem {
+    if layout_box.style.display.is_list_item() {
         let text = layout_box
             .marker_text
             .clone()
@@ -606,7 +779,7 @@ pub(super) fn layout_caption(
     );
 }
 
-fn assign_marker(
+pub(super) fn assign_marker(
     child: &mut LayoutBox,
     text: String,
     font: &crate::text::FontContext,
@@ -615,11 +788,18 @@ fn assign_marker(
     let style = child.marker_style.as_ref().unwrap_or(&child.style).clone();
     let metrics = font_metrics(font, &style, child.node_id, diagnostics);
     let glyphs = font.shape(&style, &text);
-    let baseline = child
-        .first_local_baseline()
-        .map_or(child.content_rect.y + metrics.above, |baseline| {
+    let baseline = (if child.local_root() {
+        child.first_local_baseline()
+    } else {
+        child.inline_fragments.first().map(|f| f.baseline)
+    })
+    .map_or(child.content_rect.y + metrics.above, |baseline| {
+        if child.local_root() {
             child.rect.y + baseline
-        });
+        } else {
+            baseline
+        }
+    });
     child.list_marker = Some(ListMarker {
         x: child.content_rect.x - glyphs.width - style.font_size * 0.5,
         y: baseline - metrics.ascent,
@@ -824,7 +1004,11 @@ fn flow_children(
                 if is_document && !child.is_anonymous() {
                     BlockMode::Root(layout_box.definite_height)
                 } else {
-                    BlockMode::Flow(layout_box.definite_height, width)
+                    BlockMode::Flow(
+                        layout_box.definite_height,
+                        width,
+                        layout_box.style.justify_items,
+                    )
                 },
                 font,
                 diagnostics,
@@ -860,7 +1044,11 @@ fn flow_children(
                         child_x,
                         child_width,
                         layout_box.style.direction,
-                        BlockMode::Flow(layout_box.definite_height, width),
+                        BlockMode::Flow(
+                            layout_box.definite_height,
+                            width,
+                            layout_box.style.justify_items,
+                        ),
                         font,
                         diagnostics,
                         floats,
@@ -886,7 +1074,11 @@ fn flow_children(
                     child_x,
                     child_width,
                     layout_box.style.direction,
-                    BlockMode::Flow(layout_box.definite_height, width),
+                    BlockMode::Flow(
+                        layout_box.definite_height,
+                        width,
+                        layout_box.style.justify_items,
+                    ),
                     font,
                     diagnostics,
                     floats,
@@ -910,7 +1102,7 @@ fn flow_children(
                 at_start = false;
                 all_through = false;
             }
-            if child.style.display == Display::ListItem {
+            if child.style.display.is_list_item() {
                 list_index += 1;
                 let text = child.marker_text.clone().unwrap_or_else(|| {
                     if ordered {

@@ -105,6 +105,7 @@ struct Line {
     items: Vec<usize>,
     cross: f32,
     baseline: f32,
+    last_descent: f32,
 }
 
 fn report(b: &LayoutBox, message: &str, diagnostics: &mut Vec<Diagnostic>) {
@@ -167,6 +168,9 @@ pub(super) fn distribution(
         keyword = A::Start;
     }
     match keyword {
+        A::Left if reverse => (remaining, 0.0),
+        A::Right if !reverse => (remaining, 0.0),
+        A::LastBaseline => (remaining.max(0.0), 0.0),
         A::Start | A::SelfStart if reverse => (remaining, 0.0),
         A::End | A::SelfEnd if !reverse => (remaining, 0.0),
         A::FlexEnd => (remaining, 0.0),
@@ -314,7 +318,11 @@ fn format_item(
         } else {
             child.rect.width
         };
-        item.baseline = child.first_local_baseline().unwrap_or(child.rect.height);
+        item.baseline = if item.align.keyword == A::LastBaseline {
+            child.last_local_baseline().unwrap_or(child.rect.height)
+        } else {
+            child.first_local_baseline().unwrap_or(child.rect.height)
+        };
         diagnostics.extend(item.measured_diagnostics.iter().cloned());
         return;
     }
@@ -355,7 +363,11 @@ fn format_item(
     } else {
         child.rect.width
     };
-    item.baseline = child.first_local_baseline().unwrap_or(child.rect.height);
+    item.baseline = if item.align.keyword == A::LastBaseline {
+        child.last_local_baseline().unwrap_or(child.rect.height)
+    } else {
+        child.first_local_baseline().unwrap_or(child.rect.height)
+    };
 }
 
 pub(super) fn layout_flex(
@@ -367,18 +379,19 @@ pub(super) fn layout_flex(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> f32 {
     let row = b.style.flex_direction.row();
-    if b.style.align_content.keyword == A::Baseline {
+    if matches!(b.style.align_content.keyword, A::Baseline | A::LastBaseline) {
         report(
             b,
-            "align-content baseline uses flex-start fallback in the finite flex line alignment model",
+            "align-content baseline uses first:start/last:end fallback in the finite flex line alignment model",
             diagnostics,
         );
     }
     if !row
-        && (b.style.align_items.keyword == A::Baseline
-            || b.children
-                .iter()
-                .any(|c| c.is_flex_item && c.style.align_self.keyword == A::Baseline))
+        && (matches!(b.style.align_items.keyword, A::Baseline | A::LastBaseline)
+            || b.children.iter().any(|c| {
+                c.is_flex_item
+                    && matches!(c.style.align_self.keyword, A::Baseline | A::LastBaseline)
+            }))
     {
         report(
             b,
@@ -456,13 +469,17 @@ pub(super) fn layout_flex(
             horizontal,
             diagnostics,
         );
-        let mut explicit_height = sizing::definite_size(
+        let mut explicit_height = sizing::definite_height(
             child,
             child.style.height.as_ref(),
             definite_height,
             vertical,
             diagnostics,
         );
+        if explicit_width.is_none() {
+            explicit_width =
+                explicit_height.and_then(|h| sizing::ratio_width(child, h, horizontal, vertical));
+        }
         let align = effective_align(child, b.style.align_items);
         let (cross_before, cross_after) = if row {
             (margins.top, margins.bottom)
@@ -531,6 +548,18 @@ pub(super) fn layout_flex(
         let basis = match &child.style.flex_basis {
             FlexBasis::Auto => specified_main.unwrap_or(content_main),
             FlexBasis::Content => content_main,
+            FlexBasis::Length(length) if length.intrinsic() => if row {
+                sizing::definite_size(child, Some(length), main_reference, main_decor, diagnostics)
+            } else {
+                sizing::definite_height(
+                    child,
+                    Some(length),
+                    main_reference,
+                    main_decor,
+                    diagnostics,
+                )
+            }
+            .unwrap_or(content_main),
             FlexBasis::Length(length) if length.has_percentage() && main_reference.is_none() => {
                 report(
                     child,
@@ -589,6 +618,18 @@ pub(super) fn layout_flex(
                 automatic_minimum =
                     automatic_minimum.min(if row { transferred.0 } else { transferred.1 });
             }
+            if child.image.is_none()
+                && let Some(cross) = if row { explicit_height } else { explicit_width }
+            {
+                let transferred = if row {
+                    sizing::ratio_width(child, cross, horizontal, vertical)
+                } else {
+                    sizing::ratio_height(child, cross, horizontal, vertical)
+                };
+                if let Some(transferred) = transferred {
+                    automatic_minimum = automatic_minimum.max(transferred);
+                }
+            }
         }
         let (min, max) = sizing::bounds(
             child,
@@ -603,8 +644,11 @@ pub(super) fn layout_flex(
         } else {
             child.style.max_height.as_ref()
         };
-        let capped_auto =
-            sizing::definite_size(child, max_length, main_reference, main_decor, diagnostics);
+        let capped_auto = if row {
+            sizing::definite_size(child, max_length, main_reference, main_decor, diagnostics)
+        } else {
+            sizing::definite_height(child, max_length, main_reference, main_decor, diagnostics)
+        };
         let min = if (if row {
             &child.style.min_width
         } else {
@@ -698,6 +742,7 @@ pub(super) fn layout_flex(
             );
         }
         let mut descent: f32 = 0.0;
+        let mut last_ascent: f32 = 0.0;
         for &i in &line.items {
             let item = &mut items[i];
             format_item(
@@ -730,6 +775,21 @@ pub(super) fn layout_flex(
                     .max(baseline + item.cross_before.unwrap_or(0.0));
                 descent = descent.max(item.cross_size - baseline + item.cross_after.unwrap_or(0.0));
             }
+            if row
+                && item.align.keyword == A::LastBaseline
+                && item.cross_before.is_some()
+                && item.cross_after.is_some()
+            {
+                let baseline = if cross_reverse {
+                    item.cross_size - item.baseline
+                } else {
+                    item.baseline
+                };
+                line.last_descent = line
+                    .last_descent
+                    .max(item.cross_size - baseline + item.cross_after.unwrap_or(0.0));
+                last_ascent = last_ascent.max(baseline + item.cross_before.unwrap_or(0.0));
+            }
         }
         line.cross = line.cross.max(finite_used(
             line.baseline as f64 + descent as f64,
@@ -737,6 +797,7 @@ pub(super) fn layout_flex(
             "flex baseline cross size",
             diagnostics,
         ));
+        line.cross = line.cross.max(last_ascent + line.last_descent);
     }
     let natural_cross = finite_used(
         lines.iter().map(|l| l.cross as f64).sum::<f64>()
@@ -813,11 +874,18 @@ pub(super) fn layout_flex(
         } else {
             0.0
         };
-        let justify = if auto > 0.0 {
+        let mut justify = if auto > 0.0 {
             Alignment::new(A::FlexStart)
         } else {
             b.style.justify_content
         };
+        if matches!(justify.keyword, A::Left | A::Right) {
+            justify.keyword = if row && ((justify.keyword == A::Left) == main_reverse) {
+                A::FlexEnd
+            } else {
+                A::FlexStart
+            };
+        }
         let (mut cursor, between) = distribution(
             justify,
             if auto > 0.0 { 0.0 } else { remaining },
@@ -881,6 +949,13 @@ pub(super) fn layout_flex(
                     item.baseline
                 };
                 cross_offset = line.baseline - baseline;
+            } else if row && item.align.keyword == A::LastBaseline {
+                let baseline = if cross_reverse {
+                    item.cross_size - item.baseline
+                } else {
+                    item.baseline
+                };
+                cross_offset = line.cross - line.last_descent - baseline;
             } else {
                 let mut align = item.align;
                 if matches!(align.keyword, A::SelfStart | A::SelfEnd)
@@ -1045,6 +1120,10 @@ pub(super) fn intrinsic_widths(
             preferred.unwrap_or(max)
         } else {
             match &child.style.flex_basis {
+                FlexBasis::Length(length) if length.intrinsic() => {
+                    sizing::definite_size(child, Some(length), None, decor, diagnostics)
+                        .unwrap_or(max)
+                }
                 FlexBasis::Length(length) if !length.has_percentage() => {
                     let value = resolve_length(
                         length,

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, error::Error, fmt, io::Cursor, sync::Arc};
 
 use crate::dom::NodeId;
+use image::ImageDecoder;
 
 const MAX_DIMENSION: u32 = 4096;
 const MAX_DECODED_BYTES: u64 = 64 * 1024 * 1024;
@@ -32,7 +33,11 @@ impl DecodedImage {
         limits.max_image_height = Some(MAX_DIMENSION);
         limits.max_alloc = Some(MAX_DECODED_BYTES);
         reader.limits(limits);
-        let image = reader.decode()?.to_rgba8();
+        let mut decoder = reader.into_decoder()?;
+        let orientation = decoder.orientation()?;
+        let mut image = image::DynamicImage::from_decoder(decoder)?;
+        image.apply_orientation(orientation);
+        let image = image.to_rgba8();
         Ok(Self {
             width: image.width(),
             height: image.height(),
@@ -88,5 +93,22 @@ mod tests {
         assert_eq!(decoded.rgba(), &[255, 0, 0, 128, 255, 0, 0, 128]);
         assert!(DecodedImage::decode(b"not an image").is_err());
         assert!(DecodedImage::decode(&encode(MAX_DIMENSION + 1)).is_err());
+    }
+    #[test]
+    fn jpeg_exif_orientation_changes_natural_dimensions_before_layout() {
+        let source = image::DynamicImage::new_rgb8(3, 2);
+        let mut bytes = Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Jpeg)
+            .unwrap();
+        // Original minimal little-endian Exif IFD: orientation=6 (90° CW).
+        let exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
+        let mut encoded = vec![0xff, 0xd8, 0xff, 0xe1];
+        encoded.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        encoded.extend_from_slice(exif);
+        encoded.extend_from_slice(&bytes.get_ref()[2..]);
+        let image = DecodedImage::decode(&encoded).unwrap();
+        assert_eq!((image.width(), image.height()), (2, 3));
+        assert_eq!(image.rgba().len(), 24);
     }
 }

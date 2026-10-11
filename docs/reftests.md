@@ -1,4 +1,4 @@
-# Native headless reftests (milestones 8.13–8.14)
+# Native headless reftests (milestones 8.13–8.15)
 
 Run from the repository root:
 
@@ -79,6 +79,23 @@ Contracts additionally compare real TTB OpenType glyph IDs/advances/positions an
 prove that declared Japanese fallback is selected after Latin, with nonzero
 glyph ink. All added sources and OFL licenses are recorded in `PROVENANCE.txt`;
 no system fonts or network resources are required at test time.
+
+Milestone 8.15 adds **six** assertion/reference pairs (sixteen total):
+`display-contents`, `flow-root`, `intrinsic-sizing`, `aspect-ratio`, `object-fit`
+and `alignment-safe`. Their references use explicit rectangle dimensions and
+positions instead of the tested display/sizing/fitting/alignment values.
+The intrinsic fixture breaks real atomic inline boxes into separately specified
+reference rows; the object fixture compares actual decoded image/video-poster
+pixels against independently painted red/blue rectangles.
+`support/stripes.png` is original test artwork: two red and two blue RGBA pixels
+per row, two rows, no imported image or license dependency. Reproduce and check:
+
+```sh
+python3 tools/generate_replaced_fixture.py
+python3 tools/generate_replaced_fixture.py --check
+```
+
+Both scales remain exact, without scripts, fuzzy tolerances or a full WPT claim.
 
 `--resource-root` defaults to the current directory. Every document, reference,
 CSS import, image and non-data font URL must resolve to an existing regular file
@@ -174,7 +191,7 @@ RGBA, 256 MiB decoded evidence work, and 8,192 bytes per reference URL. PNGs
 are limited to 16 MiB encoded, 4096 per dimension and 64 MiB decoded allocation.
 
 CI runs the real CLI harness and uploads `target/reftests/` on failure.
-`cargo test --test reftests` also runs the eight committed tests at device scales
+`cargo test --test reftests` also runs the sixteen committed assertion pages at device scales
 1 and 2, CLI PNG byte-reproducibility without a display, actual root/panel/fixed
 pixel checks, metadata/readiness/resource/bounds failures, and an intentionally
 wrong reference. That wrong-reference test **must observe a nonzero CLI exit,

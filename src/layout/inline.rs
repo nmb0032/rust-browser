@@ -6,10 +6,7 @@ use crate::{
 
 use super::{
     BoxKind, InlineFragment, LayoutBox, LineBox, Rect, TextFragment,
-    tree::{
-        finite_rect, finite_used, resolve_edges, resolve_length, resolve_line_height,
-        resolve_margins,
-    },
+    tree::{finite_rect, finite_used, resolve_edges, resolve_line_height, resolve_margins},
 };
 
 #[path = "line_break.rs"]
@@ -298,36 +295,40 @@ fn collect(
             "image vertical decorations",
             diagnostics,
         );
-        let explicit_width = style.width.as_ref().map(|length| {
-            style.box_sizing.content_size(
-                resolve_length(
-                    length,
-                    style.font_size,
-                    width,
-                    layout.node_id,
-                    "width",
-                    diagnostics,
-                ),
+        let explicit_width = if mode.vertical() {
+            super::sizing::definite_height(
+                layout,
+                style.width.as_ref(),
+                Some(width),
                 horizontal,
+                diagnostics,
             )
-        });
-        let explicit_height = style
-            .height
-            .as_ref()
-            .filter(|length| !length.has_percentage() || reference_height.is_some())
-            .map(|length| {
-                style.box_sizing.content_size(
-                    resolve_length(
-                        length,
-                        style.font_size,
-                        reference_height.unwrap_or(0.0),
-                        layout.node_id,
-                        "height",
-                        diagnostics,
-                    ),
-                    vertical,
-                )
-            });
+        } else {
+            super::sizing::definite_size(
+                layout,
+                style.width.as_ref(),
+                Some(width),
+                horizontal,
+                diagnostics,
+            )
+        };
+        let explicit_height = if mode.vertical() {
+            super::sizing::definite_size(
+                layout,
+                style.height.as_ref(),
+                reference_height,
+                vertical,
+                diagnostics,
+            )
+        } else {
+            super::sizing::definite_height(
+                layout,
+                style.height.as_ref(),
+                reference_height,
+                vertical,
+                diagnostics,
+            )
+        };
         let mut size = image.size(
             &layout.style,
             if mode.vertical() {
@@ -342,6 +343,41 @@ fn collect(
             },
             metrics.above + metrics.below,
             font,
+        );
+        let (physical_width, physical_height, physical_horizontal, physical_vertical) =
+            if mode.vertical() {
+                (explicit_height, explicit_width, vertical, horizontal)
+            } else {
+                (explicit_width, explicit_height, horizontal, vertical)
+            };
+        if physical_height.is_none() {
+            size.1 =
+                super::sizing::ratio_height(layout, size.0, physical_horizontal, physical_vertical)
+                    .unwrap_or(size.1);
+        } else if physical_width.is_none() && physical_height.is_some() {
+            size.0 =
+                super::sizing::ratio_width(layout, size.1, physical_horizontal, physical_vertical)
+                    .unwrap_or(size.0);
+        }
+        size = super::sizing::constrain_replaced(
+            layout,
+            size,
+            if mode.vertical() {
+                (explicit_height.is_some(), explicit_width.is_some())
+            } else {
+                (explicit_width.is_some(), explicit_height.is_some())
+            },
+            if mode.vertical() {
+                (reference_height, Some(width))
+            } else {
+                (Some(width), reference_height)
+            },
+            if mode.vertical() {
+                (vertical, horizontal)
+            } else {
+                (horizontal, vertical)
+            },
+            diagnostics,
         );
         if mode.vertical() {
             std::mem::swap(&mut size.0, &mut size.1);
@@ -413,7 +449,7 @@ fn collect(
             decor,
             diagnostics,
         );
-        let height = super::sizing::definite_size(
+        let height = super::sizing::definite_height(
             layout,
             physical_style.height.as_ref(),
             physical_height,
@@ -423,8 +459,9 @@ fn collect(
         let intrinsic =
             super::positioning::intrinsic_content(layout, physical_width, font, diagnostics);
         let available = (physical_width - decor).max(0.0);
-        let used_width =
-            explicit_width.unwrap_or_else(|| available.max(intrinsic.0).min(intrinsic.1));
+        let used_width = explicit_width
+            .or_else(|| height.and_then(|h| super::sizing::ratio_width(layout, h, decor, vertical)))
+            .unwrap_or_else(|| available.max(intrinsic.0).min(intrinsic.1));
         let limits =
             super::sizing::bounds(layout, true, Some(physical_width), decor, 0.0, diagnostics);
         if physical_style.writing_mode.vertical() {
@@ -1358,6 +1395,17 @@ fn install(
     for child in &mut layout.children {
         child.flow_width = layout.flow_width;
         install(child, boxes, font, diagnostics);
+    }
+    if layout.style.display == crate::style::Display::InlineListItem {
+        let text = layout
+            .marker_text
+            .clone()
+            .unwrap_or_else(|| "\u{2022}".into());
+        super::block::assign_marker(layout, text, font, diagnostics);
+        if layout.style.writing_mode.vertical() {
+            diagnostics.push(Diagnostic { node_id: layout.node_id,
+                message: "inline list-item marker uses horizontal outside placement; native vertical list marker placement remains unsupported".into() });
+        }
     }
 }
 

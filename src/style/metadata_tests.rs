@@ -56,6 +56,9 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::BackgroundColor => format!("{:?}", style.background),
         P::BackgroundImage => format!("{:?}", style.background_image),
         P::Display => format!("{:?}", style.display),
+        P::AspectRatio => format!("{:?}", style.aspect_ratio),
+        P::ObjectFit => format!("{:?}", style.object_fit),
+        P::ObjectPosition => format!("{:?}", style.object_position),
         P::Position => format!("{:?}", style.position),
         P::Inset(side) => format!("{:?}", style.inset.get(side)),
         P::ZIndex => format!("{:?}", style.z_index),
@@ -229,18 +232,18 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 169, 589, 63]);
-    assert_eq!(longhands.len(), 122);
+    assert_eq!(counts, [0, 172, 586, 63]);
+    assert_eq!(longhands.len(), 125);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 120);
+    assert_eq!(all.len(), 123);
     longhands.remove(&Property::Direction);
     longhands.remove(&Property::UnicodeBidi);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **168 partial**, **589 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **171 partial**, **586 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**122 longhands**, **46 shorthands**"));
+    assert!(report.contains("**125 longhands**, **46 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -605,8 +608,8 @@ fn missing_unknown_and_unsupported_metadata_never_becomes_a_catch_all_parser() {
         "-webkit-text-stroke-color:red",
         "display:subgrid",
         "grid-template-columns:subgrid",
-        "width:min-content",
-        "height:fit-content",
+        "width:min-content max-content",
+        "height:fit-content(-1px)",
         "margin:auto nonsense",
         "container-type:scroll-state",
         "border-style:inset",

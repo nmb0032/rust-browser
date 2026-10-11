@@ -5,6 +5,15 @@ pub(crate) fn image_dimension(value: &str) -> Option<f32> {
     (value.is_finite() && value <= 1_000_000.0).then_some(value)
 }
 
+pub(crate) fn presentation_dimension(value: &str) -> Option<crate::css::values::Length> {
+    if let Some(percent) = value.trim().strip_suffix('%') {
+        let value = percent.trim().parse::<f32>().ok()?;
+        return (value.is_finite() && (0.0..=1_000_000.0).contains(&value))
+            .then_some(crate::css::values::Length::Percent(value));
+    }
+    image_dimension(value).map(crate::css::values::Length::Px)
+}
+
 pub(crate) fn nonnegative_integer_digits(value: &str) -> Option<&str> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let digits = value.strip_prefix('+').unwrap_or(value);

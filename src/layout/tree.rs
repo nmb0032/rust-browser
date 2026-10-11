@@ -94,6 +94,7 @@ pub struct LayoutBox {
     /// Geometry-only intrinsic oracle for an axis allocation adapter. Never
     /// retained on the document tree or used as a paintable substitute.
     pub(super) axis_measurement: Option<Rect>,
+    pub(super) intrinsic_sizes: Option<super::sizing::IntrinsicSizes>,
     pub(super) definite_height: Option<f32>,
     pub(super) definite_width: bool,
     pub(super) inline_line: Option<usize>,
@@ -216,7 +217,11 @@ impl LayoutBox {
         (self.orthogonal_inline
             || matches!(
                 self.style.display,
-                Display::InlineFlex | Display::InlineGrid | Display::InlineTable
+                Display::InlineBlock
+                    | Display::InlineFlowRootListItem
+                    | Display::InlineFlex
+                    | Display::InlineGrid
+                    | Display::InlineTable
             ))
             && !self.style.position.out_of_flow()
     }
@@ -233,6 +238,7 @@ impl LayoutBox {
             || self.atomic_inline()
             || self.style.position.out_of_flow()
             || self.style.display.is_item_container()
+            || self.style.display.is_flow_root()
             || self.is_layout_item()
             || self.style.display.is_table()
             || self.style.display == Display::TableCell
@@ -304,12 +310,55 @@ impl LayoutBox {
                 })
             })
     }
+    pub(super) fn last_local_baseline(&self) -> Option<f32> {
+        self.line_boxes
+            .last()
+            .map(|line| line.baseline)
+            .or_else(|| {
+                self.children.iter().rev().find_map(|child| {
+                    child.last_local_baseline().map(|baseline| {
+                        baseline
+                            + if child.local_root() {
+                                child.rect.y
+                            } else {
+                                0.0
+                            }
+                    })
+                })
+            })
+    }
     pub(crate) fn list_marker(&self) -> Option<&ListMarker> {
         self.list_marker.as_ref()
     }
 
     pub(crate) fn decoded_image(&self) -> Option<&Arc<DecodedImage>> {
         self.image.as_ref()?.data.as_ref()
+    }
+    pub(crate) fn object_rect(&self) -> Rect {
+        let content = self.content_rect;
+        let Some(image) = self.decoded_image() else {
+            return content;
+        };
+        let natural = (image.width() as f32, image.height() as f32);
+        let contain = (content.width / natural.0).min(content.height / natural.1);
+        let scale = match self.style.object_fit {
+            style::ObjectFit::Fill => return content,
+            style::ObjectFit::Contain => contain,
+            style::ObjectFit::Cover => (content.width / natural.0).max(content.height / natural.1),
+            style::ObjectFit::None => 1.0,
+            style::ObjectFit::ScaleDown => contain.min(1.0),
+        };
+        let (width, height) = (natural.0 * scale, natural.1 * scale);
+        let offset = |axis: &style::ObjectAxis, free: f32| {
+            let value = axis.offset.resolve(self.style.font_size, free);
+            if axis.from_end { free - value } else { value }
+        };
+        Rect {
+            x: content.x + offset(&self.style.object_position.x, content.width - width),
+            y: content.y + offset(&self.style.object_position.y, content.height - height),
+            width,
+            height,
+        }
     }
     pub(crate) fn is_replaced_image(&self) -> bool {
         self.image.is_some()
@@ -556,6 +605,12 @@ impl LayoutTree {
         .max(0.0);
         let content_x = PAGE_PADDING.min(viewport_width);
         let content_width = (viewport_width - 2.0 * PAGE_PADDING).max(0.0);
+        super::sizing::prepare_intrinsic(
+            &mut self.root,
+            content_width,
+            font,
+            &mut self.diagnostics,
+        );
         self.root.definite_height = Some(viewport_height.max(0.0));
         let content_height = layout_children(
             &mut self.root,
@@ -916,6 +971,85 @@ fn report_used_failure(
     diagnostics.push(diagnostic);
 }
 
+fn build_boxes(
+    document: &Document,
+    node_id: NodeId,
+    styles: &ComputedStyles,
+    images: &ImageMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    identity: &mut Construction,
+) -> Vec<LayoutBox> {
+    if styles
+        .get(node_id)
+        .is_some_and(|s| s.display == Display::Contents)
+    {
+        let Some(node) = document.node(node_id) else {
+            return Vec::new();
+        };
+        let Some(element) = node.as_element() else {
+            return Vec::new();
+        };
+        // Display's unusual-element rule: contents on a replaced element is none.
+        if matches!(
+            element.tag_name(),
+            "img"
+                | "video"
+                | "canvas"
+                | "iframe"
+                | "input"
+                | "textarea"
+                | "select"
+                | "object"
+                | "embed"
+        ) {
+            return Vec::new();
+        }
+        let mut result = Vec::new();
+        for pseudo in [PseudoElement::Before] {
+            if let Some(b) = generated_box(node_id, element, styles, pseudo, diagnostics, identity)
+            {
+                result.extend(flatten_generated_contents(b));
+            }
+        }
+        for &id in node.children() {
+            result.extend(build_boxes(
+                document,
+                id,
+                styles,
+                images,
+                diagnostics,
+                identity,
+            ));
+        }
+        if let Some(b) = generated_box(
+            node_id,
+            element,
+            styles,
+            PseudoElement::After,
+            diagnostics,
+            identity,
+        ) {
+            result.extend(flatten_generated_contents(b));
+        }
+        result
+    } else {
+        build_box(document, node_id, styles, images, diagnostics, identity)
+            .into_iter()
+            .collect()
+    }
+}
+
+fn flatten_generated_contents(mut b: LayoutBox) -> Vec<LayoutBox> {
+    if b.style.display != Display::Contents {
+        return vec![b];
+    }
+    for child in &mut b.children {
+        child.parent_box = b.parent_box;
+        child.position_parent = b.position_parent;
+    }
+    b.children
+}
+
 fn build_box(
     document: &Document,
     node_id: NodeId,
@@ -947,6 +1081,8 @@ fn build_box(
         NodeKind::Element(element) => {
             let kind = match style.display {
                 Display::Block
+                | Display::FlowRoot
+                | Display::FlowRootListItem
                 | Display::ListItem
                 | Display::Flex
                 | Display::Grid
@@ -960,10 +1096,13 @@ fn build_box(
                 | Display::TableColumn
                 | Display::TableColumnGroup => BoxKind::Block,
                 Display::Inline
+                | Display::InlineBlock
+                | Display::InlineListItem
+                | Display::InlineFlowRootListItem
                 | Display::InlineFlex
                 | Display::InlineGrid
                 | Display::InlineTable => BoxKind::Inline,
-                Display::None => return None,
+                Display::None | Display::Contents => return None,
             };
             (format!("<{}>", element.tag_name()), kind, None)
         }
@@ -980,11 +1119,28 @@ fn build_box(
     if style.position != style::Position::Static {
         identity.positioned = Some(box_id);
     }
-    let mut children: Vec<_> = node
-        .children()
-        .iter()
-        .filter_map(|id| build_box(document, *id, styles, images, diagnostics, identity))
-        .collect();
+    let mut children: Vec<_> = if node
+        .as_element()
+        .is_some_and(|e| matches!(e.tag_name(), "img" | "video" | "canvas" | "iframe"))
+    {
+        Vec::new()
+    } else {
+        node.children()
+            .iter()
+            .flat_map(|id| {
+                if styles
+                    .get(*id)
+                    .is_some_and(|s| s.display == Display::Contents)
+                {
+                    build_boxes(document, *id, styles, images, diagnostics, identity)
+                } else {
+                    build_box(document, *id, styles, images, diagnostics, identity)
+                        .into_iter()
+                        .collect()
+                }
+            })
+            .collect()
+    };
     let layout_box = finish_box(
         document,
         node_id,
@@ -1054,7 +1210,7 @@ fn finish_box(
                 diagnostics,
                 identity,
             ) {
-                children.insert(0, before);
+                children.splice(0..0, flatten_generated_contents(before));
             }
             if let Some(after) = generated_box(
                 node_id,
@@ -1064,7 +1220,7 @@ fn finish_box(
                 diagnostics,
                 identity,
             ) {
-                children.push(after);
+                children.extend(flatten_generated_contents(after));
             }
         }
         if let Some(marker) = styles.pseudo(node_id, PseudoElement::Marker) {
@@ -1083,7 +1239,7 @@ fn finish_box(
             };
         }
     }
-    if style.display == Display::ListItem
+    if style.display.is_list_item()
         && marker_text.is_none()
         && let Some(parent) = node.parent().and_then(|id| document.node(id))
         && parent
@@ -1094,11 +1250,7 @@ fn finish_box(
             .children()
             .iter()
             .take_while(|&&id| id != node_id)
-            .filter(|&&id| {
-                styles
-                    .get(id)
-                    .is_some_and(|s| s.display == Display::ListItem)
-            })
+            .filter(|&&id| styles.get(id).is_some_and(|s| s.display.is_list_item()))
             .count();
         marker_text = Some(format!("{ordinal}."));
     }
@@ -1109,6 +1261,7 @@ fn finish_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,
@@ -1128,7 +1281,7 @@ fn finish_box(
         margin: Edges::default(),
         image: node
             .as_element()
-            .filter(|element| element.tag_name().eq_ignore_ascii_case("img"))
+            .filter(|element| matches!(element.tag_name(), "img" | "video" | "canvas" | "iframe"))
             .map(|element| ImageContent::new(element, images.get(&node_id).cloned())),
         children: std::mem::take(children),
         text_fragments: Vec::new(),
@@ -1203,6 +1356,7 @@ fn finish_box(
             coordinate_space: CoordinateSpace::Document,
             flow_width: 0.0,
             axis_measurement: None,
+            intrinsic_sizes: None,
             definite_height: None,
             definite_width: false,
             inline_line: None,
@@ -1330,6 +1484,7 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,
@@ -1443,6 +1598,7 @@ fn generated_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,
@@ -1485,6 +1641,7 @@ fn generated_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,
@@ -1496,7 +1653,14 @@ fn generated_box(
         tag_name: format!("::{}", pseudo.name()),
         kind: if matches!(
             style.display,
-            Display::Block | Display::ListItem | Display::Flex | Display::Grid
+            Display::Block
+                | Display::FlowRoot
+                | Display::FlowRootListItem
+                | Display::ListItem
+                | Display::Flex
+                | Display::Grid
+                | Display::Table
+                | Display::TableCaption
         ) {
             BoxKind::Block
         } else {

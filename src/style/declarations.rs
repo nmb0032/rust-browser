@@ -29,6 +29,9 @@ pub(super) enum Property {
     BackgroundColor,
     BackgroundImage,
     Display,
+    AspectRatio,
+    ObjectFit,
+    ObjectPosition,
     Float,
     Clear,
     TableLayout,
@@ -267,6 +270,9 @@ pub(super) enum Value {
     BackgroundImage(BackgroundImage),
     BorderStyle(BorderStyle),
     Display(Display),
+    AspectRatio(super::AspectRatio),
+    ObjectFit(super::ObjectFit),
+    ObjectPosition(super::ObjectPosition),
     Float(Float),
     Clear(Clear),
     TableLayout(TableLayout),
@@ -424,7 +430,13 @@ pub(super) fn parse_tokens_with_context(
             for split in (1..=tokens.len()).rev() {
                 if let Some(first) = value(properties[0], &tokens[..split]) {
                     let second = if split == tokens.len() {
-                        value(properties[1], &tokens[..split])
+                        if properties[1] == Property::JustifyContent
+                            && matches!(&first, Value::Alignment(a) if matches!(a.keyword, AlignKeyword::Baseline | AlignKeyword::LastBaseline))
+                        {
+                            Some(Value::Alignment(Alignment::new(AlignKeyword::Start)))
+                        } else {
+                            value(properties[1], &tokens[..split])
+                        }
                     } else {
                         value(properties[1], &tokens[split..])
                     };
@@ -654,6 +666,13 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         return value(property.physical(&ComputedStyle::default()), tokens);
     }
     use Property as P;
+    match property {
+        P::Display => return super::box_values::display(tokens).map(Value::Display),
+        P::AspectRatio => return super::box_values::ratio(tokens).map(Value::AspectRatio),
+        P::ObjectFit => return super::box_values::fit(tokens).map(Value::ObjectFit),
+        P::ObjectPosition => return super::box_values::position(tokens).map(Value::ObjectPosition),
+        _ => {}
+    }
     if generated_properties::simple(property) {
         return generated_properties::simple_value(property, tokens);
     }
@@ -718,6 +737,9 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::BackgroundImage
         | P::BorderStyle(_)
         | P::Display
+        | P::AspectRatio
+        | P::ObjectFit
+        | P::ObjectPosition
         | P::Float
         | P::Clear
         | P::TableLayout
@@ -814,7 +836,35 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::Inset(_)
         | P::Padding(_)
         | P::BorderWidth(_) => {
-            let length = if matches!(property, P::BorderWidth(_)) {
+            let length = if matches!(
+                property,
+                P::Width
+                    | P::Height
+                    | P::MinWidth
+                    | P::MinHeight
+                    | P::MaxWidth
+                    | P::MaxHeight
+                    | P::FlexBasis
+            ) {
+                match lower.as_str() {
+                    "min-content" => Length::MinContent,
+                    "max-content" => Length::MaxContent,
+                    "fit-content" => Length::FitContent(None),
+                    _ => {
+                        if let Component::Function(name, args) = token
+                            && name.eq_ignore_ascii_case("fit-content")
+                        {
+                            let limit = Length::from_tokens(args)?;
+                            if !limit.is_nonnegative() {
+                                return None;
+                            }
+                            Length::FitContent(Some(Box::new(limit)))
+                        } else {
+                            token.length()?
+                        }
+                    }
+                }
+            } else if matches!(property, P::BorderWidth(_)) {
                 match lower.as_str() {
                     "thin" => Length::Px(1.0),
                     "medium" => Length::Px(3.0),
@@ -879,11 +929,15 @@ fn alignment(property: Property, tokens: &[Component]) -> Option<Alignment> {
             (modifier.is_ident("safe"), token)
         }
         [first, baseline]
-            if first.is_ident("first")
+            if (first.is_ident("first") || first.is_ident("last"))
                 && baseline.is_ident("baseline")
                 && property != Property::JustifyContent =>
         {
-            return Some(Alignment::new(A::Baseline));
+            return Some(Alignment::new(if first.is_ident("last") {
+                A::LastBaseline
+            } else {
+                A::Baseline
+            }));
         }
         _ => return None,
     };
@@ -919,6 +973,22 @@ fn alignment(property: Property, tokens: &[Component]) -> Option<Alignment> {
             A::SelfEnd
         }
         "center" => A::Center,
+        "left"
+            if matches!(
+                property,
+                Property::JustifyContent | Property::JustifyItems | Property::JustifySelf
+            ) =>
+        {
+            A::Left
+        }
+        "right"
+            if matches!(
+                property,
+                Property::JustifyContent | Property::JustifyItems | Property::JustifySelf
+            ) =>
+        {
+            A::Right
+        }
         "baseline" if property != Property::JustifyContent => A::Baseline,
         "space-between"
             if matches!(property, Property::JustifyContent | Property::AlignContent) =>
@@ -936,7 +1006,15 @@ fn alignment(property: Property, tokens: &[Component]) -> Option<Alignment> {
     if tokens.len() == 2
         && !matches!(
             keyword,
-            A::FlexStart | A::FlexEnd | A::Start | A::End | A::SelfStart | A::SelfEnd | A::Center
+            A::FlexStart
+                | A::FlexEnd
+                | A::Start
+                | A::End
+                | A::SelfStart
+                | A::SelfEnd
+                | A::Center
+                | A::Left
+                | A::Right
         )
     {
         return None;

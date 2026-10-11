@@ -83,6 +83,8 @@ pub(super) fn load_resources(
             element.attribute("href")
         } else if element.tag_name().eq_ignore_ascii_case("img") {
             element.attribute("src")
+        } else if element.tag_name().eq_ignore_ascii_case("video") {
+            element.attribute("poster")
         } else {
             continue;
         };

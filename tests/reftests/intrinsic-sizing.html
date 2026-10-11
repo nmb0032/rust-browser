@@ -1,0 +1,10 @@
+<!doctype html>
+<link rel="help" href="https://www.w3.org/TR/css-sizing-3/#intrinsic-sizes">
+<link rel="match" href="references/intrinsic-sizing-ref.html">
+<style>
+body{margin:0}main{width:100px;font-size:0;line-height:0}
+section{background:yellow}
+.min{width:min-content}.max{width:max-content}.fit{width:fit-content(50px)}
+i,b{display:inline flow-root;height:20px}i{width:40px;background:blue}b{width:20px;background:green}
+</style>
+<main><section class=min><i></i> <b></b></section><section class=max><i></i> <b></b></section><section class=fit><i></i> <b></b></section></main>

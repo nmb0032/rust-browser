@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    css::values::{Edges, Length, LengthOrAuto},
+    css::values::{Edges, LengthOrAuto},
     style::{Diagnostic, Direction, Position},
 };
 
@@ -477,24 +477,22 @@ fn position_box(
         diagnostics,
     );
     let margins = resolve_margins(&b.style, cb.rect.width, b.node_id, diagnostics);
-    let size =
-        |length: &Option<Length>, reference, decorations, diagnostics: &mut Vec<Diagnostic>| {
-            length.as_ref().map(|length| {
-                b.style.box_sizing.content_size(
-                    resolve_length(
-                        length,
-                        b.style.font_size,
-                        reference,
-                        b.node_id,
-                        "positioned size",
-                        diagnostics,
-                    ),
-                    decorations,
-                )
-            })
-        };
-    let width = size(&b.style.width, cb.rect.width, horizontal, diagnostics);
-    let height = size(&b.style.height, cb.rect.height, vertical, diagnostics);
+    let width = super::sizing::definite_size(
+        b,
+        b.style.width.as_ref(),
+        Some(cb.rect.width),
+        horizontal,
+        diagnostics,
+    );
+    let height = super::sizing::definite_height(
+        b,
+        b.style.height.as_ref(),
+        Some(cb.rect.height),
+        vertical,
+        diagnostics,
+    );
+    let width = width
+        .or_else(|| height.and_then(|h| super::sizing::ratio_width(b, h, horizontal, vertical)));
     let mut x = Axis {
         containing: cb.rect.width as f64,
         start: inset(b, &b.style.inset.left, cb.rect.width, diagnostics).map(f64::from),
@@ -521,7 +519,22 @@ fn position_box(
     };
     let intrinsic = if let Some(image) = &b.image {
         let metrics = super::inline::font_metrics(font, &b.style, b.node_id, diagnostics);
-        let natural = image.size(&b.style, width, height, metrics.above + metrics.below, font);
+        let mut natural = image.size(&b.style, width, height, metrics.above + metrics.below, font);
+        if height.is_none() {
+            natural.1 = super::sizing::ratio_height(b, natural.0, horizontal, vertical)
+                .unwrap_or(natural.1);
+        } else if width.is_none() {
+            natural.0 =
+                super::sizing::ratio_width(b, natural.1, horizontal, vertical).unwrap_or(natural.0);
+        }
+        let natural = super::sizing::constrain_replaced(
+            b,
+            natural,
+            (width.is_some(), height.is_some()),
+            (Some(cb.rect.width), Some(cb.rect.height)),
+            (horizontal, vertical),
+            diagnostics,
+        );
         x.size = Some(natural.0 as f64);
         y.size = Some(natural.1 as f64);
         (natural.0, natural.0)
@@ -538,7 +551,8 @@ fn position_box(
     let width = width.clamp(bounds.0, bounds.1);
     let height = y
         .stretched()
-        .map(|height| finite_used(height, b.node_id, "positioned height equation", diagnostics));
+        .map(|height| finite_used(height, b.node_id, "positioned height equation", diagnostics))
+        .or_else(|| super::sizing::ratio_height(b, width, horizontal, vertical));
     let anchor = b.flex_static;
     b.reset();
     block::layout_sized(
@@ -626,29 +640,18 @@ pub(super) fn intrinsic_content(
         );
         let vertical =
             padding.top + padding.bottom + b.style.border_width.top + b.style.border_width.bottom;
-        let height = b
-            .style
-            .height
-            .as_ref()
-            .filter(|length| !length.has_percentage())
-            .map(|length| {
-                b.style.box_sizing.content_size(
-                    resolve_length(
-                        length,
-                        b.style.font_size,
-                        0.0,
-                        b.node_id,
-                        "intrinsic image height",
-                        diagnostics,
-                    ),
-                    vertical,
-                )
-            });
+        let horizontal =
+            padding.left + padding.right + b.style.border_width.left + b.style.border_width.right;
+        let height =
+            super::sizing::definite_height(b, b.style.height.as_ref(), None, vertical, diagnostics);
         let height_limits = super::sizing::bounds(b, false, None, vertical, 0.0, diagnostics);
         let height = height.map(|h| h.clamp(height_limits.0, height_limits.1));
         let width = image
             .size(&b.style, None, height, metrics.above + metrics.below, font)
             .0;
+        let width = height
+            .and_then(|h| super::sizing::ratio_width(b, h, horizontal, vertical))
+            .unwrap_or(width);
         return (width, width);
     }
     let mut result: (f32, f32) = (0.0, 0.0);
@@ -678,17 +681,15 @@ pub(super) fn intrinsic_content(
             if let Some(width) = &child.style.width
                 && !width.has_percentage()
             {
-                let width = child.style.box_sizing.content_size(
-                    resolve_length(
-                        width,
-                        child.style.font_size,
-                        reference,
-                        child.node_id,
-                        "intrinsic width",
-                        diagnostics,
-                    ),
+                let width = super::sizing::definite_size(
+                    child,
+                    Some(width),
+                    Some(reference),
                     decorations,
-                ) + decorations
+                    diagnostics,
+                )
+                .unwrap_or(0.0)
+                    + decorations
                     + margin;
                 (width, width)
             } else {

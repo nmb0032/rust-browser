@@ -1,0 +1,13 @@
+<!doctype html>
+<link rel="help" href="https://www.w3.org/TR/css-display-3/#box-generation">
+<link rel="match" href="references/display-contents-ref.html">
+<style>
+body { margin:0 }
+main { display:flex; width:120px }
+section { display:contents; background:red; padding:40px; border:20px solid red; position:relative; overflow:hidden }
+section::before { content:""; display:block; width:20px; height:20px; background:blue }
+section::after { content:""; display:block; width:20px; height:20px; background:blue }
+div { width:40px; height:20px; background:green }
+.none { display:none }
+</style>
+<main><section><div></div><div></div></section><div class="none"></div></main>

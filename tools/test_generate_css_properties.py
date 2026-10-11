@@ -16,8 +16,11 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 122)
-        self.assertEqual(len(supported), 169)
+        self.assertEqual(len(longhands), 125)
+        self.assertEqual(len(supported), 172)
+        for name in ("aspect-ratio", "object-fit", "object-position"):
+            self.assertIn(name, supported)
+        self.assertNotIn("display", self.engine["simple_values"])
         self.assertEqual(supported["flex"]["targets"], ["flex-grow", "flex-shrink", "flex-basis"])
         self.assertEqual(supported["flex-flow"]["targets"], ["flex-direction", "flex-wrap"])
         self.assertEqual(supported["gap"]["targets"], ["row-gap", "column-gap"])
@@ -86,7 +89,7 @@ class GenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate engine Rust property"):
             generator.engine_registry(self.data, engine)
         engine = copy.deepcopy(self.engine)
-        engine["simple_values"]["display"]["keywords"]["invented-display"] = "Value::Display(Display::Block)"
+        engine["simple_values"]["overflow"]["keywords"]["invented-overflow"] = "Value::Overflow(Overflow::Visible)"
         with self.assertRaisesRegex(ValueError, "keywords missing from spec"):
             generator.engine_registry(self.data, engine)
         engine = copy.deepcopy(self.engine)

@@ -46,6 +46,8 @@ pub use tree::{
 #[cfg(test)]
 mod collapse_tests;
 #[cfg(test)]
+mod display_sizing_tests;
+#[cfg(test)]
 mod flex_tests;
 #[cfg(test)]
 mod floats_tables_tests;

@@ -102,7 +102,7 @@ fn flex_invalid_shorthands_and_property_values_are_rejected_atomically() {
         "align-items:space-between",
         "justify-content:baseline",
         "align-self:safe stretch",
-        "align-content:last baseline",
+        "align-content:last center",
         "display:masonry",
     ] {
         let declarations = crate::css::parse_declarations(source).unwrap();

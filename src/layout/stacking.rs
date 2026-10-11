@@ -191,6 +191,10 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
                         ));
                     }
                 }
+                if b.list_marker.is_some() {
+                    let line = b.inline_fragments.first().map_or(0, |f| f.line_index);
+                    foreground.push((*flow, line, order, 1, *b, PaintPhase::Content));
+                }
                 for (index, fragment) in b.text_fragments.iter().enumerate() {
                     foreground.push((
                         *flow,
@@ -222,7 +226,11 @@ pub(crate) fn paint_order(tree: &LayoutTree) -> Vec<(&LayoutBox, PaintPhase)> {
         }
         foreground.sort_by_key(|(flow, line, order, phase, _, _)| (*flow, *line, *order, *phase));
         for (_, _, _, _, b, phase) in foreground {
-            if b.atomic_inline() && b.style.position == Position::Static && !b.is_layout_item() {
+            if b.box_id != id
+                && b.atomic_inline()
+                && b.style.position == Position::Static
+                && !b.is_layout_item()
+            {
                 paint(b.box_id, root_element, groups, list);
             } else {
                 list.push((b, phase));

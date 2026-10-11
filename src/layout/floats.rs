@@ -182,7 +182,7 @@ pub(super) fn layout_float(
     let used = explicit.unwrap_or_else(|| available.max(intrinsic.0).min(intrinsic.1));
     let bounds = super::sizing::bounds(b, true, Some(width), decor, 0.0, diagnostics);
     let height =
-        super::sizing::definite_size(b, b.style.height.as_ref(), height, vertical, diagnostics);
+        super::sizing::definite_height(b, b.style.height.as_ref(), height, vertical, diagnostics);
     super::block::layout_sized(
         b,
         width,

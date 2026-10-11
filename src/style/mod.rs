@@ -26,6 +26,7 @@
 //! sheets on each viewport change; [`crate::engine::Frame`] retains that input
 //! separately to avoid accumulating resolution diagnostics during resize.
 
+mod box_values;
 mod cascade;
 mod compat;
 mod computed;
@@ -58,9 +59,10 @@ pub use cascade::{
     resolve_with_user_stylesheets_and_environment,
 };
 pub use computed::{
-    AlignKeyword, Alignment, BaselineShift, BaselineSource, BorderCollapse, BoxSizing, CaptionSide,
-    Clear, ComputedStyle, ComputedStyles, Content, ContentItem, Direction, Display, EmptyCells,
-    FlexBasis, FlexDirection, FlexWrap, Float, Overflow, Position, TableLayout, TextAlign,
+    AlignKeyword, Alignment, AspectRatio, BaselineShift, BaselineSource, BorderCollapse, BoxSizing,
+    CaptionSide, Clear, ComputedStyle, ComputedStyles, Content, ContentItem, Direction, Display,
+    DisplayInside, DisplayOutside, EmptyCells, FlexBasis, FlexDirection, FlexWrap, Float,
+    ObjectAxis, ObjectFit, ObjectPosition, Overflow, Position, TableLayout, TextAlign,
     TextAlignLast, TextOrientation, TextWrapMode, UnicodeBidi, VerticalAlign, WhiteSpaceCollapse,
     WritingMode, ZIndex,
 };

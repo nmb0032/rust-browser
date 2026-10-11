@@ -688,12 +688,12 @@ fn resolve_internal_fonts<const MODE: u8>(
                 for (attribute, property) in
                     [("width", Property::Width), ("height", Property::Height)]
                 {
-                    if !element.tag_name().eq_ignore_ascii_case("img") {
+                    if !matches!(element.tag_name(), "img" | "video" | "iframe") {
                         break;
                     }
                     let Some(dimension) = element
                         .attribute(attribute)
-                        .and_then(crate::html::attributes::image_dimension)
+                        .and_then(crate::html::attributes::presentation_dimension)
                     else {
                         continue;
                     };
@@ -701,7 +701,7 @@ fn resolve_internal_fonts<const MODE: u8>(
                         &mut winners,
                         &StyledDeclaration {
                             property: DeclarationProperty::Longhand(property),
-                            value: Value::Length(Length::Px(dimension)),
+                            value: Value::Length(dimension),
                             important: false,
                             order: 0,
                         },
@@ -805,6 +805,21 @@ fn resolve_internal_fonts<const MODE: u8>(
                     },
                 );
                 let mut result = result;
+                if parent.style.display == Display::Contents && !result.style.position.out_of_flow()
+                {
+                    let mut ancestor = node.parent();
+                    while let Some(id) = ancestor {
+                        if let Some(computed) = nodes.get(&id)
+                            && computed.style.display != Display::Contents
+                        {
+                            if computed.style.display.is_item_container() {
+                                result.style.display = result.style.display.blockified();
+                            }
+                            break;
+                        }
+                        ancestor = document.node(id).and_then(|n| n.parent());
+                    }
+                }
                 if let Some(language) = element.attribute("lang").filter(|s| s.len() <= 64) {
                     result.style.font_language = Some(language.to_owned());
                 }
@@ -2249,11 +2264,10 @@ fn compute_with_context(
     };
     style.overflow_x = x.coupled(y);
     style.overflow_y = y.coupled(x);
-    style.positioned_inline = style.position.out_of_flow()
-        && matches!(
-            style.display,
-            Display::Inline | Display::InlineFlex | Display::InlineGrid | Display::InlineTable
-        );
+    style.positioned_inline = style.position.out_of_flow() && style.display.inline_outer();
+    if is_root && style.display == Display::Contents {
+        style.display = Display::Block;
+    }
     if style.positioned_inline {
         style.display = style.display.blockified();
     }
@@ -2313,6 +2327,11 @@ fn absolutize(
         )),
         Value::GridTracks(values) => {
             super::grid::computed_tracks(values, context).map(Value::GridTracks)
+        }
+        Value::ObjectPosition(mut position) => {
+            position.x.offset = position.x.offset.computed(context)?.0;
+            position.y.offset = position.y.offset.computed(context)?.0;
+            Some(Value::ObjectPosition(position))
         }
         Value::Length(length) => {
             let mut computed = length.computed(context)?.0;
@@ -2409,6 +2428,9 @@ fn computed_value(
         P::BackgroundColor => Value::Color(parent.colors.background.clone()),
         P::BackgroundImage => Value::BackgroundImage(style.background_image),
         P::Display => Value::Display(style.display),
+        P::AspectRatio => Value::AspectRatio(style.aspect_ratio),
+        P::ObjectFit => Value::ObjectFit(style.object_fit),
+        P::ObjectPosition => Value::ObjectPosition(style.object_position.clone()),
         P::Float => Value::Float(style.float),
         P::Clear => Value::Clear(style.clear),
         P::TableLayout => Value::TableLayout(style.table_layout),
@@ -2552,6 +2574,9 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         }
         (P::BackgroundImage, Value::BackgroundImage(image)) => style.background_image = image,
         (P::Display, Value::Display(display)) => style.display = display,
+        (P::AspectRatio, Value::AspectRatio(v)) => style.aspect_ratio = v,
+        (P::ObjectFit, Value::ObjectFit(v)) => style.object_fit = v,
+        (P::ObjectPosition, Value::ObjectPosition(v)) => style.object_position = v,
         (P::Float, Value::Float(v)) => style.float = v,
         (P::Clear, Value::Clear(v)) => style.clear = v,
         (P::TableLayout, Value::TableLayout(v)) => style.table_layout = v,

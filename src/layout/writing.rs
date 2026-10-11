@@ -2,7 +2,7 @@
 //! fragments are finalized here; orthogonal/block descendants lay out natively.
 use super::{
     BoxKind, LayoutBox, LineBox, Rect,
-    tree::{finite_rect, finite_used, resolve_edges, resolve_length, resolve_margins},
+    tree::{finite_rect, finite_used, resolve_edges, resolve_margins},
 };
 use crate::{
     css::values::Edges,
@@ -126,6 +126,19 @@ pub(super) fn inline_style(style: &ComputedStyle) -> ComputedStyle {
         std::mem::swap(&mut s.width, &mut s.height);
         std::mem::swap(&mut s.min_width, &mut s.min_height);
         std::mem::swap(&mut s.max_width, &mut s.max_height);
+        s.aspect_ratio.ratio = s.aspect_ratio.ratio.map(|r| 1.0 / r);
+        for align in [
+            &mut s.justify_content,
+            &mut s.justify_items,
+            &mut s.justify_self,
+        ] {
+            if matches!(
+                align.keyword,
+                crate::style::AlignKeyword::Left | crate::style::AlignKeyword::Right
+            ) {
+                align.keyword = crate::style::AlignKeyword::Start;
+            }
+        }
     }
     s
 }
@@ -168,12 +181,14 @@ fn measure_native(
         );
     } else {
         let intrinsic = super::positioning::intrinsic_content(child, block, font, diagnostics);
-        let width = child
-            .style
-            .width
-            .as_ref()
-            .map(|l| l.resolve(child.style.font_size, block))
-            .unwrap_or(block.max(intrinsic.0).min(intrinsic.1));
+        let width = super::sizing::definite_size(
+            child,
+            child.style.width.as_ref(),
+            Some(block),
+            0.0,
+            diagnostics,
+        )
+        .unwrap_or(block.max(intrinsic.0).min(intrinsic.1));
         super::block::layout_sized_in(
             child,
             block,
@@ -200,6 +215,9 @@ fn allocate(
 ) -> (f32, Vec<(usize, Rect)>) {
     let mut oracle = b.clone();
     *oracle.style = inline_style(&b.style);
+    oracle.intrinsic_sizes = b
+        .intrinsic_sizes
+        .map(super::sizing::IntrinsicSizes::swapped);
     oracle.style.writing_mode = WritingMode::HorizontalTb;
     oracle.definite_height = block;
     oracle.definite_width = true;
@@ -208,6 +226,9 @@ fn allocate(
         if child.style.position.out_of_flow() {
             proxy.children.clear();
             *proxy.style = inline_style(&child.style);
+            proxy.intrinsic_sizes = child
+                .intrinsic_sizes
+                .map(super::sizing::IntrinsicSizes::swapped);
             proxy.style.writing_mode = WritingMode::HorizontalTb;
             continue;
         }
@@ -235,11 +256,15 @@ fn allocate(
         };
         *proxy.style = inline_style(&child.style);
         // Projection applies to physical declarations, not to glyph shaping:
+        proxy.intrinsic_sizes = child
+            .intrinsic_sizes
+            .map(super::sizing::IntrinsicSizes::swapped);
         // these disposable boxes have no text, images or descendants.
         if !child.style.writing_mode.vertical() {
             std::mem::swap(&mut proxy.style.width, &mut proxy.style.height);
             std::mem::swap(&mut proxy.style.min_width, &mut proxy.style.min_height);
             std::mem::swap(&mut proxy.style.max_width, &mut proxy.style.max_height);
+            proxy.style.aspect_ratio.ratio = proxy.style.aspect_ratio.ratio.map(|r| 1.0 / r);
             let axes = FlowAxes {
                 mode: b.style.writing_mode,
                 origin: (0.0, 0.0),
@@ -377,6 +402,10 @@ fn table_oracle(
     std::mem::swap(&mut proxy.style.width, &mut proxy.style.height);
     std::mem::swap(&mut proxy.style.min_width, &mut proxy.style.min_height);
     std::mem::swap(&mut proxy.style.max_width, &mut proxy.style.max_height);
+    proxy.intrinsic_sizes = real
+        .intrinsic_sizes
+        .map(super::sizing::IntrinsicSizes::swapped);
+    proxy.style.aspect_ratio.ratio = proxy.style.aspect_ratio.ratio.map(|r| 1.0 / r);
     std::mem::swap(
         &mut proxy.style.border_spacing.0,
         &mut proxy.style.border_spacing.1,
@@ -582,23 +611,30 @@ pub(super) fn layout(
     );
     let height = forced_height
         .or_else(|| {
-            style
-                .height
-                .as_ref()
-                .filter(|l| !l.has_percentage() || containing_height.is_some())
-                .map(|l| {
-                    style.box_sizing.content_size(
-                        resolve_length(
-                            l,
-                            style.font_size,
-                            containing_height.unwrap_or(0.0),
-                            b.node_id,
-                            "height",
+            super::sizing::definite_height(
+                b,
+                style.height.as_ref(),
+                containing_height,
+                vertical,
+                diagnostics,
+            )
+        })
+        .or_else(|| {
+            if style.height.is_none() {
+                forced_width
+                    .or_else(|| {
+                        super::sizing::definite_size(
+                            b,
+                            style.width.as_ref(),
+                            Some(available_width),
+                            horizontal,
                             diagnostics,
-                        ),
-                        vertical,
-                    )
-                })
+                        )
+                    })
+                    .and_then(|w| super::sizing::ratio_height(b, w, horizontal, vertical))
+            } else {
+                None
+            }
         })
         .unwrap_or(
             containing_height.unwrap_or(crate::css::media::DEFAULT_VIEWPORT_HEIGHT - 48.0)
@@ -607,24 +643,42 @@ pub(super) fn layout(
                 - margin.bottom,
         )
         .max(0.0);
-    let height_bounds =
-        super::sizing::bounds(b, false, containing_height, vertical, 0.0, diagnostics);
+    let automatic_minimum = if style.height.is_none()
+        && style.width.is_some()
+        && style.aspect_ratio.ratio.is_some()
+        && forced_height.is_none()
+        && !style.overflow_y.scroll_container()
+    {
+        super::inline::intrinsic_inline(&b.children, &style, height, font, diagnostics).0
+    } else {
+        0.0
+    };
+    let height_bounds = super::sizing::bounds(
+        b,
+        false,
+        containing_height,
+        vertical,
+        automatic_minimum,
+        diagnostics,
+    );
     let height = height.clamp(height_bounds.0, height_bounds.1);
-    let explicit_width = forced_width.or_else(|| {
-        style.width.as_ref().map(|l| {
-            style.box_sizing.content_size(
-                resolve_length(
-                    l,
-                    style.font_size,
-                    available_width,
-                    b.node_id,
-                    "width",
-                    diagnostics,
-                ),
+    let explicit_width = forced_width
+        .or_else(|| {
+            super::sizing::definite_size(
+                b,
+                style.width.as_ref(),
+                Some(available_width),
                 horizontal,
+                diagnostics,
             )
         })
-    });
+        .or_else(|| {
+            if style.width.is_none() {
+                super::sizing::ratio_width(b, height, horizontal, vertical)
+            } else {
+                None
+            }
+        });
     b.margin = margin;
     b.padding = padding;
     b.flow_width = available_width;
@@ -737,16 +791,18 @@ pub(super) fn layout(
                     .padding
                     .right
                     .resolve(child.style.font_size, height);
-            let width = child
-                .style
-                .width
-                .as_ref()
-                .map(|l| l.resolve(child.style.font_size, available))
-                .unwrap_or(available.max(intrinsic.0).min(intrinsic.1));
+            let width = super::sizing::definite_size(
+                child,
+                child.style.width.as_ref(),
+                Some(available),
+                decor,
+                diagnostics,
+            )
+            .unwrap_or((available - decor).max(intrinsic.0).min(intrinsic.1));
             super::block::layout_sized_in(
                 child,
                 available,
-                (width - decor).max(0.0),
+                width,
                 None,
                 (true, false),
                 height,
@@ -768,8 +824,22 @@ pub(super) fn layout(
         adjoining = parallel.then_some(edges.bottom);
         index += 1;
     }
-    let width_bounds =
-        super::sizing::bounds(b, true, Some(available_width), horizontal, 0.0, diagnostics);
+    let width_bounds = super::sizing::bounds(
+        b,
+        true,
+        Some(available_width),
+        horizontal,
+        if style.width.is_none()
+            && explicit_width.is_some()
+            && forced_width.is_none()
+            && !style.overflow_x.scroll_container()
+        {
+            cursor.max(floats.bottom())
+        } else {
+            0.0
+        },
+        diagnostics,
+    );
     let width = finite_used(
         explicit_width.unwrap_or(cursor.max(floats.bottom())) as f64,
         b.node_id,
@@ -798,6 +868,24 @@ pub(super) fn layout(
     let axes = FlowAxes {
         origin: (content_x, content_y),
         block: width,
+        ..axes
+    };
+    let content_align = b.style.align_content;
+    let block_offset = if !style.display.is_item_container() && !style.display.is_table() {
+        super::flex::distribution(content_align, width - cursor, 1, false).0
+    } else {
+        0.0
+    };
+    let axes = FlowAxes {
+        origin: (
+            axes.origin.0
+                + if style.writing_mode.block_reverse() {
+                    -block_offset
+                } else {
+                    block_offset
+                },
+            axes.origin.1,
+        ),
         ..axes
     };
     if let Some(proxy) = table {

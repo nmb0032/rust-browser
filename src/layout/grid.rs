@@ -1121,8 +1121,12 @@ fn item_bounds(
         (&child.style.min_height, &child.style.max_height)
     };
     let auto_min = if min.is_none() {
-        sizing::definite_size(child, max.as_ref(), reference, decor, diagnostics)
-            .map_or(auto_min, |cap| auto_min.min(cap))
+        (if horizontal {
+            sizing::definite_size(child, max.as_ref(), reference, decor, diagnostics)
+        } else {
+            sizing::definite_height(child, max.as_ref(), reference, decor, diagnostics)
+        })
+        .map_or(auto_min, |cap| auto_min.min(cap))
     } else {
         auto_min
     };
@@ -1169,8 +1173,20 @@ fn item_data(
                 diagnostics,
             );
             let margins = resolve_margins(&c.style, reference, c.node_id, diagnostics);
-            let (min_content, max_content) =
+            let (mut min_content, mut max_content) =
                 positioning::intrinsic_content(c, reference, font, diagnostics);
+            let height =
+                sizing::definite_height(c, c.style.height.as_ref(), None, vertical, diagnostics);
+            if let Some(transferred) =
+                height.and_then(|h| sizing::ratio_width(c, h, horizontal, vertical))
+            {
+                min_content = if c.image.is_some() {
+                    min_content.min(transferred)
+                } else {
+                    min_content.max(transferred)
+                };
+                max_content = max_content.max(transferred);
+            }
             Item {
                 index: cell.index,
                 col: cell.col,
@@ -1187,7 +1203,7 @@ fn item_data(
                     horizontal,
                     diagnostics,
                 ),
-                height: sizing::definite_size(
+                height: sizing::definite_height(
                     c,
                     c.style.height.as_ref(),
                     None,
@@ -1197,9 +1213,13 @@ fn item_data(
                 justify: effective(
                     c.style.justify_self,
                     b.style.justify_items,
-                    c.image.is_some(),
+                    c.image.is_some() || c.style.aspect_ratio.ratio.is_some(),
                 ),
-                align: effective(c.style.align_self, b.style.align_items, c.image.is_some()),
+                align: effective(
+                    c.style.align_self,
+                    b.style.align_items,
+                    c.image.is_some() || c.style.aspect_ratio.ratio.is_some(),
+                ),
             }
         })
         .collect()
@@ -1268,13 +1288,15 @@ fn format_width(
         item.horizontal,
         diagnostics,
     );
-    let height = sizing::definite_size(
+    let height = sizing::definite_height(
         c,
         c.style.height.as_ref(),
         row_reference,
         item.vertical,
         diagnostics,
     );
+    let width = width
+        .or_else(|| height.and_then(|h| sizing::ratio_width(c, h, item.horizontal, item.vertical)));
     let auto_min = automatic_minimum(c, part, true, item.min_content, width);
     let limits = item_bounds(
         c,
@@ -1386,12 +1408,26 @@ pub(super) fn layout_grid(
         b.style.justify_content,
         false,
     );
+    let mut justify_content = b.style.justify_content;
+    if justify_content.keyword == A::Left {
+        justify_content.keyword = if b.style.direction == Direction::Rtl {
+            A::End
+        } else {
+            A::Start
+        };
+    } else if justify_content.keyword == A::Right {
+        justify_content.keyword = if b.style.direction == Direction::Rtl {
+            A::Start
+        } else {
+            A::End
+        };
+    }
     let cg = geometry(
         b,
         &columns,
         column_gap,
         Some(width),
-        b.style.justify_content,
+        justify_content,
         diagnostics,
     );
     for item in &mut items {
@@ -1438,6 +1474,8 @@ pub(super) fn layout_grid(
     }
     let mut baselines = vec![0.0f32; rows.len()];
     let mut descents = vec![0.0f32; rows.len()];
+    let mut last_descents = vec![0.0f32; rows.len()];
+    let mut last_ascents = vec![0.0f32; rows.len()];
     let mut row_contributions = Vec::new();
     for item in &items {
         let c = &b.children[item.index];
@@ -1465,6 +1503,16 @@ pub(super) fn layout_grid(
             descents[start] =
                 descents[start].max(c.rect.height - baseline + item.margins.bottom.unwrap_or(0.0));
         }
+        if item.align.keyword == A::LastBaseline
+            && item.margins.top.is_some()
+            && item.margins.bottom.is_some()
+        {
+            let end = start + item.row.span - 1;
+            let baseline = c.last_local_baseline().unwrap_or(c.rect.height);
+            last_ascents[end] = last_ascents[end].max(baseline + item.margins.top.unwrap_or(0.0));
+            last_descents[end] = last_descents[end]
+                .max(c.rect.height - baseline + item.margins.bottom.unwrap_or(0.0));
+        }
     }
     for (start, (&baseline, &descent)) in baselines.iter().zip(&descents).enumerate() {
         if baseline > 0.0 {
@@ -1475,6 +1523,17 @@ pub(super) fn layout_grid(
                 min_content: (baseline + descent) as f64,
                 max_content: (baseline + descent) as f64,
             });
+        }
+        for (start, (&ascent, &descent)) in last_ascents.iter().zip(&last_descents).enumerate() {
+            if ascent + descent > 0.0 {
+                row_contributions.push(Contribution {
+                    start,
+                    span: 1,
+                    minimum: (ascent + descent) as f64,
+                    min_content: (ascent + descent) as f64,
+                    max_content: (ascent + descent) as f64,
+                });
+            }
         }
     }
     finish_tracks(
@@ -1540,7 +1599,7 @@ pub(super) fn layout_grid(
         let (ry, area_height) = area(&rg, item.row);
         let start = item.row.start.unwrap() as usize;
         let c = &mut b.children[item.index];
-        let explicit = sizing::definite_size(
+        let explicit = sizing::definite_height(
             c,
             c.style.height.as_ref(),
             Some(area_height),
@@ -1598,6 +1657,12 @@ pub(super) fn layout_grid(
             (item.margins.left, item.margins.right)
         };
         let mut justify = item.justify;
+        if justify.keyword == A::Left {
+            justify.keyword = if rtl { A::End } else { A::Start };
+        }
+        if justify.keyword == A::Right {
+            justify.keyword = if rtl { A::Start } else { A::End };
+        }
         if matches!(justify.keyword, A::SelfStart | A::SelfEnd)
             && c.style.direction != b.style.direction
         {
@@ -1621,6 +1686,14 @@ pub(super) fn layout_grid(
         {
             dy = baselines[start] - c.first_local_baseline().unwrap_or(c.rect.height);
         }
+        if item.align.keyword == A::LastBaseline
+            && item.margins.top.is_some()
+            && item.margins.bottom.is_some()
+        {
+            dy = area_height
+                - last_descents[start + item.row.span - 1]
+                - c.last_local_baseline().unwrap_or(c.rect.height);
+        }
         c.margin = Edges {
             left: if rtl { ma } else { mb },
             right: if rtl { mb } else { ma },
@@ -1638,10 +1711,10 @@ pub(super) fn layout_grid(
         // positions and descendants must not be shifted twice.
         block::place_block(c, (y + ry + dy) as f64, diagnostics);
     }
-    if b.style.justify_items.keyword == A::Baseline
-        || b.children
-            .iter()
-            .any(|c| c.is_grid_item && c.style.justify_self.keyword == A::Baseline)
+    if matches!(b.style.justify_items.keyword, A::Baseline | A::LastBaseline)
+        || b.children.iter().any(|c| {
+            c.is_grid_item && matches!(c.style.justify_self.keyword, A::Baseline | A::LastBaseline)
+        })
     {
         report(
             b,
@@ -1649,7 +1722,7 @@ pub(super) fn layout_grid(
             diagnostics,
         );
     }
-    if b.style.align_content.keyword == A::Baseline {
+    if matches!(b.style.align_content.keyword, A::Baseline | A::LastBaseline) {
         report(
             b,
             "grid: align-content baseline uses start fallback",

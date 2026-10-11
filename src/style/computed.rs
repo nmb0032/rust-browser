@@ -225,9 +225,30 @@ impl Content {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayOutside {
+    Block,
+    Inline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayInside {
+    Flow,
+    FlowRoot,
+    Flex,
+    Grid,
+    Table,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Display {
     Block,
+    FlowRoot,
+    InlineBlock,
+    Contents,
+    InlineListItem,
+    FlowRootListItem,
+    InlineFlowRootListItem,
     #[default]
     Inline,
     Flex,
@@ -249,6 +270,60 @@ pub enum Display {
 }
 
 impl Display {
+    pub fn outside(self) -> Option<DisplayOutside> {
+        if self.table_internal() || matches!(self, Self::None | Self::Contents) {
+            return None;
+        }
+        Some(if self.inline_outer() {
+            DisplayOutside::Inline
+        } else {
+            DisplayOutside::Block
+        })
+    }
+    pub fn inside(self) -> Option<DisplayInside> {
+        self.outside()?;
+        Some(if self.is_flow_root() {
+            DisplayInside::FlowRoot
+        } else if self.is_flex() {
+            DisplayInside::Flex
+        } else if self.is_grid() {
+            DisplayInside::Grid
+        } else if self.is_table() {
+            DisplayInside::Table
+        } else {
+            DisplayInside::Flow
+        })
+    }
+    pub fn is_list_item(self) -> bool {
+        matches!(
+            self,
+            Self::ListItem
+                | Self::InlineListItem
+                | Self::FlowRootListItem
+                | Self::InlineFlowRootListItem
+        )
+    }
+    pub fn is_flow_root(self) -> bool {
+        matches!(
+            self,
+            Self::FlowRoot
+                | Self::InlineBlock
+                | Self::FlowRootListItem
+                | Self::InlineFlowRootListItem
+        )
+    }
+    pub fn inline_outer(self) -> bool {
+        matches!(
+            self,
+            Self::Inline
+                | Self::InlineBlock
+                | Self::InlineListItem
+                | Self::InlineFlowRootListItem
+                | Self::InlineFlex
+                | Self::InlineGrid
+                | Self::InlineTable
+        )
+    }
     pub fn is_table(self) -> bool {
         matches!(self, Self::Table | Self::InlineTable)
     }
@@ -283,6 +358,9 @@ impl Display {
     pub(crate) fn blockified(self) -> Self {
         match self {
             Self::Inline => Self::Block,
+            Self::InlineBlock => Self::FlowRoot,
+            Self::InlineListItem => Self::ListItem,
+            Self::InlineFlowRootListItem => Self::FlowRootListItem,
             Self::InlineFlex => Self::Flex,
             Self::InlineGrid => Self::Grid,
             Self::InlineTable => Self::Table,
@@ -347,9 +425,61 @@ pub enum AlignKeyword {
     SelfEnd,
     Center,
     Baseline,
+    LastBaseline,
+    Left,
+    Right,
     SpaceBetween,
     SpaceAround,
     SpaceEvenly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AspectRatio {
+    pub auto: bool,
+    pub ratio: Option<f32>,
+}
+impl Default for AspectRatio {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            ratio: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ObjectFit {
+    #[default]
+    Fill,
+    Contain,
+    Cover,
+    None,
+    ScaleDown,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObjectAxis {
+    pub from_end: bool,
+    pub offset: Length,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObjectPosition {
+    pub x: ObjectAxis,
+    pub y: ObjectAxis,
+}
+
+impl Default for ObjectPosition {
+    fn default() -> Self {
+        let axis = ObjectAxis {
+            from_end: false,
+            offset: Length::Percent(50.0),
+        };
+        Self {
+            x: axis.clone(),
+            y: axis,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -503,6 +633,9 @@ pub struct ComputedStyle {
     pub bold: bool,
     pub italic: bool,
     pub width: Option<Length>,
+    pub aspect_ratio: AspectRatio,
+    pub object_fit: ObjectFit,
+    pub object_position: ObjectPosition,
     pub height: Option<Length>,
     /// Physical min/max prerequisites. Flex/grid determine content-based auto
     /// minima from item overflow, spanned tracks and preferred sizes.
@@ -595,6 +728,9 @@ impl Default for ComputedStyle {
             bold: false,
             italic: false,
             width: None,
+            aspect_ratio: AspectRatio::default(),
+            object_fit: ObjectFit::default(),
+            object_position: ObjectPosition::default(),
             height: None,
             min_width: None,
             min_height: None,
@@ -652,6 +788,7 @@ impl ComputedStyle {
             border_spacing: parent.border_spacing.clone(),
             caption_side: parent.caption_side,
             empty_cells: parent.empty_cells,
+            object_position: parent.object_position.clone(),
             text_align: parent.text_align,
             text_align_last: parent.text_align_last,
             white_space_collapse: parent.white_space_collapse,

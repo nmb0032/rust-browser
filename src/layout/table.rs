@@ -777,9 +777,15 @@ pub(super) fn layout_table(
         let row = &b.children[g].children[i];
         let bounds = super::sizing::bounds(row, false, height, 0.0, 0.0, diagnostics);
         row_heights[r] = bounded_extent(
-            super::sizing::definite_size(row, row.style.height.as_ref(), height, 0.0, diagnostics)
-                .unwrap_or(0.0)
-                .clamp(bounds.0, bounds.1),
+            super::sizing::definite_height(
+                row,
+                row.style.height.as_ref(),
+                height,
+                0.0,
+                diagnostics,
+            )
+            .unwrap_or(0.0)
+            .clamp(bounds.0, bounds.1),
             row.node_id,
             diagnostics,
         );
@@ -799,7 +805,7 @@ pub(super) fn layout_table(
         );
         let border = cell.used_border.unwrap_or(cell.style.border_width);
         let vertical = padding.top + padding.bottom + border.top + border.bottom;
-        let preferred_height = super::sizing::definite_size(
+        let preferred_height = super::sizing::definite_height(
             cell,
             cell.style.height.as_ref(),
             height,
@@ -822,7 +828,7 @@ pub(super) fn layout_table(
         );
         cell.margin = Edges::default();
         cell.rect.width = w;
-        let cell_height = super::sizing::definite_size(
+        let cell_height = super::sizing::definite_height(
             cell,
             cell.style.height.as_ref(),
             height,

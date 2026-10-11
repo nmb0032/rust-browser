@@ -18,13 +18,40 @@ const MAX_LAYOUT_DIMENSION: f32 = 1_000_000.0;
 pub(super) struct ImageContent {
     pub(super) data: Option<Arc<DecodedImage>>,
     alt: String,
+    natural: Option<(f32, f32)>,
+    ratio: Option<f32>,
 }
 
 impl ImageContent {
     pub(super) fn new(element: &ElementData, data: Option<Arc<DecodedImage>>) -> Self {
+        let dimension = |name, fallback| {
+            element
+                .attribute(name)
+                .and_then(crate::html::attributes::image_dimension)
+                .unwrap_or(fallback)
+        };
+        let natural = if let Some(image) = &data {
+            Some((image.width() as f32, image.height() as f32))
+        } else {
+            match element.tag_name() {
+                "canvas" => Some((dimension("width", 300.0), dimension("height", 150.0))),
+                "video" | "iframe" => Some((300.0, 150.0)),
+                _ => None,
+            }
+        };
+        let ratio = natural
+            .filter(|_| data.is_some() || element.tag_name() == "canvas")
+            .filter(|&(w, h)| w > 0.0 && h > 0.0)
+            .map(|(w, h)| w / h);
         Self {
             data,
-            alt: element.attribute("alt").unwrap_or_default().to_owned(),
+            alt: if element.tag_name() == "img" {
+                element.attribute("alt").unwrap_or_default().to_owned()
+            } else {
+                String::new()
+            },
+            natural,
+            ratio,
         }
     }
 
@@ -36,25 +63,40 @@ impl ImageContent {
         line_height: f32,
         font: &crate::text::FontContext,
     ) -> (f32, f32) {
-        let natural_width = self.data.as_ref().map_or_else(
+        let natural_width = self.natural.map_or_else(
             || font.shape(style, &self.alt).width.max(16.0),
-            |image| image.width() as f32,
+            |size| size.0,
         );
-        let natural_height = self
-            .data
-            .as_ref()
-            .map_or(line_height, |image| image.height() as f32);
-        let ratio = natural_width / natural_height.max(1.0);
+        let natural_height = self.natural.map_or(line_height, |size| size.1);
+        let ratio = self.preferred_ratio(style).or_else(|| {
+            (self.natural.is_none() && natural_width > 0.0 && natural_height > 0.0)
+                .then_some(natural_width / natural_height)
+        });
         let (width, height) = match (width, height) {
             (Some(width), Some(height)) => (width, height),
-            (Some(width), None) => (width, width / ratio),
-            (None, Some(height)) => (height * ratio, height),
-            (None, None) => (natural_width, natural_height),
+            (Some(width), None) => (width, ratio.map_or(natural_height, |r| width / r)),
+            (None, Some(height)) => (ratio.map_or(natural_width, |r| height * r), height),
+            (None, None) => (
+                natural_width,
+                ratio.map_or(natural_height, |r| natural_width / r),
+            ),
         };
         (
             width.clamp(0.0, MAX_LAYOUT_DIMENSION),
             height.clamp(0.0, MAX_LAYOUT_DIMENSION),
         )
+    }
+
+    pub(super) fn preferred_ratio(&self, style: &ComputedStyle) -> Option<f32> {
+        if style.aspect_ratio.auto {
+            self.ratio.or(style.aspect_ratio.ratio)
+        } else {
+            style.aspect_ratio.ratio
+        }
+    }
+
+    pub(super) fn preserves_ratio(&self, style: &ComputedStyle) -> bool {
+        self.preferred_ratio(style).is_some() || self.natural.is_none()
     }
 
     pub(super) fn alt_fragment(

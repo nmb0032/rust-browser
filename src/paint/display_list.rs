@@ -12,6 +12,8 @@ const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    ObjectClip(Rect),
+    ObjectClipEnd,
     /// Subsequent drawing commands use this coordinate space until changed.
     CoordinateSpace(CoordinateSpace),
     /// Complete state for the next flattened paint phase, never a DFS stack.
@@ -217,8 +219,9 @@ fn append_box_items(
     if phase == PaintPhase::Content
         && let Some(image) = layout_box.decoded_image()
     {
-        let rect = layout_box.content_rect();
+        let rect = layout_box.object_rect();
         if rect.width > 0.0 && rect.height > 0.0 {
+            display_list.push(DisplayItem::ObjectClip(layout_box.content_rect()));
             display_list.push(DisplayItem::Image {
                 x: rect.x,
                 y: rect.y,
@@ -226,6 +229,7 @@ fn append_box_items(
                 h: rect.height,
                 image: Arc::clone(image),
             });
+            display_list.push(DisplayItem::ObjectClipEnd);
         }
     }
     if phase == PaintPhase::Content
@@ -282,6 +286,7 @@ fn append_box_items(
         }
         if layout_box.kind() == BoxKind::Inline
             && !layout_box.is_replaced_image()
+            && !layout_box.style().display.is_flow_root()
             && !layout_box.style().display.is_item_container()
             && !layout_box.style().display.is_table()
         {
@@ -769,13 +774,16 @@ mod tests {
         );
         let list = build_display_list(&tree, 400.0, 600.0, false);
         assert!(matches!(list[0], DisplayItem::ViewportBackground { .. }));
-        assert!(matches!(
-            list[1],
-            DisplayItem::Rect {
-                color: 0x112233,
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                list[1],
+                DisplayItem::Rect {
+                    color: 0x112233,
+                    ..
+                }
+            ),
+            "{list:?}"
+        );
         assert!(matches!(
             list[2],
             DisplayItem::Rect {

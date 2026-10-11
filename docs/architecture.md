@@ -2855,15 +2855,133 @@ and the CSSOM parts covered here meet the conformance gate.
   existing font/shaping/float/table/grid limits still apply. Vertical flex/grid
   intrinsic feedback has four passes and diagnoses non-convergence.
   Logical border radii are not implemented. General display/sizing/replaced
-  grammar remains 8.15; advanced typography remains 8.16. **8.15 is unchanged
-  and milestone 8 is not complete.**
-- [ ] **8.15 Complete display types, sizing, and replaced elements.**
+  grammar is covered by 8.15 below; advanced typography remains 8.16.
+  **Milestone 8 is not complete.**
+- [x] **8.15 Complete display types, sizing, and replaced elements.**
   Implement CSS Display 3 (`contents`, `flow-root`, and multi-keyword
   values), Box Alignment 3, CSS Sizing 3 and 4 (`min-content`,
   `max-content`, `fit-content`, `aspect-ratio`), `object-fit`, and
   `object-position`. Size replaced elements such as `img`, `video`,
   `canvas`, and `iframe` by their intrinsic dimensions.
   *You'll see:* intrinsic-sizing WPT reftests pass.
+
+  **Display and box generation:** `style::box_values` parses unordered,
+  typed block/inline outer and flow/flow-root/flex/grid/table inner components
+  with the permitted list-item flag. Canonical `Display` values expose
+  `outside()`, `inside()` and `is_list_item()` and preserve legacy inline
+  aliases and CSS2 table-internal grammar. Duplicate or incompatible components
+  reject the entire declaration; CSS-wide values, pending variables and layer
+  rollback continue through the generated property registry. Item, positioned
+  and float blockification preserves the inner formatting context, including
+  flex/grid items reached through a contents ancestor. Root contents computes
+  to block.
+
+  Contents is flattened **before** block-in-inline splitting and anonymous
+  block/item/table fixup. It does not retain a fake paintable box: its background,
+  border, padding, positioning, stacking level and overflow cannot create
+  geometry, a containing block or a clip. DOM inheritance, text/link/event
+  identity and originating pseudo identity remain intact; before/after text
+  is flattened in source order, including contents pseudos. Box ancestry points
+  directly to the real box parent. Replaced-element contents behaves as none,
+  and none still hides the subtree. Flow-root establishes a genuine independent
+  BFC, containing floats and preventing child/parent margin collapse; inline
+  flow-root/inline-block is an atomic inline participant with its own layout,
+  decorations, baseline and hit rectangle.
+
+  **Alignment:** the shared finite parser supports normal/auto/stretch,
+  first/last baseline, safe/unsafe positional alignment, start/end,
+  self-start/self-end, flex-start/flex-end, center, applicable physical
+  left/right, and the existing distributions. Place shorthands expand
+  atomically; place-content's single baseline value defaults justify-content
+  to start. Flex/grid use real free space, auto margins, separate horizontal
+  first/last line-baseline groups, RTL/reversals and overflow-safe positional
+  fallback rather than merely retaining keywords. Replaced/ratio grid items
+  retain natural cross size under normal alignment. Block align-content moves
+  its complete in-flow content for positional alignment, including native
+  block axes. Horizontal block justify-self/items uses positional intrinsic
+  sizing, auto-margin precedence, physical left/right and parent/self RTL
+  directions. Native block self-alignment retains a diagnosed default
+  sizing/placement fallback. The pinned standalone justify-items legacy initial
+  normalizes to normal; legacy alignment groups are not supported.
+  Baseline/distribution block content and column/inline-axis/content
+  baseline groups have retained positional-fallback diagnostics. Vertical
+  allocation still synthesizes measurement baselines; complete script-specific
+  baseline groups and advanced list marker placement remain 8.16.
+
+  **Sizing:** min-content, max-content, fit-content and
+  fit-content(length-percentage/math) remain typed until used-value layout.
+  They are accepted only by sizing/basis grammars, not by padding, margins or
+  arbitrary length properties. `layout::sizing` shares physical/logical
+  content-box resolution and min/max bounds across normal blocks, atomic
+  inlines, replaced boxes, absolute/fixed boxes, flex, grid, tables and native
+  writing axes. Intrinsic widths use the production selected-font shaping,
+  legal break/whitespace formatter and the existing flex/grid/table intrinsic
+  algorithms. Boxes requesting intrinsic values receive per-layout,
+  bottom-up measurement data; a disposable production-layout probe measures
+  natural block extents at the selected width. No viewport-sized stand-in is
+  used as min/max-content, no alternate text formatter is introduced, and
+  document font/image changes and relayout rebuild measurements. Indefinite
+  percentage bounds and cyclic fit limits diagnose their finite fallback.
+
+  Aspect-ratio supports auto, a finite ratio, and auto plus ratio in either
+  order; degenerate zero ratios behave as auto. A CSS preferred ratio transfers
+  an automatic axis using the content/border sizing box, while auto prefers an
+  available natural replaced ratio and auto plus ratio always uses content
+  dimensions. Ordinary blocks transfer a definite height to auto width; the
+  non-scrollable ratio-dependent automatic minimum retains real content unless
+  explicitly overridden. Two explicit axes remain independent;
+  physical min/max limits can break an impossible ratio. Replaced min/max
+  constraints conserve ratio when possible, and flex/grid use applicable
+  transferred-size suggestions and non-scrollable automatic minimums.
+
+  **Replaced model and painting:** img, video, canvas and iframe share a
+  sizing model independent of whether decoded bitmap pixels exist. Images
+  use orientation-correct decoded natural dimensions, HTML presentation hints
+  and the existing bounded alt fallback. Video posters use the **same production
+  URL loader, MIME/byte/decode limits and canonical local-resource policy** as
+  images, without a new fetch path. Video without a poster and iframe use
+  300×150 defaults and HTML hints, without inventing a natural ratio from those
+  fallback dimensions. Canvas has real 300×150 intrinsic dimensions
+  or its bounded HTML bitmap dimensions; its CSS box/background is paintable
+  without a script surface. Numeric/legacy percentage presentation hints stay
+  distinct from CSS percentages and author sizing wins normally. Replaced
+  descendants/fallback content do not leak into positioned layout or painting.
+  There is no video codec/player, canvas drawing API or iframe nested navigation
+  claim; those remain later media/JavaScript/navigation work.
+
+  Object-fit fill/contain/cover/none/scale-down and inherited object-position's
+  one-to-four-token physical lengths/percentages/edge offsets produce a
+  **separate concrete bitmap rectangle**. A dedicated content-box clip bounds
+  software sampling before compositing, including oversize cover/none objects.
+  Neither the fitted bitmap extent nor its cropping changes CSS used size,
+  overflow extent or hit geometry. The same immutable decoded data, fitted
+  rectangle and clip work at device scales 1/2 and in native vertical flow;
+  future transforms must transform that geometry, not resize the source box.
+
+  **Verification and boundaries:** six additional independently authored local
+  WPT-format assertion/reference pairs cover contents, flow-root, intrinsic
+  sizing, aspect-ratio, object-fit/poster loading and safe alignment. References
+  use explicit rectangles/positions instead of the feature being tested.
+  Sixteen total native assertion pages compare exactly at scales 1 and 2;
+  there is no fuzzy tolerance or external/full-WPT conformance claim.
+  `tools/generate_replaced_fixture.py` records the original 4×2 red/blue PNG
+  provenance and supports deterministic checking. Unit contracts additionally
+  cover invalid typed grammar, inheritance/semantic ancestry, native vertical
+  sizing, EXIF orientation, ratios/min/max and real pixels/hits. Run-in/ruby/math
+  display, legacy alignment groups, stretch/anchor-size/calc-size sizing,
+  ratio math, full bidirectional ratio constraint transfer and
+  cyclic/orthogonal percentage feedback, advanced baseline
+  groups and fragmentation remain explicitly unsupported or finite partial
+  behavior in generated coverage. **8.16 and subsequent steps are untouched.**
+
+  **Validated:** `cargo test --all-features` passes **812 tests** (713 library
+  plus 99 integration tests, including 26 new rendered-layout contracts).
+  All-feature/all-target Clippy with `-D warnings`, formatting, benchmark
+  compilation, seven offline generator tests, both deterministic generator
+  checks and `git diff --check` pass. The production CLI additionally passes
+  all sixteen assertion pages with `--device-scale 1` and `--device-scale 2`;
+  native PNG/manifest evidence is under
+  `target/reftests/m815-scale1` and `target/reftests/m815-scale2`.
 - [ ] **8.16 Complete text and fonts.** Implement CSS Text 3 and 4 (including
   justification, hyphenation, `word-break`, and `text-transform`), Text
   Decoration 4, CSS Fonts 4 (including variable, color, and emoji fonts),

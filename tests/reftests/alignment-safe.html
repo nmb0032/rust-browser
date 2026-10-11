@@ -1,0 +1,5 @@
+<!doctype html>
+<link rel="help" href="https://www.w3.org/TR/css-align-3/#overflow-values">
+<link rel="match" href="references/alignment-safe-ref.html">
+<style>body{margin:0}main{width:100px}section{width:50px;height:20px;background:yellow;display:flex;justify-content:safe center}i{display:block;width:80px;height:10px;background:blue;flex-shrink:0}.unsafe{justify-content:unsafe center}.grid{display:grid;grid-template-columns:80px;justify-content:safe center;align-content:start}.block{display:block;width:100px;height:50px;align-content:center;justify-items:center}.block i{width:40px}</style>
+<main><section><i></i></section><section class=unsafe><i></i></section><section class=grid><i></i></section><section class=block><i></i></section></main>

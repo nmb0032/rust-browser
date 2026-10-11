@@ -52,6 +52,7 @@ pub(crate) fn rasterize_display_list(
 
     let mut item_scroll = scroll_offset;
     let mut spatial = crate::layout::SpatialState::default();
+    let mut object_clip: Option<PixelRect> = None;
     let framebuffer = PixelRect {
         left: 0,
         top: 0,
@@ -72,7 +73,17 @@ pub(crate) fn rasterize_display_list(
                 .map_or(height as i32, |(_, b)| edge(b - item_scroll)),
         }
         .intersect(framebuffer);
+        let clip = object_clip.map_or(clip, |object| clip.intersect(object));
         match item {
+            DisplayItem::ObjectClip(rect) => {
+                object_clip = Some(PixelRect {
+                    left: edge(rect.x + spatial.offset.x),
+                    right: edge(rect.x + spatial.offset.x + rect.width),
+                    top: edge(rect.y + spatial.offset.y - item_scroll),
+                    bottom: edge(rect.y + spatial.offset.y + rect.height - item_scroll),
+                })
+            }
+            DisplayItem::ObjectClipEnd => object_clip = None,
             DisplayItem::Spatial(state) => spatial = *state,
             DisplayItem::CoordinateSpace(space) => {
                 item_scroll = if *space == crate::layout::CoordinateSpace::Document {
