@@ -86,6 +86,10 @@ pub struct InlineFragment {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutBox {
+    pub(super) fragment: Option<super::fragmentation::Fragment>,
+    pub(super) fragment_source: Option<Vec<LayoutBox>>,
+    pub(super) fragment_geometry: bool,
+    pub(super) column_rules: Vec<super::table::BorderSegment>,
     // Construction identity survives inline splitting; it is not DOM identity.
     pub(crate) box_id: usize,
     pub(super) parent_box: Option<usize>,
@@ -135,6 +139,12 @@ pub struct LayoutBox {
 }
 
 impl LayoutBox {
+    pub fn fragment(&self) -> Option<&super::fragmentation::Fragment> {
+        self.fragment.as_ref()
+    }
+    pub(crate) fn column_rules(&self) -> &[super::table::BorderSegment] {
+        &self.column_rules
+    }
     pub fn coordinate_space(&self) -> CoordinateSpace {
         self.coordinate_space
     }
@@ -244,6 +254,7 @@ impl LayoutBox {
             || self.style.position.out_of_flow()
             || self.style.display.is_item_container()
             || self.style.display.is_flow_root()
+            || self.style.fragmentation.columns()
             || self.is_layout_item()
             || self.style.display.is_table()
             || self.style.display == Display::TableCell
@@ -383,6 +394,12 @@ impl LayoutBox {
     }
 
     pub(super) fn reset(&mut self) {
+        if let Some(source) = self.fragment_source.take() {
+            self.children = source;
+        }
+        self.fragment = None;
+        self.fragment_geometry = false;
+        self.column_rules.clear();
         self.coordinate_space = CoordinateSpace::Document;
         self.flow_width = 0.0;
         self.definite_height = None;
@@ -411,6 +428,7 @@ impl LayoutBox {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutTree {
+    pub(crate) page_clip: Option<Rect>,
     pub(crate) effect_images: std::collections::HashMap<String, Arc<DecodedImage>>,
     pub(super) root: LayoutBox,
     construction_diagnostics: Vec<Diagnostic>,
@@ -597,6 +615,26 @@ impl LayoutTree {
         viewport_height: f32,
         font: &crate::text::FontContext,
     ) {
+        self.layout_area(viewport_width, viewport_height, PAGE_PADDING, font);
+    }
+
+    pub(crate) fn layout_page_area(
+        &mut self,
+        width: f32,
+        height: f32,
+        font: &crate::text::FontContext,
+    ) {
+        self.layout_area(width, height, 0.0, font);
+    }
+
+    fn layout_area(
+        &mut self,
+        viewport_width: f32,
+        viewport_height: f32,
+        gutter: f32,
+        font: &crate::text::FontContext,
+    ) {
+        self.page_clip = None;
         self.root.reset();
         self.diagnostics.clone_from(&self.construction_diagnostics);
         let viewport_width = finite_used(
@@ -613,8 +651,8 @@ impl LayoutTree {
             &mut self.diagnostics,
         )
         .max(0.0);
-        let content_x = PAGE_PADDING.min(viewport_width);
-        let content_width = (viewport_width - 2.0 * PAGE_PADDING).max(0.0);
+        let content_x = gutter.min(viewport_width);
+        let content_width = (viewport_width - 2.0 * gutter).max(0.0);
         super::sizing::prepare_intrinsic(
             &mut self.root,
             content_width,
@@ -625,14 +663,14 @@ impl LayoutTree {
         let content_height = layout_children(
             &mut self.root,
             content_x,
-            PAGE_PADDING,
+            gutter,
             content_width,
             font,
             &mut self.diagnostics,
         );
         self.root.content_rect = Rect {
             x: content_x,
-            y: PAGE_PADDING,
+            y: gutter,
             width: content_width,
             height: content_height,
         };
@@ -641,7 +679,7 @@ impl LayoutTree {
             y: 0.0,
             width: viewport_width,
             height: finite_used(
-                PAGE_PADDING as f64 + content_height as f64 + PAGE_PADDING as f64,
+                gutter as f64 + content_height as f64 + gutter as f64,
                 None,
                 "viewport content height",
                 &mut self.diagnostics,
@@ -689,7 +727,7 @@ pub(super) fn absolutize_y(
     offset: f64,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let child_offset = if layout_box.local_root() {
+    let child_offset = if layout_box.local_root() && !layout_box.fragment_geometry {
         offset + layout_box.rect.y as f64
     } else {
         offset
@@ -700,6 +738,12 @@ pub(super) fn absolutize_y(
     }
     for segment in &mut layout_box.table_borders {
         segment.rect.y += fragment_offset as f32;
+    }
+    for segment in &mut layout_box.column_rules {
+        segment.rect.y += fragment_offset as f32;
+    }
+    if let Some(fragment) = &mut layout_box.fragment {
+        fragment.rect.y += offset as f32;
     }
     layout_box.rect.y = finite_used(
         offset + layout_box.rect.y as f64,
@@ -849,6 +893,7 @@ pub(crate) fn build_layout_tree_with_marker_resources(
     )
     .expect("the document root must have a computed style and layout box");
     LayoutTree {
+        page_clip: None,
         effect_images: std::collections::HashMap::new(),
         root,
         construction_diagnostics: diagnostics.clone(),
@@ -1298,6 +1343,10 @@ fn finish_box(
         None
     };
     let mut layout_box = LayoutBox {
+        fragment: None,
+        fragment_source: None,
+        fragment_geometry: false,
+        column_rules: Vec::new(),
         box_id,
         parent_box,
         position_parent,
@@ -1394,6 +1443,10 @@ fn finish_box(
             BoxKind::Block
         };
         LayoutBox {
+            fragment: None,
+            fragment_source: None,
+            fragment_geometry: false,
+            column_rules: Vec::new(),
             box_id,
             parent_box: Some(parent),
             position_parent,
@@ -1518,6 +1571,10 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
     style.display = Display::Block;
     style.unicode_bidi = parent.style.unicode_bidi;
     parent.children.push(LayoutBox {
+        fragment: None,
+        fragment_source: None,
+        fragment_geometry: false,
+        column_rules: Vec::new(),
         orthogonal_inline: false,
         box_id: identity.allocate(),
         parent_box: Some(parent.box_id),
@@ -1664,6 +1721,10 @@ fn generated_box(
     }
     let box_id = identity.allocate();
     let text_box = LayoutBox {
+        fragment: None,
+        fragment_source: None,
+        fragment_geometry: false,
+        column_rules: Vec::new(),
         orthogonal_inline: false,
         box_id: identity.allocate(),
         parent_box: Some(box_id),
@@ -1721,6 +1782,10 @@ fn generated_box(
         used_border: None,
     };
     let mut generated = LayoutBox {
+        fragment: None,
+        fragment_source: None,
+        fragment_geometry: false,
+        column_rules: Vec::new(),
         orthogonal_inline: false,
         box_id,
         parent_box: identity.parent,

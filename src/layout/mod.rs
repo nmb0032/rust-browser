@@ -21,6 +21,9 @@ mod block;
 mod counters;
 mod flex;
 mod floats;
+pub mod fragmentation;
+#[cfg(test)]
+mod fragmentation_tests;
 mod geometry;
 mod grid;
 mod inline;

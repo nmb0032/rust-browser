@@ -1273,6 +1273,11 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
                 let mut next_scopes = scopes.to_vec();
                 let mut next_active = active;
                 match name.as_str() {
+                    "page" if parent.is_none() => {
+                        // Retained ASTs are consumed by the explicit print
+                        // layout API, not by the element selector cascade.
+                        return;
+                    }
                     "keyframes" => {
                         if parent.is_some() || !scopes.is_empty() || !self.containers.is_empty() {
                             self.diagnostic("@keyframes in style/scope/container rules is outside the finite implementation");
@@ -2376,6 +2381,7 @@ fn compute_with_context(
         if let Some(winner) = winners.longhands.get(&property) {
             axis_winners.longhands.insert(property, winner.clone());
         }
+
         if let Some(candidates) = winners.candidates.get(&property) {
             axis_winners.candidates.insert(property, candidates.clone());
         }
@@ -2724,6 +2730,63 @@ fn compute_with_context(
     }
 }
 
+/// Page and margin boxes use native declaration/variable/font computation,
+/// without synthesizing DOM elements or reparsing declaration values.
+pub(crate) fn compute_page_style(
+    parent_style: &ComputedStyle,
+    declarations: &[(&css::Declaration, Specificity, usize)],
+    node: NodeId,
+    environment: MediaEnvironment,
+    fonts: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ComputedStyle {
+    let parent = ComputedNode {
+        style: parent_style.clone(),
+        ..ComputedNode::default()
+    };
+    let mut winners = Winners::default();
+    for &(declaration, specificity, order) in declarations {
+        match declarations::parse_with_context(declaration, order, DeclarationContext::default()) {
+            Ok(values) => {
+                for value in values {
+                    let mut priority = animation_priority(false);
+                    priority.level = if value.important {
+                        CascadeLevel::AuthorImportant
+                    } else {
+                        CascadeLevel::Author
+                    };
+                    priority.specificity = specificity;
+                    priority.rule = order;
+                    priority.declaration = value.order;
+                    insert(&mut winners, &value, priority);
+                }
+            }
+            Err(message) => diagnostics.push(Diagnostic {
+                node_id: Some(node),
+                message,
+            }),
+        }
+    }
+    compute_with_context(
+        &parent,
+        &winners,
+        node,
+        diagnostics,
+        ComputationContext {
+            lengths: length_context(
+                parent_style,
+                environment,
+                Some(RootFontMetrics::new(parent_style)),
+            ),
+            is_root: false,
+            initial_font_size: environment.initial_font_size,
+            registrations: &Registrations::new(),
+            fonts,
+        },
+    )
+    .style
+}
+
 fn compute_color_value(
     value: Value,
     current: ResolvedColor,
@@ -2731,6 +2794,9 @@ fn compute_color_value(
     property: Property,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Value> {
+    if let Value::Fragmentation(v) = value {
+        return super::fragmentation::compute_colors(v, current).map(Value::Fragmentation);
+    }
     if let Value::Scrolling(v) = value {
         return super::scrolling::compute_colors(v, current).map(Value::Scrolling);
     }
@@ -2777,6 +2843,9 @@ fn absolutize(
     reference: f32,
 ) -> Option<Value> {
     match value {
+        Value::Fragmentation(v) => {
+            super::fragmentation::compute(v, context).map(Value::Fragmentation)
+        }
         Value::Scrolling(v) => super::scrolling::compute(v, context).map(Value::Scrolling),
         Value::Animation(v) => super::animation::compute(v, context).map(Value::Animation),
         Value::Typography(typography::Value::Length(length)) => Some(Value::Typography(
@@ -2883,6 +2952,8 @@ fn computed_value(
     let style = &parent.style;
     use Property as P;
     match property {
+        P::LegacyBreak(_) => computed_value(value, property.physical(style), parent, initial),
+        P::Fragmentation(p) => Value::Fragmentation(style.fragmentation.get(p)),
         P::Scrolling(p) => Value::Scrolling(style.scrolling.get(p)),
         P::Animation(p) => Value::Animation(style.motion.get(p)),
         P::Logical(_) => computed_value(value, property.physical(style), parent, initial),
@@ -3014,6 +3085,7 @@ fn computed_value(
 fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, value: Value) {
     use Property as P;
     match (property, value) {
+        (P::Fragmentation(p), Value::Fragmentation(v)) => style.fragmentation.set(p, v),
         (P::Scrolling(p), Value::Scrolling(v)) => style.scrolling.set(p, v),
         (P::Animation(p), Value::Animation(v)) => style.motion.set(p, v),
         (P::Effect(p), Value::Effect(v)) => style.effects.set(p, v),

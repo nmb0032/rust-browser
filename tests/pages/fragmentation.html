@@ -1,0 +1,32 @@
+<!doctype html>
+<title>Native columns and print preview</title>
+<style>
+html, body { margin: 0; font: 16px/24px sans-serif; }
+body { padding: 24px; }
+article { columns: 2; column-gap: 32px; column-rule: 1px solid #345; }
+h1 { column-span: all; margin: 0 0 16px; }
+p { margin: 0 0 12px; }
+.card { break-inside: avoid; padding: 12px; background: #def; }
+@media print {
+  body { padding: 0; }
+  article { columns: auto; }
+}
+@page {
+  size: letter;
+  margin: 48px;
+  @bottom-center { content: "Page " counter(page) " of " counter(pages); font-size: 12px; }
+}
+</style>
+<article>
+<h1>One source, real fragments</h1>
+<p>Columns are laid out at their actual inline size. Shaped lines move into
+separate fragmentainers without scaling their glyphs or slicing a screenshot.</p>
+<p>The native print profile uses physical sheets and a print-media cascade.
+Page margins and page counters are rendered independently of article flow.</p>
+<p class=card>This block avoids a break when it fits in the available
+fragmentainer. Its content retains the same source identity for hit testing.</p>
+<p>Column gaps, balanced heights and a spanning heading use the normal layout
+and paint pipeline. The preview is read-only and has no printer or PDF backend.</p>
+<p>Resize the screen window to change line wrapping. Print preview uses the
+Letter sheet requested by the page rule, with a separately shaped footer.</p>
+</article>

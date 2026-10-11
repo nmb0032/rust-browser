@@ -23,6 +23,8 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) enum Property {
+    Fragmentation(super::fragmentation::Property),
+    LegacyBreak(super::fragmentation::Legacy),
     Scrolling(super::scrolling::Property),
     Animation(super::animation::Property),
     Effect(super::effects::Property),
@@ -135,6 +137,13 @@ pub(super) enum LogicalProperty {
 
 impl Property {
     pub(super) fn physical(self, style: &ComputedStyle) -> Self {
+        if let Self::LegacyBreak(p) = self {
+            return Self::Fragmentation(match p {
+                super::fragmentation::Legacy::Before => super::fragmentation::Property::Before,
+                super::fragmentation::Legacy::After => super::fragmentation::Property::After,
+                super::fragmentation::Legacy::Inside => super::fragmentation::Property::Inside,
+            });
+        }
         use LogicalProperty as L;
         use LogicalSide as S;
         let side = |s| {
@@ -272,6 +281,7 @@ pub(super) enum WideKeyword {
 
 #[derive(Clone, Debug)]
 pub(super) enum Value {
+    Fragmentation(super::fragmentation::Value),
     Scrolling(super::scrolling::Value),
     Animation(super::animation::Value),
     Effect(super::effects::Value),
@@ -439,6 +449,59 @@ pub(super) fn parse_tokens_with_context(
         return Some(vec![Value::Wide(wide); properties.len()]);
     }
     match parser {
+        Parser::Columns => {
+            use super::fragmentation::{Property as F, Value as V};
+            if tokens.is_empty() || tokens.len() > 2 {
+                return None;
+            }
+            let (mut width, mut count) = (None, None);
+            for token in &tokens {
+                if token.is_ident("auto") {
+                    continue;
+                }
+                if token.number().is_some() {
+                    if count.is_some() {
+                        return None;
+                    }
+                    count = Some(super::fragmentation::parse(
+                        F::Count,
+                        std::slice::from_ref(token),
+                    )?);
+                } else {
+                    if width.is_some() {
+                        return None;
+                    }
+                    width = Some(super::fragmentation::parse(
+                        F::Width,
+                        std::slice::from_ref(token),
+                    )?);
+                }
+            }
+            Some(vec![
+                Value::Fragmentation(width.unwrap_or(V::Length(None))),
+                Value::Fragmentation(count.unwrap_or(V::Integer(None))),
+            ])
+        }
+        Parser::ColumnRule => {
+            use super::fragmentation::Property as F;
+            if tokens.is_empty() || tokens.len() > 3 {
+                return None;
+            }
+            let properties = [F::RuleWidth, F::RuleStyle, F::RuleColor];
+            let mut values = properties.map(super::fragmentation::initial);
+            let mut assigned = [false; 3];
+            for t in &tokens {
+                let index = (0..3).find(|&i| {
+                    !assigned[i]
+                        && super::fragmentation::parse(properties[i], std::slice::from_ref(t))
+                            .is_some()
+                })?;
+                assigned[index] = true;
+                values[index] =
+                    super::fragmentation::parse(properties[index], std::slice::from_ref(t))?;
+            }
+            Some(values.into_iter().map(Value::Fragmentation).collect())
+        }
         Parser::Animation => super::animation::shorthand(name, &properties, &tokens),
         Parser::Typography => {
             let mut values = properties
@@ -764,6 +827,34 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     }
     use Property as P;
     match property {
+        P::Fragmentation(p) => {
+            return super::fragmentation::parse(p, tokens).map(Value::Fragmentation);
+        }
+        P::LegacyBreak(p) => {
+            let [token] = tokens else { return None };
+            let word = token.ident()?;
+            if !matches!(word, "auto" | "always" | "avoid" | "left" | "right")
+                || p == super::fragmentation::Legacy::Inside && !matches!(word, "auto" | "avoid")
+            {
+                return None;
+            }
+            return super::fragmentation::parse(
+                match p {
+                    super::fragmentation::Legacy::Before => super::fragmentation::Property::Before,
+                    super::fragmentation::Legacy::After => super::fragmentation::Property::After,
+                    super::fragmentation::Legacy::Inside => super::fragmentation::Property::Inside,
+                },
+                tokens,
+            )
+            .map(|v| {
+                Value::Fragmentation(match v {
+                    super::fragmentation::Value::Break(super::fragmentation::Break::Always) => {
+                        super::fragmentation::Value::Break(super::fragmentation::Break::Page)
+                    }
+                    v => v,
+                })
+            });
+        }
         P::Scrolling(p) => return super::scrolling::parse(p, tokens).map(Value::Scrolling),
         P::Animation(p) => return super::animation::parse(p, tokens).map(Value::Animation),
         P::Effect(p) => return super::effects::parse(p, tokens).map(Value::Effect),
@@ -830,7 +921,9 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
     };
     let lower = token.ident().unwrap_or("").to_ascii_lowercase();
     match property {
-        P::Scrolling(_)
+        P::Fragmentation(_)
+        | P::LegacyBreak(_)
+        | P::Scrolling(_)
         | P::Animation(_)
         | P::Effect(_)
         | P::Typography(_)

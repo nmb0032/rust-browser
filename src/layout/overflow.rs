@@ -810,6 +810,12 @@ impl LayoutTree {
             metric(text.x as f64 + dx, "scrolled glyph x");
             metric(text.baseline as f64 + dy, "scrolled glyph baseline");
         }
+        if let Some(r) = self.page_clip {
+            state.clip = state.clip.intersect(ClipRect {
+                x: Some((r.x, r.x + r.width)),
+                y: Some((r.y, r.y + r.height)),
+            });
+        }
         if reports.len() != before {
             state.clip = ClipRect {
                 x: Some((0.0, 0.0)),

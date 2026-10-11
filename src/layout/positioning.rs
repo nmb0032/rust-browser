@@ -47,6 +47,12 @@ fn translate_own(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diag
     }
     rect(&mut b.rect, dx, dy, id, diagnostics);
     rect(&mut b.content_rect, dx, dy, id, diagnostics);
+    if let Some(f) = &mut b.fragment {
+        rect(&mut f.rect, dx, dy, id, diagnostics);
+    }
+    for rule in &mut b.column_rules {
+        rect(&mut rule.rect, dx, dy, id, diagnostics);
+    }
     if let Some(table) = &mut b.table_rect {
         rect(table, dx, dy, id, diagnostics);
     }

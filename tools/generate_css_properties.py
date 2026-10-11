@@ -137,12 +137,20 @@ def engine_registry(data, engine):
         if name not in properties:
             raise ValueError(f"engine property missing from snapshot: {name}")
         prop = properties[name]
+        # Webref's Sizing4 column-width entry omits the definition table in
+        # Multicol2. Complete only absent fields, with an explicit source URL.
+        if details.get("spec_completion"):
+            if not details.get("spec_completion_source"):
+                raise ValueError(f"missing completion source: {name}")
+            if set(details["spec_completion"]) & set(prop):
+                raise ValueError(f"completion cannot override Webref: {name}")
+            prop = {**prop, **details["spec_completion"]}
         if prop.get("legacyAliasOf") or prop.get("longhands"):
             raise ValueError(f"engine longhand is an alias/shorthand: {name}")
         for field in ("syntax", "initial", "inherited", "computedValue", "animationType"):
             if field not in prop:
                 raise ValueError(f"supported property missing {field}: {name}")
-        if prop["inherited"] not in ("yes", "no", "no (but see prose, above)"):
+        if prop["inherited"] not in ("yes", "no", "no (but see prose, above)", "no (but see prose)"):
             raise ValueError(f"non-boolean longhand inheritance: {name}")
         if details["rust"] in rust_ids:
             raise ValueError(f"duplicate engine Rust property: {details['rust']}")
@@ -264,7 +272,7 @@ def generate(data, engine, provenance):
         lines.append(syntax_record(entry) + ",")
     lines.extend([
         "];", "#[derive(Clone, Copy)]",
-        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place, Typography, Mask, Animation }",
+        "pub(super) enum Parser { Longhand, Wide, Four, Pair, Border, Font, Background, Container, TextAlign, VerticalAlign, WhiteSpace, Overflow, Flex, FlexFlow, Gap, GridPlacement, Place, Typography, Mask, Animation, Columns, ColumnRule }",
         "pub(super) fn parser(name: &str) -> Option<Parser> { Some(match name {",
     ])
     for name, details in sorted(supported.items()):
@@ -280,7 +288,8 @@ def generate(data, engine, provenance):
         lines.append(f'Self::{details["rust"]} => {rs(name)},')
     lines.extend(["} }", "pub(super) fn inherited(self) -> bool { match self {"])
     for name, details in longhands.items():
-        lines.append(f'Self::{details["rust"]} => {str(properties[name]["inherited"] == "yes").lower()},')
+        inherited = properties[name].get("inherited", details.get("spec_completion", {}).get("inherited"))
+        lines.append(f'Self::{details["rust"]} => {str(inherited == "yes").lower()},')
     lines.extend(["} }", "pub(super) fn computes_absolute_length(self) -> bool { match self {"])
     for name, details in longhands.items():
         absolute = properties[name]["computedValue"] == "an absolute length"
@@ -288,7 +297,7 @@ def generate(data, engine, provenance):
     lines.extend(["} }", "}",
                   "pub(super) fn initial_css(property: Property) -> &'static str { match property {"])
     for name, details in longhands.items():
-        value = details.get("ua_initial", properties[name]["initial"])
+        value = details.get("ua_initial", properties[name].get("initial", details.get("spec_completion", {}).get("initial")))
         lines.append(f'Property::{details["rust"]} => {rs(value)},')
     lines.extend(["} }", "pub(super) fn simple(property: Property) -> bool { matches!(property,"])
     simple_names = [name for name, details in longhands.items()

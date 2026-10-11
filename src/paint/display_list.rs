@@ -112,12 +112,18 @@ pub(crate) fn build_display_list(
         }
     });
     if let Some(canvas) = canvas.filter(|b| b.style().background.alpha > 0.0) {
-        display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Viewport));
-        display_list.push(rect_item(DisplayItem::ColorRect {
+        let area = layout.page_clip.unwrap_or(Rect {
             x: 0.0,
             y: 0.0,
-            w: viewport_width,
-            h: viewport_height,
+            width: viewport_width,
+            height: viewport_height,
+        });
+        display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Viewport));
+        display_list.push(rect_item(DisplayItem::ColorRect {
+            x: area.x,
+            y: area.y,
+            w: area.width,
+            h: area.height,
             color: canvas.style().background,
         }));
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
@@ -301,6 +307,18 @@ fn append_box_items(
             None
         };
         append_decoration_items(layout_box, paint_background, fragment, display_list);
+        if phase == PaintPhase::Decoration {
+            for segment in layout_box.column_rules() {
+                let r = segment.rect;
+                append_border(
+                    display_list,
+                    (r.x, r.y, r.width, r.height),
+                    segment.color,
+                    segment.style,
+                    r.width >= r.height,
+                );
+            }
+        }
         return;
     }
     if phase == PaintPhase::Content

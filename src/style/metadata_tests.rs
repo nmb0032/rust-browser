@@ -42,6 +42,8 @@ fn style(source: &str) -> ComputedStyle {
 fn projection(style: &ComputedStyle, property: Property) -> String {
     use Property as P;
     match property {
+        P::Fragmentation(p) => format!("{:?}", style.fragmentation.get(p)),
+        P::LegacyBreak(_) => projection(style, property.physical(style)),
         P::Scrolling(p) => format!("{:?}", style.scrolling.get(p)),
         P::Animation(p) => format!("{:?}", style.motion.get(p)),
         P::Effect(p) => format!("{:?}", style.effects.get(p)),
@@ -218,13 +220,20 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             && meta.alias_of.is_none()
         {
             assert_eq!(properties[0].name(), meta.name);
-            assert_eq!(Some(properties[0].inherited()), meta.inherited);
+            if matches!(meta.name, "column-width" | "page") {
+                // Pinned Sizing4 omits column-width's Multicol2 table; page's
+                // prose-qualified inheritance is deliberately not normalized
+                // in public snapshot metadata.
+                assert!(!properties[0].inherited());
+            } else {
+                assert_eq!(Some(properties[0].inherited()), meta.inherited);
+            }
             assert_eq!(
                 generated_properties::initial_css(properties[0]),
                 if meta.name == "font-family" {
                     "sans-serif"
                 } else {
-                    meta.initial.unwrap()
+                    meta.initial.unwrap_or("auto")
                 },
                 "{}: initial tokens",
                 meta.name
@@ -236,18 +245,18 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 285, 473, 63]);
-    assert_eq!(longhands.len(), 222);
+    assert_eq!(counts, [0, 304, 454, 63]);
+    assert_eq!(longhands.len(), 239);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 220);
+    assert_eq!(all.len(), 237);
     longhands.remove(&Property::Direction);
     longhands.remove(&Property::UnicodeBidi);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **284 partial**, **473 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **303 partial**, **454 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**222 longhands**, **62 shorthands**"));
+    assert!(report.contains("**239 longhands**, **64 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -335,6 +344,8 @@ fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule()
     assert_eq!(
         inherited,
         [
+            "widows",
+            "orphans",
             "color",
             "scrollbar-color",
             "-webkit-text-fill-color",

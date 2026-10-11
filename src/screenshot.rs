@@ -18,9 +18,16 @@ pub struct PanelScroll {
     pub id: String,
     pub offset: ScrollOffset,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct PrintCapture {
+    pub options: crate::engine::PrintOptions,
+    /// One-based physical sheet, including parity blank pages.
+    pub page: usize,
+}
 
 #[derive(Clone, Debug)]
 pub struct Options {
+    pub print: Option<PrintCapture>,
     pub width: u32,
     pub height: u32,
     pub scale: f64,
@@ -37,6 +44,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            print: None,
             width: 800,
             height: 600,
             scale: 1.0,
@@ -51,6 +59,22 @@ impl Default for Options {
 
 impl Options {
     pub fn dimensions(&self) -> Result<(u32, u32)> {
+        if let Some(print) = self.print {
+            print.options.validate().map_err(io::Error::other)?;
+            if print.page == 0 || print.page > print.options.max_pages {
+                return Err(io::Error::other("print page must be one-based and bounded").into());
+            }
+            if self.scroll != ScrollOffset::default()
+                || !self.panels.is_empty()
+                || self.fragment.is_some()
+                || self.snap_scroll
+            {
+                return Err(io::Error::other(
+                    "print captures cannot request interactive scrolling or fragment reveal",
+                )
+                .into());
+            }
+        }
         let width = f64::from(self.width) * self.scale;
         let height = f64::from(self.height) * self.scale;
         if !self.scale.is_finite()
@@ -80,13 +104,19 @@ impl Options {
     }
 
     pub fn environment(&self) -> MediaEnvironment {
-        MediaEnvironment {
+        let mut result = MediaEnvironment {
             viewport_width: self.width as f32,
             viewport_height: self.height as f32,
             resolution_dppx: Some(self.scale as f32),
             color_scheme: Some(ColorScheme::Light),
             ..MediaEnvironment::default()
+        };
+        if let Some(print) = self.print {
+            result.media_type = crate::css::media::MediaType::Print;
+            result.viewport_width = print.options.width - 2.0 * print.options.margin;
+            result.viewport_height = print.options.height - 2.0 * print.options.margin;
         }
+        result
     }
 }
 
@@ -212,6 +242,24 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
         .into());
     }
     check_ready(frame)?;
+    if let Some(print) = options.print {
+        if !frame.animations().initialized() {
+            frame.set_animation_time(0.0)?;
+            frame.layout_with_container_queries(&FontContext::bundled());
+        }
+        frame.set_animation_time(options.animation_time)?;
+        let layout = frame
+            .print_layout(print.options)
+            .map_err(io::Error::other)?;
+        if !layout.diagnostics.is_empty() {
+            return Err(io::Error::other(format!(
+                "print render diagnostics: {:?}",
+                layout.diagnostics
+            ))
+            .into());
+        }
+        return render_print_page(&layout, print.page, options.scale);
+    }
     if let Some(fragment) = &options.fragment {
         frame.url.set_fragment(Some(fragment));
         frame.refresh_target();
@@ -311,4 +359,78 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
 
 pub fn capture(path: &Path, resource_root: &Path, options: &Options) -> Result<Screenshot> {
     render(&mut load(path, resource_root, options)?, options)
+}
+
+/// Raster one already-laid-out physical page, using the native painter/DPR.
+/// The API never writes files; callers explicitly choose whether to save PNGs.
+pub fn render_print_page(
+    layout: &crate::engine::PrintLayout,
+    number: usize,
+    scale: f64,
+) -> Result<Screenshot> {
+    let page = number
+        .checked_sub(1)
+        .and_then(|i| layout.pages.get(i))
+        .ok_or_else(|| io::Error::other("print page does not exist"))?;
+    let width = (f64::from(page.sheet.width) * scale).ceil();
+    let height = (f64::from(page.sheet.height) * scale).ceil();
+    if !scale.is_finite()
+        || !(0.125..=8.0).contains(&scale)
+        || !(1.0..=f64::from(MAX_DIMENSION)).contains(&width)
+        || !(1.0..=f64::from(MAX_DIMENSION)).contains(&height)
+    {
+        return Err(io::Error::other(
+            "print raster dimensions exceed the bounded native screenshot surface",
+        )
+        .into());
+    }
+    let (width, height) = (width as usize, height as usize);
+    paint::compositor::validate(&page.display_list, width, height, scale)
+        .map_err(io::Error::other)?;
+    let mut pixels = vec![0xffffff; width * height];
+    paint::rasterize_display_list(
+        &page.display_list,
+        &layout.fonts,
+        &mut pixels,
+        width,
+        height,
+        scale,
+        0.0,
+    );
+    Ok(Screenshot {
+        width: width as u32,
+        height: height as u32,
+        rgba: pixels
+            .into_iter()
+            .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, 255])
+            .collect(),
+    })
+}
+
+pub fn capture_print_pages(
+    path: &Path,
+    resource_root: &Path,
+    options: &Options,
+    profile: crate::engine::PrintOptions,
+) -> Result<Vec<Screenshot>> {
+    let mut options = options.clone();
+    options.print = Some(PrintCapture {
+        options: profile,
+        page: 1,
+    });
+    let mut frame = load(path, resource_root, &options)?;
+    frame.set_animation_time(0.0)?;
+    frame.layout_with_container_queries(&FontContext::bundled());
+    frame.set_animation_time(options.animation_time)?;
+    let layout = frame.print_layout(profile).map_err(io::Error::other)?;
+    if !layout.diagnostics.is_empty() {
+        return Err(io::Error::other(format!(
+            "print render diagnostics: {:?}",
+            layout.diagnostics
+        ))
+        .into());
+    }
+    (1..=layout.pages.len())
+        .map(|page| render_print_page(&layout, page, options.scale))
+        .collect()
 }

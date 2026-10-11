@@ -240,8 +240,34 @@ JavaScript/WebDriver milestones (9.8/10).
 
 The same HTML match/mismatch links, help links and fuzzy metadata are suitable
 for later wptrunner discovery; this runner does **not** implement a WPT manifest
-server, print/HTTP/variant tests, dynamic testdriver actions, or a wpt.fyi gate.
+server, WPT print protocol, HTTP/variant tests, dynamic testdriver actions, or a wpt.fyi gate.
 Passing this finite suite is **not full CSS specification or WPT conformance**.
+
+### Columns and native print captures
+
+`tests/reftests-fragmentation` contains four independent column assertions.
+`tests/reftests-print` compares physical print pages, including real page
+margin counters and repeated fixed boxes. The print extension is native,
+not wptrunner's print protocol: both documents get the same explicit profile
+and one-based sheet number, and `@page size` overrides the fallback profile.
+Print captures reject interactive scroll/fragment options and render through
+the production print-media layout and software painter.
+
+```sh
+cargo test --all-features --test fragmentation
+cargo run --quiet -- --reftests tests/reftests-fragmentation \
+  --artifacts target/reftests/columns
+cargo run --quiet -- --reftests tests/reftests-print \
+  --print-page 2 --page-size 200x120 --resource-root . \
+  --artifacts target/reftests/print-page2
+cargo run --quiet -- tests/pages/fragmentation.html --print-preview
+```
+
+`screenshot::capture_print_pages` returns every sheet without writing files;
+the integration contract compares both physical pages at scales 1/2. Missing
+pages, empty/invalid page areas, resource failures and print diagnostics fail
+explicitly. `--print-preview` is a read-only native sheet surface, not a PDF
+viewer, OS printer or HTML-widget approximation.
 
 ## Evidence, limits and CI
 

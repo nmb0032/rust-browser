@@ -3373,10 +3373,56 @@ and the CSSOM parts covered here meet the conformance gate.
   `target/m819-tests.log`; the demo PNG is `target/scrolling-demo.png`.
   **Only 8.19 is implemented here; 8.20 and later
   remain untouched, and milestone 8 is incomplete.**
-- [ ] **8.20 Add fragmentation and printing layout.** Implement multicolumn
+- [x] **8.20 Add fragmentation and printing layout.** Implement multicolumn
   layout, CSS Fragmentation, and paged media with `@page`.
   *You'll see:* multicolumn articles and print preview pages split
   correctly.
+
+  Typed columns/count/width/fill/span/rules, break-before/after/inside,
+  widows/orphans, box-decoration-break and legacy page-break aliases feed
+  `layout::fragmentation`. Content is laid out at the actual column/page inline
+  size before legal block and shaped-line boundaries are selected. Balanced
+  columns use a bounded 28-pass feasibility search; definite auto-filled
+  columns flow sequentially. Direct spanners create separate balanced bands,
+  and native vertical columns fragment along their own writing axes.
+  Real fragment boxes retain original DOM/glyph ownership and source-box
+  identity, with distinct paint identities, translated baselines and first/last
+  decoration edges. Re-layout restores source boxes instead of re-fragmenting
+  clones. This is not raster-strip slicing or an alternate HTML renderer.
+
+  `Frame::print_layout(PrintOptions)` clones the retained frame, selects print
+  media, resolves page-area/style feedback (at most 16 passes), and produces
+  physical `PrintedPage` trees and production display lists. `@page` supports
+  named selectors, first/left/right/blank specificity, physical sizes (including
+  Letter/A4 orientation), margins, padding, borders and backgrounds. Side
+  breaks insert blank sheets; fixed boxes repeat. Sixteen margin-box positions
+  support independently shaped strings and decimal page/pages counters.
+  The screen frame, DOM, animation owner and scroll identity remain unchanged.
+  `--print-preview` opens a read-only native sheet preview; `--print-page` and
+  `--page-size` select deterministic PNG/reftest captures. No PDF, printer,
+  JavaScript, footnote or running-element implementation is claimed.
+
+  **Evidence and finite boundaries:** 16 layout contracts and three production
+  integration contracts cover actual line reflow, source glyph preservation,
+  vertical columns, rules/spanners, avoidance/forward progress, decoration
+  slicing/cloning, page selector metrics, blank sheets, counters and fixed
+  repetition. Four independent column references and both physical pages of
+  a print reference compare exactly at scales 1/2. The suite passes **929 Rust
+  tests**; strict Clippy, formatting, benchmark compilation and generator
+  contracts are required alongside these references.
+
+  Fragmentainers cap at 1024 and column counts at 256. Flex/grid/table,
+  replaced, nested multicolumn and scroll-container units remain indivisible;
+  oversized units overflow with a print diagnostic rather than disappearing
+  or preventing progress. Full flex/grid/table continuation, fragment-specific
+  float reflow, nested spanner extraction, advanced margin truncation,
+  fragmented positioned/transform/sticky containing blocks, and browser-wide
+  fragmentainer feedback remain partial. Vertical spanners and vertical paged
+  progression are rejected/diagnosed. Page-specific inline-size changes require
+  continuation reflow and are rejected; page heights may differ. Page layers,
+  balance-all, arbitrary margin-box sizing/overlap negotiation, running
+  elements and footnotes are unsupported. This finite native implementation
+  does not establish the milestone's full WPT conformance gate.
 - [ ] **8.21 Render SVG and MathML.** Implement SVG 2 rendering, including
   paths, text, gradients, patterns, markers, `use`, and SVG images, and
   implement MathML Core layout.

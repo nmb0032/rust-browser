@@ -399,11 +399,19 @@ impl Frame {
                 }
             }
             let mut tree = self.layout_tree();
-            tree.layout_viewport(
-                self.media_environment.viewport_width,
-                self.media_environment.viewport_height,
-                &font,
-            );
+            if self.media_environment.media_type == crate::css::media::MediaType::Print {
+                tree.layout_page_area(
+                    self.media_environment.viewport_width,
+                    self.media_environment.viewport_height,
+                    &font,
+                );
+            } else {
+                tree.layout_viewport(
+                    self.media_environment.viewport_width,
+                    self.media_environment.viewport_height,
+                    &font,
+                );
+            }
             let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
             if next == snapshot {
                 if let Err(error) = tree.sample_scrolling(self.animations.time()) {

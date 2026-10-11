@@ -23,6 +23,15 @@ struct Args {
     /// Save a deterministic native PNG, without opening a window.
     #[arg(long, conflicts_with_all = ["dump", "reftests", "trace", "throttle_ms"])]
     screenshot: Option<PathBuf>,
+    /// Capture a one-based physical print page with --screenshot or --reftests.
+    #[arg(long)]
+    print_page: Option<usize>,
+    /// Fallback physical sheet size in CSS pixels. @page size has precedence.
+    #[arg(long, value_parser = viewport)]
+    page_size: Option<(u32, u32)>,
+    /// Read-only native paged-media preview (wheel/PageUp/PageDown to scroll).
+    #[arg(long, conflicts_with_all = ["screenshot", "reftests", "dump", "trace", "throttle_ms"])]
+    print_preview: bool,
 
     /// Enumerate and run local HTML rel=match/mismatch tests.
     #[arg(long, conflicts_with_all = ["dump", "trace", "throttle_ms"])]
@@ -107,12 +116,38 @@ fn panel(value: &str) -> Result<rust_browser::screenshot::PanelScroll, String> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    if args.animation_time != 0.0 && args.screenshot.is_none() && args.reftests.is_none() {
+    if (args.print_page.is_some() || args.page_size.is_some())
+        && args.screenshot.is_none()
+        && args.reftests.is_none()
+        && !args.print_preview
+    {
+        return Err(io::Error::other(
+            "--print-page/--page-size require --screenshot, --reftests or --print-preview",
+        )
+        .into());
+    }
+    let mut profile = rust_browser::engine::PrintOptions::default();
+    if let Some((width, height)) = args.page_size {
+        profile.width = width as f32;
+        profile.height = height as f32;
+        // Explicit small sheets are useful for deterministic page fixtures.
+        profile.margin = 0.0;
+    }
+    if args.animation_time != 0.0
+        && args.screenshot.is_none()
+        && args.reftests.is_none()
+        && !args.print_preview
+    {
         return Err(
             io::Error::other("--animation-time requires --screenshot or --reftests").into(),
         );
     }
     let options = rust_browser::screenshot::Options {
+        print: (args.print_page.is_some() || args.page_size.is_some() || args.print_preview)
+            .then_some(rust_browser::screenshot::PrintCapture {
+                options: profile,
+                page: args.print_page.unwrap_or(1),
+            }),
         width: args.viewport.0,
         height: args.viewport.1,
         scale: args.device_scale,
@@ -122,6 +157,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fragment: args.fragment,
         animation_time: args.animation_time,
     };
+    if args.print_preview {
+        let url = rust_browser::net::location_url(&args.location)?;
+        let mut frame = rust_browser::screenshot::load_url(&url, &args.resource_root, &options)?;
+        frame.layout_with_container_queries(&rust_browser::text::FontContext::bundled());
+        frame.set_animation_time(args.animation_time)?;
+        let layout = frame.print_layout(profile).map_err(io::Error::other)?;
+        if !layout.diagnostics.is_empty() {
+            return Err(io::Error::other(format!(
+                "print preview diagnostics: {:?}",
+                layout.diagnostics
+            ))
+            .into());
+        }
+        return rust_browser::ui::print_preview::run(layout);
+    }
     if let Some(suite) = args.reftests {
         let report =
             rust_browser::reftest::run(&suite, &args.resource_root, &args.artifacts, &options)?;

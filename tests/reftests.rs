@@ -152,6 +152,7 @@ fn parsed_dom_metadata_resolves_first_base_entities_percent_paths_and_specific_f
 fn complete_native_suite_is_exact_and_mismatch_has_nonzero_pixels_at_two_scales() {
     for scale in [1.0, 2.0] {
         let options = Options {
+            print: None,
             scale,
             ..Options::default()
         };
@@ -621,6 +622,7 @@ fn scale_root_scroll_panel_scroll_and_fixed_pixels_use_native_spatial_states() {
         width: 200,
         height: 160,
         scale: 2.0,
+        print: None,
         scroll: ScrollOffset { x: 0.0, y: 100.0 },
         panels: vec![PanelScroll {
             id: "panel".into(),

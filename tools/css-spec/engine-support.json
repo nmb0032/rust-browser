@@ -1,5 +1,22 @@
 {
   "longhands": {
+    "column-count": {"rust": "Fragmentation(super::fragmentation::Property::Count)", "policy": "fragmentation", "sample": "2"},
+    "column-width": {"rust": "Fragmentation(super::fragmentation::Property::Width)", "policy": "fragmentation", "sample": "100px", "spec_completion": {"initial": "auto", "inherited": "no"}, "spec_completion_source": "https://drafts.csswg.org/css-multicol-2/#propdef-column-width"},
+    "column-fill": {"rust": "Fragmentation(super::fragmentation::Property::Fill)", "policy": "fragmentation", "sample": "balance"},
+    "column-span": {"rust": "Fragmentation(super::fragmentation::Property::Span)", "policy": "fragmentation", "sample": "all"},
+    "column-rule-width": {"rust": "Fragmentation(super::fragmentation::Property::RuleWidth)", "policy": "fragmentation", "sample": "2px"},
+    "column-rule-style": {"rust": "Fragmentation(super::fragmentation::Property::RuleStyle)", "policy": "fragmentation", "sample": "solid"},
+    "column-rule-color": {"rust": "Fragmentation(super::fragmentation::Property::RuleColor)", "policy": "fragmentation", "sample": "red"},
+    "break-before": {"rust": "Fragmentation(super::fragmentation::Property::Before)", "policy": "fragmentation", "sample": "column"},
+    "break-after": {"rust": "Fragmentation(super::fragmentation::Property::After)", "policy": "fragmentation", "sample": "page"},
+    "break-inside": {"rust": "Fragmentation(super::fragmentation::Property::Inside)", "policy": "fragmentation", "sample": "avoid"},
+    "widows": {"rust": "Fragmentation(super::fragmentation::Property::Widows)", "policy": "fragmentation", "sample": "2"},
+    "orphans": {"rust": "Fragmentation(super::fragmentation::Property::Orphans)", "policy": "fragmentation", "sample": "2"},
+    "box-decoration-break": {"rust": "Fragmentation(super::fragmentation::Property::Decoration)", "policy": "fragmentation", "sample": "clone"},
+    "page": {"rust": "Fragmentation(super::fragmentation::Property::Page)", "policy": "fragmentation", "sample": "chapter"},
+    "page-break-before": {"rust": "LegacyBreak(super::fragmentation::Legacy::Before)", "policy": "fragmentation", "sample": "always"},
+    "page-break-after": {"rust": "LegacyBreak(super::fragmentation::Legacy::After)", "policy": "fragmentation", "sample": "avoid"},
+    "page-break-inside": {"rust": "LegacyBreak(super::fragmentation::Legacy::Inside)", "policy": "fragmentation", "sample": "avoid"},
     "scroll-behavior": {"rust": "Scrolling(super::scrolling::Property::Behavior)", "policy": "scrolling", "sample": "smooth"},
     "scroll-snap-type": {"rust": "Scrolling(super::scrolling::Property::SnapType)", "policy": "scrolling", "sample": "both mandatory"},
     "scroll-snap-align": {"rust": "Scrolling(super::scrolling::Property::SnapAlign)", "policy": "scrolling", "sample": "start center"},
@@ -214,6 +231,8 @@
     "border-*-color": {"rust": "BorderColor", "policy": "border-color", "sample": "purple"}
   },
   "shorthands": {
+    "columns": {"parser": "Columns", "policy": "fragmentation", "sample": "100px 2", "order": ["column-width", "column-count"]},
+    "column-rule": {"parser": "ColumnRule", "policy": "fragmentation", "sample": "2px solid red", "order": ["column-rule-width", "column-rule-style", "column-rule-color"]},
     "overscroll-behavior": {"parser": "Pair", "policy": "scrolling", "sample": "contain none", "order": ["overscroll-behavior-x", "overscroll-behavior-y"]},
     "scroll-padding": {"parser": "Four", "policy": "scrolling", "sample": "1px 2px 3px 4px", "order": ["scroll-padding-top", "scroll-padding-right", "scroll-padding-bottom", "scroll-padding-left"]},
     "scroll-margin": {"parser": "Four", "policy": "scrolling", "sample": "1px 2px 3px 4px", "order": ["scroll-margin-top", "scroll-margin-right", "scroll-margin-bottom", "scroll-margin-left"]},
@@ -308,6 +327,7 @@
     "container-type": {"keywords": {"normal": "Value::ContainerType(ContainerType::Normal)", "inline-size": "Value::ContainerType(ContainerType::InlineSize)", "size": "Value::ContainerType(ContainerType::Size)"}}
   },
   "policies": {
+    "fragmentation": {"parser": "Typed bounded counts, contextual widths, balance/auto, all/none spanners, column rules, independent page/column break values, widows/orphans, slice/clone, named pages and legacy page-break aliases. balance-all and column-height rejected.", "cascade": "Native variables, shorthand resets, wide keywords and rollback; widows/orphans inherit.", "computed": "Selected-font contextual lengths and resolved rule colors; source identity retained by real layout fragments.", "used": "Native shaped-line/block break planning and fragment trees in screen multicolumn and explicit print pages. Bounded local tests, not a full Fragmentation/Paged Media WPT claim; limits documented in fragmentation.md."},
     "scrolling": {"parser": "Typed snap axes/align/stop, auto/smooth, per-axis overscroll, physical/logical padding/margin and scrollbar color/width; gutters unsupported.", "cascade": "Atomic shorthands, variables, wide/rollback; scrollbar color inherited, width non-inherited.", "computed": "Contextual lengths with snapport-relative padding percentages; typed enums.", "used": "Retained document scroll motion, shared spatial sticky translations, gesture-end snapping, nested fragment reveal, overlay styled scrollbar input. Finite UA policies documented in scrolling.md; no WPT claim."},
     "animation": {"parser": "Bounded typed timing/effect lists, atomic shorthands; linear() and timeline-scope excluded.", "cascade": "Normal typed/variable shorthand machinery; animations below important, transitions above important.", "computed": "Native document timing; no JS bindings.", "used": "Frame samples before fonts/layout/paint; scroll/view timing from completed geometry."},
     "effects": {"parser": "Bounded typed 2D/3D functions, CSS box origins, numeric/filter lists, basic shapes, mask image/gradient and layer lists. SVG references/path()/rounded inset and extended gradients are rejected.", "cascade": "Generated longhands, CSS-wide rollback, all and pending variables use the normal cascade; effect-created stacking contexts stop z-index escape.", "computed": "Selected-font, viewport and container units computed with finite math; box percentages retained. Independent translate/rotate/scale precede transform.", "used": "Post-layout finite plane projection/inverse input; transparent RGBA effect groups, projected device-space filters/backdrop, W3C blend modes, local-policy masks and center-tested shapes with nearest source sampling. No intersecting preserve-3d surfaces, full backdrop-root/kernel-space/SVG masking or GPU/color-management claim."},

@@ -585,6 +585,7 @@ impl BoxSizing {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComputedStyle {
+    pub fragmentation: super::fragmentation::Fragmentation,
     pub scrolling: super::scrolling::Scrolling,
     pub motion: super::animation::Motion,
     pub container_type: crate::css::container::ContainerType,
@@ -695,6 +696,7 @@ pub struct ComputedStyle {
 impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
+            fragmentation: super::fragmentation::Fragmentation::default(),
             scrolling: super::scrolling::Scrolling::default(),
             motion: super::animation::Motion::default(),
             container_type: crate::css::container::ContainerType::Normal,
@@ -802,6 +804,7 @@ impl ComputedStyle {
 
     pub(crate) fn inherit(parent: &Self) -> Self {
         Self {
+            fragmentation: parent.fragmentation.inherit(),
             scrolling: parent.scrolling.inherit(),
             custom_properties: parent.custom_properties.clone(),
             direction: parent.direction,

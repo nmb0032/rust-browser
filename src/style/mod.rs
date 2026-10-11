@@ -38,10 +38,12 @@ mod directionality;
 pub mod effects;
 #[cfg(test)]
 mod effects_tests;
+pub mod fragmentation;
 mod generated_properties;
 pub(crate) mod grid;
 mod matching;
 pub mod metadata;
+pub(crate) mod paged;
 pub mod typography;
 pub use grid::{GridAutoFlow, GridLine, GridRepeat, GridTrack, TrackBreadth, TrackSize};
 mod property;

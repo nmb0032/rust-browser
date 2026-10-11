@@ -102,17 +102,31 @@ fn layout_block(
             BlockMode::Root(height) | BlockMode::Flow(height, _, _) => (height, None, None),
             BlockMode::Positioned { width, height, .. } => (height, Some(width), height),
         };
-        super::writing::layout(
-            layout_box,
-            x,
-            available_width,
-            height,
-            forced_width,
-            forced_height,
-            percentage_reference,
-            font,
-            diagnostics,
-        );
+        if layout_box.style.fragmentation.columns() {
+            super::fragmentation::layout_vertical_columns(
+                layout_box,
+                x,
+                available_width,
+                height,
+                forced_width,
+                forced_height,
+                percentage_reference,
+                font,
+                diagnostics,
+            );
+        } else {
+            super::writing::layout(
+                layout_box,
+                x,
+                available_width,
+                height,
+                forced_width,
+                forced_height,
+                percentage_reference,
+                font,
+                diagnostics,
+            );
+        }
         return BlockFlow {
             before: MarginStrut::new(layout_box.margin.top),
             after: MarginStrut::new(layout_box.margin.bottom),
@@ -525,6 +539,14 @@ fn layout_block(
             (content_x, content_y, width),
             explicit_height,
             layout_box.definite_height,
+            font,
+            diagnostics,
+        ) as f64
+    } else if layout_box.style.fragmentation.columns() {
+        super::fragmentation::layout_columns(
+            layout_box,
+            (content_x, content_y, width),
+            explicit_height,
             font,
             diagnostics,
         ) as f64
