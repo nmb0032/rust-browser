@@ -197,6 +197,9 @@ fn face_identity_collection_indices_and_failed_loading_are_stable() {
     let style = named("Noto Sans Arabic");
     let face = fonts.select(&style);
     assert_eq!(face.index, 1);
+    let local = fonts.local("NotoSansArabic-Regular").unwrap();
+    assert!(Arc::ptr_eq(&face, &local));
+    assert_eq!(local.index, 1);
     assert!(Arc::ptr_eq(&face, &fonts.clone().select(&style)));
     let run = fonts.shape(&style, "سلام");
     let separate = fixture_context().shape(&style, "سلام");
@@ -228,6 +231,47 @@ fn face_identity_collection_indices_and_failed_loading_are_stable() {
     assert_eq!(fonts.diagnostics().len(), 1);
     assert!(fonts.diagnostics()[0].contains("invalid OpenType face"));
     assert!(fonts.shape(&named("Broken"), "ffi").glyphs[0].id != 0);
+}
+
+#[test]
+fn local_full_and_postscript_names_do_not_substitute_another_family_face() {
+    let fonts = fixture_context();
+    assert!(fonts.local("Definitely Missing").is_none());
+    let bold = fonts.local("NotoSans-Bold").unwrap();
+    assert_eq!(bold.weight, 700);
+    let italic = fonts.local("Noto Sans Italic").unwrap();
+    assert!(italic.italic);
+    assert!(Arc::ptr_eq(&bold, &fonts.local("nOtOsAnS-bOlD").unwrap()));
+}
+
+#[test]
+fn author_weight_matching_uses_css_search_order_and_precedes_installed_families() {
+    use crate::css::font_face::{FontDescriptor, FontSource};
+    let fonts = fixture_context();
+    let regular = fonts.select(&named("Noto Sans"));
+    let bold = fonts.local("NotoSans-Bold").unwrap();
+    let italic = fonts.local("NotoSans-Italic").unwrap();
+    let author = |weight, face| AuthorFont {
+        descriptor: FontDescriptor {
+            family: "Noto Sans".into(),
+            sources: vec![FontSource::Local("fixture".into())],
+            weight,
+            style: FontStyle::Normal,
+            ranges: vec![(0, 0x10ffff)],
+        },
+        face,
+    };
+    let overlay = fonts.with_author_fonts(vec![
+        author(400, regular.clone()),
+        author(500, italic.clone()),
+        author(600, bold.clone()),
+    ]);
+    for (request, expected) in [(450.0, &italic), (390.0, &regular), (550.0, &bold)] {
+        let mut style = named("Noto Sans");
+        style.font_weight.0 = request;
+        assert!(Arc::ptr_eq(&overlay.select(&style), expected));
+    }
+    assert!(Arc::ptr_eq(&fonts.select(&named("Noto Sans")), &regular));
 }
 
 #[test]

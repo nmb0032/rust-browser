@@ -53,7 +53,7 @@ pub enum BackgroundImage {
     None,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FontStyle {
     #[default]
     Normal,

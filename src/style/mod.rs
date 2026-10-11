@@ -5,7 +5,7 @@
 //! Three-valued media queries gate rules and stylesheet media attributes.
 //! Container conditions/units use an explicit completed-layout snapshot phase.
 //! Layer, supports, namespace, scope, nesting, and bounded property-registration
-//! semantics are compiled from retained ASTs; font-face selection comes later.
+//! semantics are compiled from retained ASTs; the engine loads font-face sources.
 //!
 //! The cascade orders user-agent, user, and author origins, reversing their
 //! precedence for `!important`. Optional user CSS is supplied through
@@ -38,6 +38,7 @@ pub mod metadata;
 mod property;
 mod stylesheets;
 mod variables;
+pub(crate) use cascade::{FontRule, font_rules};
 
 pub use crate::css::selectors::{InteractionState, PseudoElement};
 pub use cascade::resolve_with_container_environment;

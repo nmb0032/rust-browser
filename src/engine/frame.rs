@@ -33,6 +33,7 @@ pub struct Frame {
     // so repeated restyles do not append the same errors to previous results.
     collected_stylesheets: StylesheetCollection,
     fonts: crate::text::FontContext,
+    pub(super) web_fonts: super::web_fonts::WebFonts,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +73,7 @@ impl Frame {
             interaction_state: InteractionState::default(),
             collected_stylesheets,
             fonts: crate::text::FontContext::bundled(),
+            web_fonts: super::web_fonts::WebFonts::default(),
         };
         frame.refresh_target();
         frame
@@ -175,22 +177,27 @@ impl Frame {
         font: &crate::text::FontContext,
         limit: usize,
     ) -> LayoutTree {
-        self.fonts = font.clone();
+        self.fonts = self.web_fonts.context(self, font);
+        let font = self.fonts.clone();
         let mut snapshot = style::ContainerSnapshot::default();
         let mut last = None;
         for _ in 0..limit.max(1) {
+            let mut sheets = self.collected_stylesheets.clone();
+            sheets
+                .diagnostics
+                .extend(self.web_fonts.diagnostics().iter().cloned());
             let resolution = style::resolve_with_fonts(
                 &self.document,
-                self.collected_stylesheets.clone(),
+                sheets,
                 self.media_environment,
                 &self.interaction_state,
                 &snapshot,
-                font,
+                &font,
             );
             self.stylesheets = resolution.stylesheets;
             self.styles = resolution.styles;
             let mut tree = self.layout_tree();
-            tree.layout(self.media_environment.viewport_width, font);
+            tree.layout(self.media_environment.viewport_width, &font);
             let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
             if next == snapshot {
                 return tree;
@@ -212,9 +219,40 @@ impl Frame {
 
     pub(super) fn set_stylesheets(&mut self, stylesheets: StylesheetCollection) {
         self.collected_stylesheets = stylesheets.clone();
+        self.stylesheets = stylesheets;
+        self.refresh_fonts();
+    }
+
+    /// Selected document overlay, including downloaded sources. No resource I/O.
+    pub fn font_context(&self) -> &crate::text::FontContext {
+        &self.fonts
+    }
+
+    /// A viewport change can activate previously unrequested fonts. Render
+    /// fallback immediately, then start a separate cancellable resource phase.
+    pub fn has_pending_web_fonts(&self) -> bool {
+        self.web_fonts.pending(self)
+    }
+
+    pub fn load_pending_web_fonts(
+        &mut self,
+        mut progress: impl FnMut(&Frame) -> Result<(), Box<dyn std::error::Error>>,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        super::web_fonts::load(self, &mut progress, &cancelled)?;
+        self.web_fonts.ready = true;
+        Ok(())
+    }
+
+    pub(super) fn refresh_fonts(&mut self) {
+        self.fonts = self.web_fonts.context(self, &self.fonts);
+        let mut sheets = self.collected_stylesheets.clone();
+        sheets
+            .diagnostics
+            .extend(self.web_fonts.diagnostics().iter().cloned());
         let resolution = style::resolve_with_fonts(
             &self.document,
-            stylesheets,
+            sheets,
             self.media_environment,
             &self.interaction_state,
             &style::ContainerSnapshot::default(),

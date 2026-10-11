@@ -446,7 +446,8 @@ media-query semantics, advanced selectors, alpha colors, and font-face
 selection are still deferred at this initial pipeline stage. Steps 8.2–8.3
 add horizontal auto margins and normal-flow vertical margin collapsing.
 `font-family` is
-computed and inherited; 8.6 adds installed-face selection and outline fallback.
+computed and inherited; 8.6 adds installed-face selection and outline fallback;
+8.7 adds document-owned downloadable author faces.
 Nonzero
 border widths originally painted solid rectangular strips without a
 `border-style` model; 7.5 adds visible-style widths and basic border patterns.
@@ -2230,7 +2231,7 @@ and the CSSOM parts covered here meet the conformance gate.
   variation-axis selection, color/bitmap-only and CFF2 raster formats are not
   supported. Arabic and other individual RTL script runs shape in visual glyph
   order, but mixed-direction paragraphs/style runs remain in logical run order:
-  no full UAX #9 or RTL inline-flow claim. Web fonts remain 8.7; paragraph bidi
+  no full UAX #9 or RTL inline-flow claim. Web fonts are added in 8.7; paragraph bidi
   and writing modes remain 8.14; color emoji, advanced font features, dictionary
   hyphenation and the wider typography umbrella remain 8.16.
 
@@ -2240,9 +2241,90 @@ and the CSSOM parts covered here meet the conformance gate.
   wrapping/discretionary context/controls/tabs, split nodes and hit ownership,
   selected/root/container metrics, relayout/clones and failure/resource caps.
   CLI regressions cover deterministic and production-default selected glyph dumps.
-  Milestone 8 remains incomplete. **Stop here for user review before 8.7.**
-- [ ] **8.7 Load web fonts.** Support `@font-face`.
+  Milestone 8 remains incomplete; subsequent steps continue autonomously.
+- [x] **8.7 Load web fonts.** Support `@font-face`.
   *You'll see:* sites render in their chosen fonts.
+
+  **Implemented subset:** Retained author ASTs compile `@font-face` through
+  the same media, style/link media attributes, `@supports`, valid `@import`
+  graphs and cascade-layer ordering as declarations. URLs resolve relative to
+  each redirected stylesheet/import, or the HTML document base for embedded
+  sheets. Quoted/unquoted CSS-escaped `url()` and exact full-font/PostScript
+  `local()` candidates are tried in order. Unsupported format/technology hints,
+  unavailable local sources, HTTP failures, decode/raster failures and invalid
+  descriptors produce bounded inspectable CSS/resource diagnostics with real
+  outline/bundled fallback. TTF/OpenType glyf/CFF, WOFF and WOFF2 use the existing
+  shaping/raster path; WOFF containers are decoded by maintained MIT-licensed
+  `wuff`, with bounded custom zlib/Brotli readers, not an engine font decoder.
+
+  CSS author-family aliases take priority over installed families. Static
+  integer weights 1–1000, normal/italic/oblique and hexadecimal/wildcard
+  `unicode-range` descriptors choose candidate faces; weight search uses the
+  CSS asymmetric 400–500 ordering. Uncovered graphemes fall back without
+  leaking a restricted author face outside its range. Selected-face metrics
+  complete ch/ex/cap/ic/lh lengths, shaping advances determine line fitting,
+  and immutable indexed glyph payloads paint the same source face (including
+  image alt text, markers and generated text).
+
+  **Resource lifetime:** Each Frame owns font resources, successful/failed
+  source decisions, bounded diagnostics and descriptor-to-face selections.
+  Clones/progressive snapshots share immutable byte/face Arcs; installed
+  discovery remains shared, while author selections and shape caches are
+  document overlays, never inserted into the system/bundled singleton.
+  Duplicate URLs (including redirected final aliases) share decode/face data.
+  Restyle, container feedback and layout never fetch fonts. Inactive conditional
+  fonts are not requested; changing viewport/theme can render fallback and
+  activate a separate cancellable font-resource worker through Navigation.
+  That worker reuses the document cache and preserves current viewport/input
+  state on publication. `Frame::has_pending_web_fonts` and
+  `load_pending_web_fonts` expose this phase to embedders.
+
+  **Fetch/bounds:** Anonymous HTTP font requests send Origin and require an
+  exact or wildcard Access-Control-Allow-Origin on cross-origin responses,
+  including redirects. Credentials in URLs, unsupported schemes, HTTP-to-file
+  references and HTTPS mixed content are blocked before requests; explicit
+  font-MIME data URLs and file-page resources are supported. This is a font
+  policy subset, not the full Fetch/CORS milestone. Requests check cancellation
+  between redirects/body chunks; an in-flight blocking socket call is bounded
+  by the existing 15-second timeout, not immediately interruptible.
+  Limits: 64 source attempts, 256 retained font rules, 16 loaded faces and
+  200,000 glyphs per document; 16 MiB encoded resource, 32 MiB decoded font,
+  64 MiB retained decoded sources and cumulative download/decode byte work,
+  including streamed decompression that subsequently fails.
+  Descriptor/source/range counts and diagnostic storage are bounded.
+  Exact local-name lookup probes at most 128 plausible faces/64 MiB of source
+  data views per lookup; nonmatching names do not decode or fill raster caches.
+  WOFF1 table lengths and WOFF declared sizes are preflighted; custom
+  decompression streams stop at 32 MiB, with final decoded output checked too.
+  Wuff also applies its own 128 MiB WOFF2 reconstruction cap. These limits are
+  not an exhaustive hostile-font sanitizer or a guarantee that decoder/raster
+  intermediate allocations equal the retained-byte limit.
+
+  **Explicit partial behavior:** All valid font-display values use progressive
+  visible fallback followed by swap; timed block, fallback expiry and optional
+  abandonment are not implemented (non-swap choices diagnose that approximation).
+  Weight ranges/variation-axis selection, oblique angles, stretch/width beyond
+  normal, metric overrides, size-adjust, font-feature/variation settings,
+  tech(), SVG/EOT and variation format hints are unsupported/diagnosed.
+  Outline variable fonts use the actual default instance with diagnostics;
+  bitmap/color-only and CFF2 faces cannot rasterize. Downloadable collections
+  and URL collection fragments are rejected rather than guessing an index;
+  exact local collection faces retain their fontdb index through shaping/paint.
+  Paragraph bidi, writing modes and advanced typography remain later steps.
+  `--bundled-fonts` disables general installed selection, not author downloads;
+  explicit local() still resolves installed names. Deterministic tests use
+  the licensed bundled local full name instead of depending on OS font names.
+
+  **Inspection/tests:** `cargo run -- tests/pages/web_fonts.html --dump=layout`
+  (also `--bundled-fonts`, `--dump=values`, `--dump=display-list`) exposes actual
+  downloadable face names, glyph IDs/clusters/advances and diagnostics.
+  Existing SIL OFL italic assets have generated WOFF/WOFF2 fixtures with
+  provenance; no system font files were copied. Offline HTTP/file/data tests
+  verify glyph IDs against the uncompressed face, changed widths/indexed pixels
+  and production framebuffer output, weights/styles/range splits, CSS escapes,
+  import/redirect bases, layer precedence, local names/collection indices,
+  CORS and failed source recovery, inactive/activated media, cancellation,
+  independent navigation, progressive publication and no relayout refetch.
 - [ ] **8.8 Implement positioned layout and stacking.** Support `relative`,
   `absolute`, `fixed`, `z-index`, and CSS 2 Appendix E painting order.
   *You'll see:* overlays and fixed headers.

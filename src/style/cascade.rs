@@ -58,6 +58,56 @@ struct StyledSheet {
     rules: Vec<StyledRule>,
     index: RuleIndex,
     registrations: Vec<RegisteredRule>,
+    fonts: Vec<FontRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FontRule {
+    pub descriptor: css::font_face::FontDescriptor,
+    pub node_id: Option<NodeId>,
+    pub url: Option<url::Url>,
+    pub active: bool,
+    layer: usize,
+    rank: usize,
+}
+
+/// Uses the same conditional/import/layer compiler as author declarations.
+pub(crate) fn font_rules(
+    document: &Document,
+    sheets: &StylesheetCollection,
+    environment: MediaEnvironment,
+) -> Vec<FontRule> {
+    let mut layers = Layers::default();
+    let mut compiled = Vec::new();
+    for sheet in &sheets.stylesheets {
+        let mut diagnostics = Vec::new();
+        let active = document
+            .node(sheet.node_id)
+            .and_then(|n| n.as_element())
+            .is_none_or(|e| {
+                e.attribute("disabled").is_none()
+                    && e.attribute("media").is_none_or(|s| {
+                        media_matches(s, environment, Some(sheet.node_id), &mut diagnostics, true)
+                    })
+            });
+        let mut compiler = Compiler::<0>::new(
+            Some(sheet.node_id),
+            None,
+            &mut diagnostics,
+            environment,
+            &mut layers,
+            DeclarationContext::for_document(document),
+        );
+        compiler.url = sheet.url.clone();
+        compiled.push(compiler.compile(&sheet.stylesheet, active));
+    }
+    let mut fonts: Vec<_> = rank_layers(compiled, &layers)
+        .into_iter()
+        .flat_map(|s| s.fonts)
+        .take(256)
+        .collect();
+    fonts.sort_by_key(|f| f.rank);
+    fonts
 }
 
 #[derive(Clone, Debug)]
@@ -474,15 +524,16 @@ fn resolve_internal_fonts<const MODE: u8>(
                     true,
                 )
             });
-            let rules = Compiler::<MODE>::new(
+            let mut compiler = Compiler::<MODE>::new(
                 Some(sheet.node_id),
                 document.node(sheet.node_id).and_then(|node| node.parent()),
                 &mut diagnostics,
                 environment,
                 &mut author_layers,
                 declaration_context,
-            )
-            .compile(&sheet.stylesheet, active);
+            );
+            compiler.url = sheet.url.clone();
+            let rules = compiler.compile(&sheet.stylesheet, active);
             let prefix = sheet
                 .url
                 .as_ref()
@@ -887,6 +938,9 @@ fn rank_layers(mut sheets: Vec<StyledSheet>, layers: &Layers) -> Vec<StyledSheet
         for registration in &mut sheet.registrations {
             registration.rank = ranks[registration.layer];
         }
+        for font in &mut sheet.fonts {
+            font.rank = ranks[font.layer];
+        }
     }
     sheets
 }
@@ -901,6 +955,7 @@ struct Compiler<'a, const MODE: u8> {
     result: StyledSheet,
     containers: Vec<ContainerQuery>,
     declaration_context: DeclarationContext,
+    url: Option<url::Url>,
 }
 
 impl<'a, const MODE: u8> Compiler<'a, MODE> {
@@ -922,6 +977,7 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
             result: StyledSheet::default(),
             containers: Vec::new(),
             declaration_context,
+            url: None,
         }
     }
 
@@ -1018,6 +1074,7 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
             return;
         };
         let previous = std::mem::take(&mut self.namespaces);
+        let previous_url = self.url.replace(loaded.url.clone());
         let start = self.diagnostics.len();
         self.sheet(
             &loaded.stylesheet,
@@ -1029,6 +1086,7 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
             diagnostic.message = format!("{}: {}", loaded.url, diagnostic.message);
         }
         self.namespaces = previous;
+        self.url = previous_url;
     }
 
     fn rule(
@@ -1080,6 +1138,29 @@ impl<'a, const MODE: u8> Compiler<'a, MODE> {
                 let mut next_scopes = scopes.to_vec();
                 let mut next_active = active;
                 match name.as_str() {
+                    "font-face" => {
+                        if parent.is_some() || !self.containers.is_empty() || !scopes.is_empty() {
+                            self.diagnostic("@font-face is not supported inside style, scope or container rules");
+                            return;
+                        }
+                        let (descriptor, messages) = css::font_face::parse(rule);
+                        for message in messages {
+                            self.diagnostic(message);
+                        }
+                        if let Some(descriptor) = descriptor
+                            && self.result.fonts.len() < 256
+                        {
+                            self.result.fonts.push(FontRule {
+                                descriptor,
+                                node_id: self.node_id,
+                                url: self.url.clone(),
+                                active,
+                                layer,
+                                rank: 0,
+                            });
+                        }
+                        return;
+                    }
                     "media" => {
                         next_active &= media_matches(
                             rule.prelude(),

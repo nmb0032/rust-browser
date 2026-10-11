@@ -23,6 +23,7 @@ pub struct Navigation {
     options: LoadOptions,
     receiver: Option<Receiver<LoadEvent>>,
     cancelled: Arc<AtomicBool>,
+    font_loading: bool,
 }
 
 impl Navigation {
@@ -32,10 +33,12 @@ impl Navigation {
             options,
             receiver: None,
             cancelled: Arc::new(AtomicBool::new(false)),
+            font_loading: false,
         }
     }
 
     pub fn start_load(&mut self) -> Result<(), Box<dyn Error>> {
+        self.font_loading = false;
         self.cancelled.store(true, Ordering::Relaxed);
         self.receiver = None;
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -82,6 +85,47 @@ impl Navigation {
         Ok(())
     }
 
+    /// Load newly active fonts without refetching HTML/CSS/images. The same
+    /// navigation cancellation/channel lifetime owns this resource worker.
+    pub fn start_font_load(&mut self, frame: Arc<Frame>) -> Result<(), Box<dyn Error>> {
+        self.cancelled.store(true, Ordering::Relaxed);
+        self.receiver = None;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        thread::Builder::new()
+            .name("font-loader".into())
+            .spawn(move || {
+                let mut frame = (*frame).clone();
+                let result = frame.load_pending_web_fonts(
+                    |frame| {
+                        sender
+                            .send(LoadEvent::Progress(Arc::new(frame.clone())))
+                            .map_err(|_| {
+                                io::Error::new(io::ErrorKind::BrokenPipe, "font receiver closed")
+                                    .into()
+                            })
+                    },
+                    || worker_cancelled.load(Ordering::Relaxed),
+                );
+                if worker_cancelled.load(Ordering::Relaxed) {
+                    return;
+                }
+                if let Err(error) = result {
+                    eprintln!("font resource phase failed: {error}");
+                }
+                let _ = sender.send(LoadEvent::Finished);
+            })?;
+        self.cancelled = cancelled;
+        self.receiver = Some(receiver);
+        self.font_loading = true;
+        Ok(())
+    }
+
+    pub fn is_font_loading(&self) -> bool {
+        self.font_loading
+    }
+
     pub fn try_recv(&mut self) -> Result<LoadEvent, TryRecvError> {
         let event = self
             .receiver
@@ -90,6 +134,9 @@ impl Navigation {
             .try_recv()?;
         if let LoadEvent::Progress(frame) = &event {
             self.history.current_mut().url = frame.url.clone();
+        }
+        if matches!(event, LoadEvent::Finished) {
+            self.font_loading = false;
         }
         Ok(event)
     }

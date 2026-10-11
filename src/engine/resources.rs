@@ -158,10 +158,13 @@ pub(super) fn load_resources(
         stylesheets.diagnostics.extend(diagnostics.iter().cloned());
         frame.set_stylesheets(stylesheets);
         on_progress(frame)?;
+        super::web_fonts::load(frame, on_progress, cancelled)?;
     }
     let mut stylesheets = style::collect_stylesheets_with_external(&frame.document, &external);
     stylesheets.diagnostics.extend(diagnostics);
     frame.set_stylesheets(stylesheets);
+    super::web_fonts::load(frame, on_progress, cancelled)?;
+    frame.web_fonts.ready = true;
     Ok(())
 }
 

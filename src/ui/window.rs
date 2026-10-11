@@ -160,8 +160,20 @@ impl BrowserWindow {
         let mut document_changed = false;
 
         loop {
+            let font_loading = self.navigation.is_font_loading();
             match self.navigation.try_recv() {
                 Ok(LoadEvent::Progress(frame)) => {
+                    let mut frame = frame;
+                    if self.navigation.is_font_loading() {
+                        let state = self.frame.interaction_state().clone();
+                        let environment = self.frame.media_environment();
+                        let url = self.frame.url.clone();
+                        let next = Arc::make_mut(&mut frame);
+                        next.url = url.clone();
+                        self.navigation.history.current_mut().url = url;
+                        next.set_media_environment(environment);
+                        next.set_interaction_state(state);
+                    }
                     for diagnostic in &frame.stylesheets.diagnostics {
                         eprintln!(
                             "CSS/resource at {:?}: {}",
@@ -175,6 +187,9 @@ impl BrowserWindow {
                     break;
                 }
                 Ok(LoadEvent::Finished) => {
+                    if font_loading {
+                        continue;
+                    }
                     self.is_loading = false;
                     if let Some(scroll) = self.restore_scroll.take() {
                         self.set_scroll(scroll);
@@ -660,7 +675,14 @@ impl ApplicationHandler for BrowserWindow {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.receive_load_events();
-        if self.is_loading {
+        if !self.is_loading
+            && !self.navigation.is_font_loading()
+            && self.frame.has_pending_web_fonts()
+            && let Err(error) = self.navigation.start_font_load(Arc::clone(&self.frame))
+        {
+            eprintln!("Could not start font loader: {error}");
+        }
+        if self.is_loading || self.navigation.is_font_loading() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(16),
             ));

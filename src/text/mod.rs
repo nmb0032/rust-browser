@@ -80,6 +80,9 @@ impl Deref for FontFace {
 }
 
 impl FontFace {
+    pub(crate) fn has_source(&self, bytes: &Arc<[u8]>) -> bool {
+        Arc::ptr_eq(&self.bytes, bytes)
+    }
     pub(crate) fn units(&self, size: f32) -> FontUnits {
         let scale = size / self.units_per_em;
         FontUnits {
@@ -233,6 +236,14 @@ struct FontSystem {
     bundled: Arc<FontFace>,
     cache: Mutex<Cache>,
     report_missing: bool,
+    parent: Option<FontContext>,
+    author: Vec<AuthorFont>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AuthorFont {
+    pub descriptor: crate::css::font_face::FontDescriptor,
+    pub face: Arc<FontFace>,
 }
 
 /// Clones share discovery and bounded caches. `bundled()` never reads OS fonts;
@@ -334,7 +345,120 @@ impl FontContext {
             bundled: bundled_face(),
             cache: Mutex::new(Cache::default()),
             report_missing,
+            parent: None,
+            author: Vec::new(),
         }))
+    }
+
+    pub(crate) fn with_author_fonts(&self, author: Vec<AuthorFont>) -> Self {
+        if author.len() == self.0.author.len()
+            && author
+                .iter()
+                .zip(&self.0.author)
+                .all(|(a, b)| a.descriptor == b.descriptor && Arc::ptr_eq(&a.face, &b.face))
+        {
+            return self.clone();
+        }
+        let base = self.0.parent.as_ref().unwrap_or(self);
+        if author.is_empty() {
+            return base.clone();
+        }
+        Self(Arc::new(FontSystem {
+            database: Database::new(),
+            bundled: base.0.bundled.clone(),
+            cache: Mutex::new(Cache::default()),
+            report_missing: base.0.report_missing,
+            parent: Some(base.clone()),
+            author,
+        }))
+    }
+
+    pub(crate) fn same_discovery(&self, other: &Self) -> bool {
+        Arc::ptr_eq(
+            &self.0.parent.as_ref().unwrap_or(self).0,
+            &other.0.parent.as_ref().unwrap_or(other).0,
+        )
+    }
+
+    /// Exact full-font or PostScript name, never a family query that could
+    /// silently resolve a different weight or collection index.
+    pub(crate) fn local(&self, name: &str) -> Option<Arc<FontFace>> {
+        fn matches(face: &FontFace, name: &str) -> bool {
+            face.shaper()
+                .names()
+                .into_iter()
+                .filter(|n| matches!(n.name_id, 4 | 6))
+                .filter_map(|n| n.to_string())
+                .any(|s| s.eq_ignore_ascii_case(name))
+        }
+        if let Some(parent) = &self.0.parent {
+            return parent.local(name);
+        }
+        if matches(&self.0.bundled, name) {
+            return Some(self.0.bundled.clone());
+        }
+        let mut probes = 0;
+        let mut source_bytes = 0;
+        for info in self.0.database.faces().take(4096) {
+            if !(info.post_script_name.eq_ignore_ascii_case(name)
+                || info.families.iter().any(|f| {
+                    name.to_ascii_lowercase()
+                        .starts_with(&f.0.to_ascii_lowercase())
+                }))
+            {
+                continue;
+            }
+            let size = match self.0.database.face_source(info.id)?.0 {
+                Source::Binary(bytes) => bytes.as_ref().as_ref().len(),
+                Source::File(path) | Source::SharedFile(path, _) => {
+                    let Ok(metadata) = fs::metadata(path) else {
+                        continue;
+                    };
+                    usize::try_from(metadata.len()).ok()?
+                }
+            };
+            if size > MAX_FONT_BYTES {
+                continue;
+            }
+            if probes >= 128 || source_bytes + size > MAX_SOURCE_BYTES {
+                break;
+            }
+            probes += 1;
+            source_bytes += size;
+            if self.0.database.with_face_data(info.id, |bytes, index| {
+                bytes.len() <= MAX_FONT_BYTES
+                    && rustybuzz::Face::from_slice(bytes, index).is_some_and(|face| {
+                        face.names()
+                            .into_iter()
+                            .filter(|n| matches!(n.name_id, 4 | 6))
+                            .filter_map(|n| n.to_string())
+                            .any(|n| n.eq_ignore_ascii_case(name))
+                    })
+            }) == Some(true)
+                && let Some(face) = self.load(info.id)
+            {
+                return Some(face);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn downloadable(bytes: Arc<[u8]>) -> Result<Arc<FontFace>, String> {
+        let face = rustybuzz::Face::from_slice(&bytes, 0).ok_or("invalid OpenType font")?;
+        let name = face
+            .names()
+            .into_iter()
+            .filter(|n| n.name_id == 4)
+            .find_map(|n| n.to_string())
+            .unwrap_or_else(|| "web font".into());
+        let weight = face.weight().to_number();
+        let italic = face.is_italic() || face.is_oblique();
+        if face.number_of_glyphs() as usize > MAX_GLYPHS {
+            return Err("font glyph limit".into());
+        }
+        std::panic::catch_unwind(|| FontFace::load(bytes, 0, name, weight, italic))
+            .map_err(|_| "font parser rejected malformed outlines".to_string())?
+            .map(Arc::new)
     }
 
     fn report(cache: &mut Cache, message: String) {
@@ -459,6 +583,39 @@ impl FontContext {
     }
 
     fn query(&self, style: &ComputedStyle, family: Family<'_>) -> Option<Arc<FontFace>> {
+        self.query_text(style, family, None)
+    }
+
+    fn query_text(
+        &self,
+        style: &ComputedStyle,
+        family: Family<'_>,
+        text: Option<&str>,
+    ) -> Option<Arc<FontFace>> {
+        if let Some(parent) = &self.0.parent {
+            if let Family::Name(name) = family {
+                let candidates = self
+                    .0
+                    .author
+                    .iter()
+                    .rev()
+                    .filter(|f| f.descriptor.family.eq_ignore_ascii_case(name));
+                let defined = candidates.clone().next().is_some();
+                let selected = candidates
+                    .filter(|f| text.is_none_or(|t| f.descriptor.covers(t) && f.face.covers(t)))
+                    .min_by_key(|f| {
+                        (
+                            style_distance(style.font_style, f.descriptor.style),
+                            weight_distance(style.font_weight.0 as u16, f.descriptor.weight),
+                        )
+                    })
+                    .map(|f| f.face.clone());
+                if defined {
+                    return selected;
+                }
+            }
+            return parent.query_text(style, family, text);
+        }
         let selected = self
             .0
             .database
@@ -512,7 +669,7 @@ impl FontContext {
             .0
             .iter()
             .take(32)
-            .find_map(|name| self.query(style, Self::family(name)))
+            .find_map(|name| self.query_text(style, Self::family(name), Some("0")))
             .unwrap_or_else(|| self.0.bundled.clone());
         let mut cache = self.0.cache.lock().unwrap_or_else(|e| e.into_inner());
         if cache.requests.len() < MAX_REQUESTS
@@ -530,14 +687,27 @@ impl FontContext {
         primary: &Arc<FontFace>,
         remaining_probes: &mut usize,
     ) -> Arc<FontFace> {
-        if primary.covers(text) {
+        if self.0.parent.is_none() && primary.covers(text) {
             return primary.clone();
         }
         for name in style.font_family.0.iter().take(32) {
-            if let Some(face) = self.query(style, Self::family(name))
+            if let Some(face) = self.query_text(style, Self::family(name), Some(text))
                 && face.covers(text)
             {
                 return face;
+            }
+            if let Some(parent) = &self.0.parent {
+                // Never admit document faces through the installed fallback cache.
+                let mut installed = style.clone();
+                installed.font_family.0.retain(|family| {
+                    !matches!(family, FamilyName::Named(name) if self.0.author.iter().any(|f| f.descriptor.family.eq_ignore_ascii_case(name)))
+                });
+                return parent.fallback(
+                    &installed,
+                    text,
+                    &parent.select(&installed),
+                    remaining_probes,
+                );
             }
         }
         {
@@ -707,11 +877,17 @@ impl FontContext {
                     .map(|c| c.script())
                     .find(|s| !matches!(s, Script::Common | Script::Inherited | Script::Unknown))
                     .unwrap_or(script);
-                let next_face = if word_face.covers(grapheme) {
-                    word_face.clone()
-                } else {
-                    self.fallback(style, grapheme, &primary, &mut remaining_probes)
-                };
+                let author_word = self
+                    .0
+                    .author
+                    .iter()
+                    .any(|f| Arc::ptr_eq(&f.face, &word_face) && f.descriptor.covers(word));
+                let next_face =
+                    if word_face.covers(grapheme) && (self.0.author.is_empty() || author_word) {
+                        word_face.clone()
+                    } else {
+                        self.fallback(style, grapheme, &primary, &mut remaining_probes)
+                    };
                 if !pending.is_empty() && (!Arc::ptr_eq(&face, &next_face) || script != next_script)
                 {
                     result.append(&shape_face(
@@ -726,6 +902,7 @@ impl FontContext {
                     ));
                     pending.clear();
                 }
+
                 if pending.is_empty() {
                     start = offset;
                     face = next_face;
@@ -990,7 +1167,40 @@ fn shape_face(
     result
 }
 
-fn invisible(c: char) -> bool {
+fn style_distance(request: FontStyle, candidate: FontStyle) -> u8 {
+    if request == candidate {
+        0
+    } else if request != FontStyle::Normal && candidate != FontStyle::Normal {
+        1
+    } else {
+        2
+    }
+}
+
+fn weight_distance(request: u16, candidate: u16) -> (u8, u16) {
+    // CSS Fonts' asymmetric 400..500 search, not absolute nearest weight.
+    if (400..=500).contains(&request) {
+        if (request..=500).contains(&candidate) {
+            (0, candidate - request)
+        } else if candidate < request {
+            (1, request - candidate)
+        } else {
+            (2, candidate - 500)
+        }
+    } else if request < 400 {
+        if candidate <= request {
+            (0, request - candidate)
+        } else {
+            (1, candidate - request)
+        }
+    } else if candidate >= request {
+        (0, candidate - request)
+    } else {
+        (1, request - candidate)
+    }
+}
+
+pub(crate) fn invisible(c: char) -> bool {
     matches!(c as u32, 0x00ad | 0x034f | 0x061c | 0x180e | 0x200b..=0x200f
         | 0x202a..=0x202e | 0x2060..=0x206f | 0xfe00..=0xfe0f | 0xfeff | 0xe0100..=0xe01ef)
 }

@@ -25,3 +25,11 @@ https://fonts.gstatic.com/l/font?kit=o-0mIpQlx3QUlC5A4PNB6Ryti20_6n1iPHjcz6L1SoM
 Italic:
 https://fonts.gstatic.com/l/font?kit=o-0kIpQlx3QUlC5A4PNr4C5OaxRsfNNlKbCePevHtVtX57DGjDU1QDce6VfAwVMYhuXPk_38HmIUkA&skey=10db4434b0359efc&v=v42
 SIL Open Font License 1.1, accompanying OFL.txt.
+
+NotoSansItalic-fixture.woff and NotoSansItalic-fixture.woff2 (2026-10-11):
+Lossless WOFF/WOFF2 container conversions of the existing licensed
+NotoSansItalic-fixture.ttf above, generated locally with FontTools 4.66.1
+and Brotli. No system font inputs, new glyphs or outline modifications.
+Reproduce with fontTools.ttLib.TTFont: load the TTF, set flavor="woff" or
+flavor="woff2", and save under the corresponding fixture extension.
+The original SIL Open Font License 1.1 and source provenance apply.

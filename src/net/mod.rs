@@ -3,9 +3,10 @@
 mod client;
 mod location;
 
+pub(crate) use client::fetch_font;
 pub use client::{
-    FetchError, MAX_CSS_BYTES, MAX_HTML_BYTES, MAX_IMAGE_BYTES, Resource, ResponseMetadata,
-    fetch_resource,
+    FetchError, MAX_CSS_BYTES, MAX_FONT_BYTES, MAX_HTML_BYTES, MAX_IMAGE_BYTES, Resource,
+    ResponseMetadata, fetch_resource,
 };
 pub use location::location_url;
 

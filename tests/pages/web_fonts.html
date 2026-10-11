@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Document-owned web fonts</title>
+<style>
+  @font-face {
+    font-family: "Web Noto";
+    src: url("../../assets/fonts/noto-sans/NotoSansItalic-fixture.woff2") format("woff2"),
+         url("../../assets/fonts/noto-sans/NotoSansItalic-fixture.ttf") format("truetype");
+    font-style: italic;
+    font-weight: 400;
+    font-display: swap;
+    unicode-range: U+0000-007F;
+  }
+  body { margin: 24px; }
+  p { font-size: 32px; }
+  .web { font-family: "Web Noto", sans-serif; font-style: italic; }
+  .fallback { font-family: "Missing web font", sans-serif; font-style: italic; }
+  .measure { width: 10ch; border: 1px solid blue; }
+</style>
+<h1>Web font loading</h1>
+<p class="web">AVffi water</p>
+<p class="fallback">AVffi water</p>
+<p class="web measure">AVffi</p>
+<p>The small SIL OFL fixture covers AVffi0xHwater only. Other characters fall back.</p>

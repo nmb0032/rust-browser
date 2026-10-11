@@ -7,6 +7,7 @@ mod loader;
 mod navigation;
 mod resources;
 mod urls;
+mod web_fonts;
 
 pub use frame::{FragmentTarget, Frame, StylesheetSource};
 pub use history::{History, HistoryEntry};
