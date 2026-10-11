@@ -33,3 +33,26 @@ and Brotli. No system font inputs, new glyphs or outline modifications.
 Reproduce with fontTools.ttLib.TTFont: load the TTF, set flavor="woff" or
 flavor="woff2", and save under the corresponding fixture extension.
 The original SIL Open Font License 1.1 and source provenance apply.
+
+NotoSansHebrew-Regular.ttf (2026-10-11):
+https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSansHebrew/NotoSansHebrew-Regular.ttf
+SHA-256: a7fa16fffb27bedb060a0866267c29e9859aeb9c21cc33f5b3aaf6eb062eca85
+SIL Open Font License 1.1, upstream LICENSE saved as OFL-Hebrew.txt:
+https://raw.githubusercontent.com/notofonts/noto-fonts/main/LICENSE
+Used only as a deterministic test fixture, never discovered from system fonts.
+
+NotoSansJP-fixture.ttf (2026-10-11):
+Google Fonts Noto Sans JP v57 TrueType subset: 日本語あいうえお水漢字、。「」.
+Request:
+https://fonts.googleapis.com/css2?family=Noto+Sans+JP&text=%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%81%82%E3%81%84%E3%81%86%E3%81%88%E3%81%8A%E6%B0%B4%E6%BC%A2%E5%AD%97%E3%80%81%E3%80%82%E3%80%8C%E3%80%8D
+Source:
+https://fonts.gstatic.com/l/font?kit=-F6jfjtqLzI2JPCgQBnw7HFyzSD-AsregP8VFBEj75vA-1e_OSMX413myUTNrb-R3o_PeZihQSLth1znNLjGnT__8HVf4q0YGhsOGVlthA&skey=72472b0eb8793570&v=v57
+SHA-256: 08aadee9f8e900dbff1f7b2a24410c51ac8fb6579d5b7f40755da9e0bd1c40c2
+SIL Open Font License 1.1, accompanying OFL-CJK.txt (Noto CJK project).
+
+NotoSans-Regular.ttf (2026-10-11):
+Static Latin reference fixture (avoids default-instance-only variable-font
+diagnostics in strict headless reftests).
+https://raw.githubusercontent.com/notofonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf
+SHA-256: b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5
+SIL Open Font License 1.1, accompanying OFL.txt.

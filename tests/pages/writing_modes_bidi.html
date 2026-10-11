@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Writing modes and bidirectional text</title>
+<link rel="stylesheet" href="../reftests/support/writing.css">
+<style>
+body { padding: 16px; }
+h1 { font-size: 24px; }
+.sample { margin-block: 16px; padding-inline: 12px; border: 1px solid #708090; }
+.columns { writing-mode: vertical-rl; inline-size: 128px; block-size: 160px; font-family: Japanese, Latin; line-height: 24px; }
+.ltr-columns { writing-mode: vertical-lr; }
+.upright { text-orientation: upright; }
+.scroll { overflow-block: auto; block-size: 48px; }
+.orthogonal { writing-mode: horizontal-tb; inline-size: 64px; }
+</style>
+<h1>Native writing axes</h1>
+<div class="sample" dir="rtl" lang="ar">سلام 123 <bdi dir="ltr">ABC (45)</bdi> سلام</div>
+<div class="sample" dir="auto" lang="he">אבג 123 <bdi>ABC</bdi> אבג</div>
+<div class="sample"><bdo dir="rtl">ABC123</bdo> — explicit override</div>
+<div class="sample columns" lang="ja">日本語あいうえお「水」、漢字。<span>A12</span><div class="orthogonal">Horizontal</div>日本語水</div>
+<div class="sample columns ltr-columns upright" lang="ja">日本語あいうえお水漢字A12</div>
+<div class="sample columns scroll" lang="ja">日本語あいうえお水漢字日本語あいうえお水漢字日本語あいうえお水漢字</div>

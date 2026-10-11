@@ -1,0 +1,8 @@
+@font-face { font-family: Latin; src: url("../../../assets/fonts/noto-sans/NotoSans-Regular.ttf") format("truetype"); }
+@font-face { font-family: Arabic; src: url("../../../assets/fonts/noto-sans/NotoSansArabic-Regular.ttf") format("truetype"); }
+@font-face { font-family: Hebrew; src: url("../../../assets/fonts/noto-sans/NotoSansHebrew-Regular.ttf") format("truetype"); }
+@font-face { font-family: Japanese; src: url("../../../assets/fonts/noto-sans/NotoSansJP-fixture.ttf") format("truetype"); }
+html, body { margin: 0; }
+body { font: 16px/32px Latin, Arabic, Hebrew, Japanese; color: #102040; }
+.case { width: 240px; height: 32px; }
+.vertical { position: absolute; top: 96px; width: 64px; height: 32px; font: 16px/16px Japanese; }

@@ -59,6 +59,7 @@ enum BlockMode {
         width: f32,
         height: Option<f32>,
         definite: (bool, bool),
+        percentage_reference: f32,
     },
 }
 
@@ -73,6 +74,36 @@ fn layout_block(
     diagnostics: &mut Vec<Diagnostic>,
     floats: &mut super::floats::FloatContext,
 ) -> BlockFlow {
+    let percentage_reference = match mode {
+        BlockMode::Flow(_, reference) => reference,
+        BlockMode::Positioned {
+            percentage_reference,
+            ..
+        } => percentage_reference,
+        _ => available_width,
+    };
+    if layout_box.style.writing_mode.vertical() {
+        let (height, forced_width, forced_height) = match mode {
+            BlockMode::Root(height) | BlockMode::Flow(height, _) => (height, None, None),
+            BlockMode::Positioned { width, height, .. } => (height, Some(width), height),
+        };
+        super::writing::layout(
+            layout_box,
+            x,
+            available_width,
+            height,
+            forced_width,
+            forced_height,
+            percentage_reference,
+            font,
+            diagnostics,
+        );
+        return BlockFlow {
+            before: MarginStrut::new(layout_box.margin.top),
+            after: MarginStrut::new(layout_box.margin.bottom),
+            through: false,
+        };
+    }
     let reference_width = if let BlockMode::Flow(_, reference) = mode {
         reference
     } else {
@@ -88,11 +119,11 @@ fn layout_block(
         BlockMode::Positioned { .. } => None,
     };
     let style = &layout_box.style;
-    let margins = resolve_margins(style, reference_width, layout_box.node_id, diagnostics);
+    let margins = resolve_margins(style, percentage_reference, layout_box.node_id, diagnostics);
     let padding = resolve_edges(
         &style.padding,
         style.font_size,
-        reference_width,
+        percentage_reference,
         layout_box.node_id,
         "padding",
         diagnostics,
@@ -331,7 +362,9 @@ fn layout_block(
         && border.bottom == 0.0
         && padding.bottom == 0.0;
     let mut children_flow = ChildrenFlow::default();
-    let natural_height = if let Some((_, height)) = replaced_size {
+    let natural_height = if let Some(measurement) = layout_box.axis_measurement {
+        measurement.width as f64
+    } else if let Some((_, height)) = replaced_size {
         if let Some(image) = &layout_box.image
             && let Some(fragment) = image.alt_fragment(
                 Rect {
@@ -507,6 +540,29 @@ pub(super) fn layout_sized(
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    layout_sized_in(
+        layout_box,
+        reference_width,
+        width,
+        height,
+        definite,
+        reference_width,
+        font,
+        diagnostics,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn layout_sized_in(
+    layout_box: &mut LayoutBox,
+    reference_width: f32,
+    width: f32,
+    height: Option<f32>,
+    definite: (bool, bool),
+    percentage_reference: f32,
+    font: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     layout_block(
         layout_box,
         0.0,
@@ -516,6 +572,7 @@ pub(super) fn layout_sized(
             width,
             height,
             definite,
+            percentage_reference,
         },
         font,
         diagnostics,

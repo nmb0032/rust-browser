@@ -1,4 +1,4 @@
-# Native headless reftests (milestone 8.13)
+# Native headless reftests (milestones 8.13–8.14)
 
 Run from the repository root:
 
@@ -68,7 +68,17 @@ reference loads the matching TTF and uses preformatted text rather than collapse
 inline spans. A contract test proves `ffi` is a single real glyph from the
 downloadable italic face, not bundled fallback. These fixtures are already
 licensed under **SIL OFL 1.1**; see `assets/fonts/noto-sans/OFL.txt` and
-`PROVENANCE.txt`. No new font downloads or binary fixtures were added.
+`PROVENANCE.txt`.
+
+Milestone 8.14 adds static Latin/Arabic/Hebrew/Japanese URL fixtures and two
+assertion pages (ten total). The bidi reference uses explicitly visual-ordered
+flex runs rather than paragraph reordering. The vertical reference uses
+independently positioned glyph cells, a font-derived `ch` advance (not guessed
+pixel offsets), and an explicit visual-order vertical Hebrew reference.
+Contracts additionally compare real TTB OpenType glyph IDs/advances/positions and
+prove that declared Japanese fallback is selected after Latin, with nonzero
+glyph ink. All added sources and OFL licenses are recorded in `PROVENANCE.txt`;
+no system fonts or network resources are required at test time.
 
 `--resource-root` defaults to the current directory. Every document, reference,
 CSS import, image and non-data font URL must resolve to an existing regular file

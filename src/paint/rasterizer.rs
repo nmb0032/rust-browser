@@ -326,10 +326,11 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
         let metrics = &bitmap.metrics;
         let top = baseline as i32 - (metrics.ymin + metrics.height as i32);
         let left = pen_x + metrics.xmin as f32;
-        if left + metrics.width as f32 * 1.2 <= 0.0
-            || left >= width as f32
-            || top + metrics.height as i32 <= 0
-            || top >= height as i32
+        if glyph.rotation == crate::text::GlyphRotation::None
+            && (left + metrics.width as f32 * 1.2 <= 0.0
+                || left >= width as f32
+                || top + metrics.height as i32 <= 0
+                || top >= height as i32)
         {
             continue;
         }
@@ -341,16 +342,21 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
                 } else {
                     0
                 };
-                let x = pen_x.round() as i32 + metrics.xmin + glyph_x as i32 + italic_offset;
-                let y = top + glyph_y as i32;
+                let local_x = metrics.xmin + glyph_x as i32 + italic_offset;
+                let local_y = -(metrics.ymin + metrics.height as i32) + glyph_y as i32;
+                let (dx, dy) = match glyph.rotation {
+                    crate::text::GlyphRotation::None => (local_x, local_y),
+                    crate::text::GlyphRotation::Clockwise => (-local_y - 1, local_x),
+                    crate::text::GlyphRotation::CounterClockwise => (local_y, -local_x - 1),
+                };
+                let x = pen_x as i32 + dx;
+                let y = baseline as i32 + dy;
 
-                if let Some((left, right)) = glyph.clip {
-                    let origin = (run.start_x + glyph.x) * run.scale;
-                    if (x as f32) < (origin + left * run.scale).floor()
-                        || (x as f32) >= (origin + right * run.scale).floor()
-                    {
-                        continue;
-                    }
+                if let Some((left, right)) = glyph.clip
+                    && ((local_x as f32) < (left * run.scale).floor()
+                        || (local_x as f32) >= (right * run.scale).floor())
+                {
+                    continue;
                 }
                 if x < 0
                     || y < 0
@@ -365,12 +371,19 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
                     bitmap.pixels[glyph_y * metrics.width + glyph_x] as u32 * run.alpha / 255;
                 let index = y as usize * width + x as usize;
                 pixels[index] = blend(pixels[index], run.color, coverage);
+                let (bold_x, bold_y) = match glyph.rotation {
+                    crate::text::GlyphRotation::None => (x + 1, y),
+                    crate::text::GlyphRotation::Clockwise => (x, y + 1),
+                    crate::text::GlyphRotation::CounterClockwise => (x, y - 1),
+                };
                 if glyph.bold
-                    && x + 1 >= 0
-                    && ((x + 1) as usize) < width
-                    && run.clip.contains(x + 1, y)
+                    && bold_x >= 0
+                    && bold_y >= 0
+                    && (bold_x as usize) < width
+                    && (bold_y as usize) < height
+                    && run.clip.contains(bold_x, bold_y)
                 {
-                    let bold_index = y as usize * width + (x + 1) as usize;
+                    let bold_index = bold_y as usize * width + bold_x as usize;
                     pixels[bold_index] = blend(pixels[bold_index], run.color, coverage);
                 }
             }

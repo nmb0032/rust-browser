@@ -766,6 +766,7 @@ impl LayoutTree {
             viewport_modes.1 = Overflow::Auto;
         }
         let suppressed = propagated.map(|b| b.box_id);
+        let viewport_reversals = propagated.map_or((false, false), |b| scroll_reversals(&b.style));
         self.overflow.clear();
         for b in map.values() {
             if (b.kind != BoxKind::Block && !b.atomic_inline())
@@ -816,26 +817,47 @@ impl LayoutTree {
             // End padding remains reachable after the last overflowing child.
             container.extent = super::tree::finite_rect(
                 Rect {
+                    x: extent.x
+                        - if extent.x < container.port.x {
+                            b.padding.left
+                        } else {
+                            0.0
+                        },
+                    y: extent.y
+                        - if extent.y < container.port.y {
+                            b.padding.top
+                        } else {
+                            0.0
+                        },
                     width: extent.width
+                        + if extent.x < container.port.x {
+                            b.padding.left
+                        } else {
+                            0.0
+                        }
                         + if extent.x + extent.width > container.port.x + container.port.width {
                             b.padding.right
                         } else {
                             0.0
                         },
                     height: extent.height
+                        + if extent.y < container.port.y {
+                            b.padding.top
+                        } else {
+                            0.0
+                        }
                         + if extent.y + extent.height > container.port.y + container.port.height {
                             b.padding.bottom
                         } else {
                             0.0
                         },
-                    ..extent
                 },
                 b.node_id,
                 &mut self.diagnostics,
             );
             container.range = range(
                 *container,
-                b.style.direction,
+                scroll_reversals(&b.style),
                 b.node_id,
                 &mut self.diagnostics,
             );
@@ -849,7 +871,7 @@ impl LayoutTree {
         };
         self.viewport_overflow.range = range(
             self.viewport_overflow,
-            Direction::Ltr,
+            viewport_reversals,
             None,
             &mut self.diagnostics,
         );
@@ -928,9 +950,22 @@ fn consume(
     next
 }
 
+fn scroll_reversals(style: &crate::style::ComputedStyle) -> (bool, bool) {
+    if style.writing_mode.vertical() {
+        (
+            style.writing_mode.block_reverse(),
+            (style.writing_mode == crate::style::WritingMode::SidewaysLr)
+                ^ (style.direction == Direction::Rtl
+                    && style.text_orientation != crate::style::TextOrientation::Upright),
+        )
+    } else {
+        (style.direction == Direction::Rtl, false)
+    }
+}
+
 fn range(
     container: ScrollContainer,
-    direction: Direction,
+    reverse: (bool, bool),
     node: Option<NodeId>,
     diagnostics: &mut Vec<crate::style::Diagnostic>,
 ) -> ScrollRange {
@@ -938,7 +973,7 @@ fn range(
     let extent = container.extent;
     let mut range = ScrollRange::default();
     if container.overflow_x.scroll_container() && port.width > 0.0 {
-        if direction == Direction::Rtl {
+        if reverse.0 {
             range.min.x = finite_used(
                 (extent.x as f64 - port.x as f64).min(0.0),
                 node,
@@ -956,12 +991,22 @@ fn range(
         }
     }
     if container.overflow_y.scroll_container() && port.height > 0.0 {
-        range.max.y = finite_used(
-            (extent.y as f64 + extent.height as f64 - port.y as f64 - port.height as f64).max(0.0),
-            node,
-            "scroll maximum y",
-            diagnostics,
-        );
+        if reverse.1 {
+            range.min.y = finite_used(
+                (extent.y as f64 - port.y as f64).min(0.0),
+                node,
+                "scroll minimum y",
+                diagnostics,
+            );
+        } else {
+            range.max.y = finite_used(
+                (extent.y as f64 + extent.height as f64 - port.y as f64 - port.height as f64)
+                    .max(0.0),
+                node,
+                "scroll maximum y",
+                diagnostics,
+            );
+        }
     }
     range
 }

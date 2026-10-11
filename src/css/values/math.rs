@@ -105,18 +105,26 @@ pub enum RelativeUnit {
     Rlh,
     Vw,
     Vh,
+    Vi,
+    Vb,
     Vmin,
     Vmax,
     Svw,
     Svh,
+    Svi,
+    Svb,
     Svmin,
     Svmax,
     Lvw,
     Lvh,
+    Lvi,
+    Lvb,
     Lvmin,
     Lvmax,
     Dvw,
     Dvh,
+    Dvi,
+    Dvb,
     Dvmin,
     Dvmax,
     Cqw,
@@ -130,8 +138,12 @@ pub enum RelativeUnit {
 impl RelativeUnit {
     pub(crate) fn scale(self, context: &LengthContext) -> f64 {
         let (w, h) = match self {
-            Self::Svw | Self::Svh | Self::Svmin | Self::Svmax => context.small_viewport,
-            Self::Dvw | Self::Dvh | Self::Dvmin | Self::Dvmax => context.dynamic_viewport,
+            Self::Svw | Self::Svh | Self::Svi | Self::Svb | Self::Svmin | Self::Svmax => {
+                context.small_viewport
+            }
+            Self::Dvw | Self::Dvh | Self::Dvi | Self::Dvb | Self::Dvmin | Self::Dvmax => {
+                context.dynamic_viewport
+            }
             _ => context.large_viewport,
         };
         f64::from(match self {
@@ -149,17 +161,50 @@ impl RelativeUnit {
             Self::Rlh => context.root_line_height,
             Self::Vw | Self::Svw | Self::Lvw | Self::Dvw => w / 100.0,
             Self::Vh | Self::Svh | Self::Lvh | Self::Dvh => h / 100.0,
+            Self::Vi | Self::Svi | Self::Lvi | Self::Dvi => {
+                (if context.viewport_vertical { h } else { w }) / 100.0
+            }
+            Self::Vb | Self::Svb | Self::Lvb | Self::Dvb => {
+                (if context.viewport_vertical { w } else { h }) / 100.0
+            }
             Self::Vmin | Self::Svmin | Self::Lvmin | Self::Dvmin => w.min(h) / 100.0,
             Self::Vmax | Self::Svmax | Self::Lvmax | Self::Dvmax => w.max(h) / 100.0,
-            Self::Cqw | Self::Cqi => {
-                context.container_width.unwrap_or(context.small_viewport.0) / 100.0
-            }
-            Self::Cqh | Self::Cqb => {
-                context.container_height.unwrap_or(context.small_viewport.1) / 100.0
+            Self::Cqw => context.container_width.unwrap_or(context.small_viewport.0) / 100.0,
+            Self::Cqh => context.container_height.unwrap_or(context.small_viewport.1) / 100.0,
+            Self::Cqi | Self::Cqb => {
+                (if self == Self::Cqi {
+                    context
+                        .container_inline
+                        .unwrap_or(if context.viewport_vertical {
+                            context.small_viewport.1
+                        } else {
+                            context.small_viewport.0
+                        })
+                } else {
+                    context
+                        .container_block
+                        .unwrap_or(if context.viewport_vertical {
+                            context.small_viewport.0
+                        } else {
+                            context.small_viewport.1
+                        })
+                }) / 100.0
             }
             Self::Cqmin | Self::Cqmax => {
-                let w = context.container_width.unwrap_or(context.small_viewport.0);
-                let h = context.container_height.unwrap_or(context.small_viewport.1);
+                let w = context
+                    .container_inline
+                    .unwrap_or(if context.viewport_vertical {
+                        context.small_viewport.1
+                    } else {
+                        context.small_viewport.0
+                    });
+                let h = context
+                    .container_block
+                    .unwrap_or(if context.viewport_vertical {
+                        context.small_viewport.0
+                    } else {
+                        context.small_viewport.1
+                    });
                 if self == Self::Cqmin {
                     w.min(h) / 100.0
                 } else {
@@ -235,20 +280,28 @@ pub(crate) fn unit(name: &str) -> Option<(Dimension, Unit)> {
         "ric" => R::Ric,
         "lh" => R::Lh,
         "rlh" => R::Rlh,
-        "vw" | "vi" => R::Vw,
-        "vh" | "vb" => R::Vh,
+        "vw" => R::Vw,
+        "vh" => R::Vh,
+        "vi" => R::Vi,
+        "vb" => R::Vb,
         "vmin" => R::Vmin,
         "vmax" => R::Vmax,
-        "svw" | "svi" => R::Svw,
-        "svh" | "svb" => R::Svh,
+        "svw" => R::Svw,
+        "svh" => R::Svh,
+        "svi" => R::Svi,
+        "svb" => R::Svb,
         "svmin" => R::Svmin,
         "svmax" => R::Svmax,
-        "lvw" | "lvi" => R::Lvw,
-        "lvh" | "lvb" => R::Lvh,
+        "lvw" => R::Lvw,
+        "lvh" => R::Lvh,
+        "lvi" => R::Lvi,
+        "lvb" => R::Lvb,
         "lvmin" => R::Lvmin,
         "lvmax" => R::Lvmax,
-        "dvw" | "dvi" => R::Dvw,
-        "dvh" | "dvb" => R::Dvh,
+        "dvw" => R::Dvw,
+        "dvh" => R::Dvh,
+        "dvi" => R::Dvi,
+        "dvb" => R::Dvb,
         "dvmin" => R::Dvmin,
         "dvmax" => R::Dvmax,
         "cqw" => R::Cqw,

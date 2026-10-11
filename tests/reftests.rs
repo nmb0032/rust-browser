@@ -162,7 +162,7 @@ fn complete_native_suite_is_exact_and_mismatch_has_nonzero_pixels_at_two_scales(
             &options,
         )
         .unwrap();
-        assert_eq!(report.outcomes.len(), 8);
+        assert_eq!(report.outcomes.len(), 10);
         assert!(report.passed(), "{report:#?}");
         let mismatch = report
             .outcomes
@@ -231,6 +231,47 @@ fn explicit_fuzzy_metadata_is_applied_without_hidden_tolerance() {
         let report = workspace.report().unwrap();
         assert_eq!(report.passed(), passed, "{value}: {report:#?}");
         assert!(report.outcomes[0].comparisons[0].contains("maxDifference=5 totalPixels=480000"));
+    }
+}
+
+#[test]
+fn writing_references_use_real_declared_arabic_hebrew_and_vertical_japanese_faces() {
+    let options = Options::default();
+    for (path, id, source) in [
+        ("bidi.html", "hebrew", "אבג"),
+        ("bidi.html", "arabic", "سلام"),
+        ("vertical-japanese.html", "mixed", "水0水"),
+    ] {
+        let mut frame =
+            screenshot::load(&root().join("tests/reftests").join(path), &root(), &options).unwrap();
+        screenshot::render(&mut frame, &options).unwrap();
+        let node = frame
+            .document
+            .preorder()
+            .find(|&node| {
+                frame
+                    .document
+                    .node(node)
+                    .and_then(|n| n.as_element())
+                    .is_some_and(|e| e.attribute("id") == Some(id))
+            })
+            .unwrap();
+        let run = frame
+            .font_context()
+            .shape(frame.styles.get(node).unwrap(), source);
+        assert!(!run.glyphs.is_empty());
+        assert!(
+            run.glyphs
+                .iter()
+                .all(|g| g.id != 0 && g.face.metrics_indexed(g.id, g.size).width > 0)
+        );
+        if id == "mixed" {
+            assert!(run.glyphs[0].upright && !run.glyphs[1].upright && run.glyphs[2].upright);
+            assert_ne!(
+                run.glyphs[0].face.name, run.glyphs[1].face.name,
+                "declared Japanese fallback must be selected after Latin"
+            );
+        }
     }
 }
 

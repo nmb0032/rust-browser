@@ -29,6 +29,19 @@ pub(super) fn font_metrics(
     node: Option<NodeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> FontMetrics {
+    if style.writing_mode.vertical() {
+        let height = if style.line_height == LineHeight::Normal {
+            style.font_size
+        } else {
+            resolve_line_height(&style.line_height, style.font_size, node, diagnostics)
+        };
+        return FontMetrics {
+            ascent: style.font_size * 0.5,
+            descent: style.font_size * 0.5,
+            above: height * 0.5,
+            below: height * 0.5,
+        };
+    }
     let face = font.select(style);
     let metrics = face
         .horizontal_line_metrics(style.font_size)
@@ -59,10 +72,10 @@ pub(super) fn font_metrics(
 
 // Identity is a preorder index within this inline run, not a DOM id: pseudo
 // boxes and block-in-inline continuations can share a DOM identity.
-struct BoxData {
+pub(super) struct BoxData {
     parent: Option<usize>,
     node: Option<NodeId>,
-    style: ComputedStyle,
+    pub(super) style: ComputedStyle,
     metrics: FontMetrics,
     padding: Edges<f32>,
     margin: Edges<f32>,
@@ -81,7 +94,7 @@ struct BoxData {
 }
 
 #[derive(Clone)]
-enum Token {
+pub(super) enum Token {
     Begin(usize),
     End(usize),
     Text(usize, String, f32),
@@ -147,14 +160,18 @@ impl Token {
 fn collect(
     layout: &LayoutBox,
     parent: Option<usize>,
-    (width, reference_height): (f32, Option<f32>),
+    (width, reference_height, mode): (f32, Option<f32>, crate::style::WritingMode),
     font: &crate::text::FontContext,
     boxes: &mut Vec<BoxData>,
     tokens: &mut Vec<Token>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let id = boxes.len();
-    let style = &layout.style;
+    let mut projected = layout.style.as_ref().clone();
+    projected.writing_mode = mode;
+    let mut flow_style = super::writing::inline_style(&projected);
+    flow_style.writing_mode = layout.style.writing_mode;
+    let style = &flow_style;
     let metrics = font_metrics(font, style, layout.node_id, diagnostics);
     let is_inline = layout.kind == BoxKind::Inline;
     if is_inline
@@ -195,7 +212,7 @@ fn collect(
     let mut data = BoxData {
         parent,
         node: layout.node_id,
-        style: (**style).clone(),
+        style: style.clone(),
         metrics,
         padding,
         margin,
@@ -215,12 +232,54 @@ fn collect(
     if layout.floating() {
         let mut atomic = layout.clone();
         atomic.reset();
-        super::floats::layout_float(&mut atomic, width, reference_height, font, diagnostics);
-        data.margin = atomic.margin;
-        data.padding = atomic.padding;
-        data.border = atomic.used_border.unwrap_or(atomic.style.border_width);
-        data.rect = atomic.rect;
-        data.content = atomic.content_rect;
+        if style.writing_mode.vertical() {
+            let intrinsic =
+                intrinsic_inline(&atomic.children, &atomic.style, width, font, diagnostics);
+            let inline = style
+                .width
+                .as_ref()
+                .map(|l| l.resolve(style.font_size, width))
+                .unwrap_or(width.max(intrinsic.0).min(intrinsic.1));
+            super::writing::layout(
+                &mut atomic,
+                0.0,
+                reference_height.unwrap_or(width),
+                Some(width),
+                None,
+                Some(inline),
+                width,
+                font,
+                diagnostics,
+            );
+            let axes = super::writing::FlowAxes {
+                mode: style.writing_mode,
+                origin: (0.0, 0.0),
+                block: 0.0,
+                inline: width,
+            };
+            data.margin = axes.logical_edges(&atomic.margin);
+            data.padding = axes.logical_edges(&atomic.padding);
+            data.border = axes.logical_edges(&atomic.style.border_width);
+            data.rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: atomic.rect.height,
+                height: atomic.rect.width,
+            };
+            data.content = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: atomic.content_rect.height,
+                height: atomic.content_rect.width,
+            };
+        } else {
+            super::floats::layout_float(&mut atomic, width, reference_height, font, diagnostics);
+            data.margin = atomic.margin;
+            data.padding = atomic.padding;
+            data.border = atomic.used_border.unwrap_or(atomic.style.border_width);
+            data.rect = atomic.rect;
+            data.content = atomic.content_rect;
+        }
         data.atomic = Some(Box::new(atomic));
         boxes.push(data);
         tokens.push(Token::Float(id));
@@ -269,13 +328,24 @@ fn collect(
                     vertical,
                 )
             });
-        let size = image.size(
-            style,
-            explicit_width,
-            explicit_height,
+        let mut size = image.size(
+            &layout.style,
+            if mode.vertical() {
+                explicit_height
+            } else {
+                explicit_width
+            },
+            if mode.vertical() {
+                explicit_width
+            } else {
+                explicit_height
+            },
             metrics.above + metrics.below,
             font,
         );
+        if mode.vertical() {
+            std::mem::swap(&mut size.0, &mut size.1);
+        }
         data.image_size = Some(size);
         data.rect.width = finite_used(
             size.0 as f64 + horizontal as f64,
@@ -289,7 +359,11 @@ fn collect(
             "image border height",
             diagnostics,
         );
-        data.atomic_baseline = data.rect.height + data.margin.bottom;
+        data.atomic_baseline = if mode.vertical() {
+            data.rect.height * 0.5
+        } else {
+            data.rect.height + data.margin.bottom
+        };
         boxes.push(data);
         if layout.style.position.out_of_flow() {
             tokens.push(Token::Positioned(id));
@@ -301,40 +375,117 @@ fn collect(
     if layout.atomic_inline() {
         let mut atomic = layout.clone();
         atomic.reset();
-        let decor = padding.left + padding.right + border.left + border.right;
-        let vertical = padding.top + padding.bottom + border.top + border.bottom;
+        let physical_width = if mode.vertical() {
+            reference_height.unwrap_or(width)
+        } else {
+            width
+        };
+        let physical_height = if mode.vertical() {
+            Some(width)
+        } else {
+            reference_height
+        };
+        let physical_style = &layout.style;
+        let decor = physical_style
+            .padding
+            .left
+            .resolve(physical_style.font_size, physical_width)
+            + physical_style
+                .padding
+                .right
+                .resolve(physical_style.font_size, physical_width)
+            + physical_style.border_width.left
+            + physical_style.border_width.right;
+        let vertical = physical_style
+            .padding
+            .top
+            .resolve(physical_style.font_size, physical_width)
+            + physical_style
+                .padding
+                .bottom
+                .resolve(physical_style.font_size, physical_width)
+            + physical_style.border_width.top
+            + physical_style.border_width.bottom;
         let explicit_width = super::sizing::definite_size(
             layout,
-            style.width.as_ref(),
-            Some(width),
+            physical_style.width.as_ref(),
+            Some(physical_width),
             decor,
             diagnostics,
         );
         let height = super::sizing::definite_size(
             layout,
-            style.height.as_ref(),
-            reference_height,
+            physical_style.height.as_ref(),
+            physical_height,
             vertical,
             diagnostics,
         );
-        let intrinsic = super::positioning::intrinsic_content(layout, width, font, diagnostics);
-        let available = (width - decor - margin.left - margin.right).max(0.0);
+        let intrinsic =
+            super::positioning::intrinsic_content(layout, physical_width, font, diagnostics);
+        let available = (physical_width - decor).max(0.0);
         let used_width =
             explicit_width.unwrap_or_else(|| available.max(intrinsic.0).min(intrinsic.1));
-        let limits = super::sizing::bounds(layout, true, Some(width), decor, 0.0, diagnostics);
-        super::block::layout_sized(
-            &mut atomic,
-            width,
-            used_width.clamp(limits.0, limits.1),
-            height,
-            (explicit_width.is_some(), true),
-            font,
-            diagnostics,
-        );
-        data.rect = atomic.rect;
-        data.content = atomic.content_rect;
-        data.image_size = Some((atomic.content_rect.width, atomic.content_rect.height));
-        data.atomic_baseline = atomic.first_local_baseline().unwrap_or(atomic.rect.height);
+        let limits =
+            super::sizing::bounds(layout, true, Some(physical_width), decor, 0.0, diagnostics);
+        if physical_style.writing_mode.vertical() {
+            let inline_available =
+                physical_height.unwrap_or(crate::css::media::DEFAULT_VIEWPORT_HEIGHT - 48.0);
+            let intrinsic = intrinsic_inline(
+                &layout.children,
+                physical_style,
+                inline_available,
+                font,
+                diagnostics,
+            );
+            let inline = height.unwrap_or(inline_available.max(intrinsic.0).min(intrinsic.1));
+            super::writing::layout(
+                &mut atomic,
+                0.0,
+                physical_width,
+                physical_height,
+                explicit_width,
+                Some(inline),
+                width,
+                font,
+                diagnostics,
+            );
+        } else {
+            super::block::layout_sized_in(
+                &mut atomic,
+                physical_width,
+                used_width.clamp(limits.0, limits.1),
+                height,
+                (explicit_width.is_some(), true),
+                width,
+                font,
+                diagnostics,
+            );
+        }
+        if mode.vertical() {
+            data.rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: atomic.rect.height,
+                height: atomic.rect.width,
+            };
+            data.content = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: atomic.content_rect.height,
+                height: atomic.content_rect.width,
+            };
+            data.image_size = Some((atomic.content_rect.height, atomic.content_rect.width));
+            data.atomic_baseline = atomic.rect.width * 0.5;
+        } else {
+            data.rect = atomic.rect;
+            data.content = atomic.content_rect;
+            data.image_size = Some((atomic.content_rect.width, atomic.content_rect.height));
+            data.atomic_baseline = if physical_style.writing_mode.vertical() {
+                atomic.rect.height
+            } else {
+                atomic.first_local_baseline().unwrap_or(atomic.rect.height)
+            };
+        }
         data.atomic = Some(Box::new(atomic));
         boxes.push(data);
         tokens.push(Token::Image(id));
@@ -369,7 +520,7 @@ fn collect(
             collect(
                 child,
                 Some(id),
-                (width, reference_height),
+                (width, reference_height, mode),
                 font,
                 boxes,
                 tokens,
@@ -411,6 +562,7 @@ struct Assembly<'a> {
     floats: Option<&'a mut super::floats::FloatContext>,
     full_origin: f32,
     full_width: f32,
+    bidi: bool,
 }
 
 impl Assembly<'_> {
@@ -443,6 +595,31 @@ impl Assembly<'_> {
         let Some(floats) = self.floats.as_deref_mut() else {
             return;
         };
+        if self.boxes[id].style.writing_mode.vertical() {
+            let mut proxy = self.boxes[id]
+                .atomic
+                .as_ref()
+                .expect("float formatting context")
+                .as_ref()
+                .clone();
+            proxy.children.clear();
+            proxy.rect = self.boxes[id].rect;
+            proxy.content_rect = self.boxes[id].content;
+            proxy.margin = self.boxes[id].margin;
+            floats.place(
+                &mut proxy,
+                self.full_origin,
+                self.y,
+                self.full_width,
+                preceding,
+                (self.strut.above + self.strut.below).max(0.0),
+                self.diagnostics,
+            );
+            self.boxes[id].rect = proxy.rect;
+            self.boxes[id].content = proxy.content_rect;
+            self.opportunity(0.0, (self.strut.above + self.strut.below).max(0.0));
+            return;
+        }
         let b = self.boxes[id]
             .atomic
             .as_mut()
@@ -573,6 +750,7 @@ impl Assembly<'_> {
                 self.contribute(self.boxes[id].metrics);
                 if let Some((Token::Text(previous_id, previous_text, previous_width), previous_x)) =
                     self.items.last_mut()
+                    && !self.bidi
                     && *previous_id == id
                     && (*previous_x + *previous_width - self.x).abs() < 0.001
                 {
@@ -594,6 +772,7 @@ impl Assembly<'_> {
                 let width = run.width;
                 if let Some((Token::Glyphs(previous_id, previous_text, previous_run), previous_x)) =
                     self.items.last_mut()
+                    && !self.bidi
                     && *previous_id == id
                     && (*previous_x + previous_run.width - self.x).abs() < 0.001
                 {
@@ -623,9 +802,120 @@ impl Assembly<'_> {
         }
     }
 
+    fn visualize(
+        &mut self,
+        slots: &[(Token, f32, f32, std::ops::Range<usize>)],
+        levels: &[unicode_bidi::Level],
+    ) {
+        if !self.bidi {
+            return;
+        }
+        let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut start = 0;
+        for i in 0..slots.len() {
+            let protected = matches!(&slots[i].0, Token::Glyphs(_, _, run) if run.unsafe_after);
+            let next_zero = matches!(slots.get(i + 1).map(|s| &s.0), Some(Token::Glyphs(_, _, run)) if run.width == 0.0);
+            if !protected && !next_zero {
+                groups.push(start..i + 1);
+                start = i + 1;
+            }
+        }
+        if start < slots.len() {
+            groups.push(start..slots.len());
+        }
+        let group_levels: Vec<_> = groups.iter().map(|g| levels[g.start]).collect();
+        let order = unicode_bidi::BidiInfo::reorder_visual(&group_levels);
+        let mut visual = vec![0.0; slots.len()];
+        let mut x = self.origin;
+        for index in order {
+            for i in groups[index].clone() {
+                visual[i] = x;
+                for item in slots[i].3.clone() {
+                    self.items[item].1 += x - slots[i].1;
+                }
+                x += slots[i].2;
+            }
+        }
+        let old = std::mem::take(&mut self.segments);
+        for segment in old {
+            let mut intervals = Vec::new();
+            for (i, (token, _, width, _)) in slots.iter().enumerate() {
+                let id = match token {
+                    Token::Begin(id)
+                    | Token::End(id)
+                    | Token::Glyphs(id, ..)
+                    | Token::Text(id, ..)
+                    | Token::Space(id, ..)
+                    | Token::Image(id)
+                    | Token::Break(id) => *id,
+                    _ => continue,
+                };
+                let mut ancestor = Some(id);
+                while let Some(a) = ancestor {
+                    if a == segment.id {
+                        intervals.push((visual[i], visual[i] + width));
+                        break;
+                    }
+                    ancestor = self.boxes[a].parent;
+                }
+            }
+            intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut joined: Vec<(f32, f32)> = Vec::new();
+            for (left, right) in intervals {
+                if let Some(last) = joined.last_mut()
+                    && left <= last.1 + 0.001
+                {
+                    last.1 = last.1.max(right);
+                } else {
+                    joined.push((left, right));
+                }
+            }
+            for (left, right) in joined {
+                self.segments.push(Segment {
+                    id: segment.id,
+                    border_start: left,
+                    content_start: left,
+                    content_end: Some(right),
+                    border_end: Some(right),
+                    first: segment.first,
+                    last: segment.last,
+                });
+            }
+        }
+    }
     fn finish(&mut self, advance: f64) {
         if !self.real {
             return;
+        }
+        if self.bidi {
+            let mut merged: Vec<(Token, f32)> = Vec::new();
+            for (token, x) in std::mem::take(&mut self.items) {
+                if let Token::Glyphs(id, text, run) = &token
+                    && let Some((Token::Glyphs(old_id, old_text, old_run), old_x)) =
+                        merged.last_mut()
+                    && *old_id == *id
+                    && (old_run.glyphs.first().map(|g| g.rtl) == run.glyphs.first().map(|g| g.rtl)
+                        || run.glyphs.is_empty())
+                    && ((*old_x + old_run.width - x).abs() < 0.001
+                        || (x + run.width - *old_x).abs() < 0.001)
+                {
+                    let origin = (*old_x).min(x);
+                    let old = std::sync::Arc::make_mut(old_run);
+                    for g in &mut old.glyphs {
+                        g.x += *old_x - origin;
+                    }
+                    old.glyphs.extend(run.glyphs.iter().cloned().map(|mut g| {
+                        g.x += x - origin;
+                        g
+                    }));
+                    old.width += run.width;
+                    old_text.push_str(text);
+                    *old_x = origin;
+                } else {
+                    merged.push((token, x));
+                }
+            }
+            self.items = merged;
         }
         let remaining = self.width as f64 - advance;
         let align = match (self.align, self.direction) {
@@ -925,7 +1215,7 @@ pub(super) fn layout_inline_run(
         collect(
             child,
             None,
-            (width, reference_height),
+            (width, reference_height, style.writing_mode),
             font,
             &mut boxes,
             &mut tokens,
@@ -953,6 +1243,7 @@ pub(super) fn layout_inline_run(
         floats,
         full_origin: x,
         full_width: width,
+        bidi: false,
     };
     assembly.opportunity(0.0, (strut.above + strut.below).max(0.0));
     breaking::layout(tokens, style, &mut assembly);
@@ -981,7 +1272,7 @@ pub(super) fn intrinsic_inline(
         collect(
             child,
             None,
-            (width, None),
+            (width, None, style.writing_mode),
             font,
             &mut boxes,
             &mut tokens,
@@ -1009,6 +1300,7 @@ pub(super) fn intrinsic_inline(
         floats: None,
         full_origin: 0.0,
         full_width: width,
+        bidi: false,
     };
     breaking::intrinsic(tokens, style, &mut assembly)
 }
@@ -1022,6 +1314,13 @@ fn install(
     let data = boxes.next().expect("inline preorder geometry");
     if let Some(mut atomic) = data.atomic {
         if layout.floating() {
+            if layout.style.writing_mode.vertical() {
+                let dx = data.rect.x - atomic.rect.x;
+                super::positioning::translate(&mut atomic, dx, 0.0, diagnostics);
+                let local_y = atomic.content_rect.y - atomic.rect.y;
+                atomic.content_rect.y = local_y;
+                super::block::place_block(&mut atomic, data.rect.y as f64, diagnostics);
+            }
             *layout = *atomic;
             return;
         }

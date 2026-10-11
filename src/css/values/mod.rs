@@ -177,6 +177,10 @@ impl Length {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LengthContext {
+    /// Writing axes of the element and the selected query container.
+    pub vertical: bool,
+    pub container_vertical: bool,
+    pub viewport_vertical: bool,
     pub font_size: f32,
     pub root_font_size: f32,
     pub zero_advance: f32,
@@ -196,11 +200,16 @@ pub struct LengthContext {
     /// small viewport, as required for container-relative units.
     pub container_width: Option<f32>,
     pub container_height: Option<f32>,
+    pub container_inline: Option<f32>,
+    pub container_block: Option<f32>,
 }
 
 impl Default for LengthContext {
     fn default() -> Self {
         Self {
+            vertical: false,
+            container_vertical: false,
+            viewport_vertical: false,
             font_size: 16.0,
             root_font_size: 16.0,
             zero_advance: 8.0,
@@ -218,6 +227,8 @@ impl Default for LengthContext {
             dynamic_viewport: (800.0, 600.0),
             container_width: None,
             container_height: None,
+            container_inline: None,
+            container_block: None,
         }
     }
 }

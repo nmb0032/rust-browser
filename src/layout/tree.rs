@@ -91,6 +91,9 @@ pub struct LayoutBox {
     pub(super) position_parent: Option<usize>,
     pub(super) coordinate_space: CoordinateSpace,
     pub(super) flow_width: f32,
+    /// Geometry-only intrinsic oracle for an axis allocation adapter. Never
+    /// retained on the document tree or used as a paintable substitute.
+    pub(super) axis_measurement: Option<Rect>,
     pub(super) definite_height: Option<f32>,
     pub(super) definite_width: bool,
     pub(super) inline_line: Option<usize>,
@@ -102,6 +105,7 @@ pub struct LayoutBox {
     pub(super) node_id: Option<NodeId>,
     pub(super) tag_name: String,
     pub(super) kind: BoxKind,
+    pub(super) orthogonal_inline: bool,
     pub(super) text: Option<String>,
     pub(super) style: Box<ComputedStyle>,
     pub(super) rect: Rect,
@@ -209,10 +213,12 @@ impl LayoutBox {
         self.collapsed_table_part
     }
     pub(super) fn atomic_inline(&self) -> bool {
-        matches!(
-            self.style.display,
-            Display::InlineFlex | Display::InlineGrid | Display::InlineTable
-        ) && !self.style.position.out_of_flow()
+        (self.orthogonal_inline
+            || matches!(
+                self.style.display,
+                Display::InlineFlex | Display::InlineGrid | Display::InlineTable
+            ))
+            && !self.style.position.out_of_flow()
     }
     pub(super) fn floating(&self) -> bool {
         self.style.float != style::Float::None
@@ -244,6 +250,9 @@ impl LayoutBox {
     /// Before finalization, descendants' baselines relative to this border
     /// origin are used to position an outside marker in the parent's flow.
     pub(super) fn first_local_baseline(&self) -> Option<f32> {
+        if let Some(m) = self.axis_measurement {
+            return Some(m.height);
+        }
         if self.style.display.is_table() {
             return self
                 .children
@@ -679,7 +688,11 @@ pub(super) fn absolutize_y(
             diagnostics,
         );
         fragment.baseline = finite_used(
-            offset + fragment.baseline as f64,
+            if layout_box.style.writing_mode.vertical() {
+                0.0
+            } else {
+                offset
+            } + fragment.baseline as f64,
             layout_box.node_id,
             "absolute inline baseline",
             diagnostics,
@@ -699,7 +712,11 @@ pub(super) fn absolutize_y(
             diagnostics,
         );
         line.baseline = finite_used(
-            fragment_offset + line.baseline as f64,
+            if layout_box.style.writing_mode.vertical() {
+                0.0
+            } else {
+                fragment_offset
+            } + line.baseline as f64,
             layout_box.node_id,
             "absolute line baseline",
             diagnostics,
@@ -1091,6 +1108,7 @@ fn finish_box(
         position_parent,
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
+        axis_measurement: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,
@@ -1101,6 +1119,7 @@ fn finish_box(
         node_id: Some(node_id),
         tag_name,
         kind,
+        orthogonal_inline: false,
         text,
         style,
         rect: Rect::default(),
@@ -1139,6 +1158,15 @@ fn finish_box(
         used_border: None,
     };
     let owner = layout_box.box_id;
+    for child in &mut layout_box.children {
+        if child.kind == BoxKind::Inline
+            && child.style.writing_mode.vertical() != layout_box.style.writing_mode.vertical()
+            && !child.style.position.out_of_flow()
+        {
+            child.orthogonal_inline = true;
+            normalize_block_children(child, identity);
+        }
+    }
     super::table::normalize(&mut layout_box, &mut |style, children| {
         anonymous_box(style, children, identity.allocate(), owner, position_parent)
     });
@@ -1174,6 +1202,7 @@ fn finish_box(
             position_parent,
             coordinate_space: CoordinateSpace::Document,
             flow_width: 0.0,
+            axis_measurement: None,
             definite_height: None,
             definite_width: false,
             inline_line: None,
@@ -1184,6 +1213,7 @@ fn finish_box(
             node_id: None,
             tag_name: "#anonymous-table-box".into(),
             kind,
+            orthogonal_inline: false,
             text: None,
             style: Box::new(style),
             rect: Rect::default(),
@@ -1287,7 +1317,9 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
     }
     let mut style = Box::new(ComputedStyle::inherit(&parent.style));
     style.display = Display::Block;
+    style.unicode_bidi = parent.style.unicode_bidi;
     parent.children.push(LayoutBox {
+        orthogonal_inline: false,
         box_id: identity.allocate(),
         parent_box: Some(parent.box_id),
         position_parent: if parent.style.position == style::Position::Static {
@@ -1297,6 +1329,7 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         },
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
+        axis_measurement: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,
@@ -1399,6 +1432,7 @@ fn generated_box(
     let text = generated_text(&style.content, element, node_id, pseudo, diagnostics)?;
     let box_id = identity.allocate();
     let text_box = LayoutBox {
+        orthogonal_inline: false,
         box_id: identity.allocate(),
         parent_box: Some(box_id),
         position_parent: if style.position == style::Position::Static {
@@ -1408,6 +1442,7 @@ fn generated_box(
         },
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
+        axis_measurement: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,
@@ -1443,11 +1478,13 @@ fn generated_box(
         used_border: None,
     };
     let mut generated = LayoutBox {
+        orthogonal_inline: false,
         box_id,
         parent_box: identity.parent,
         position_parent: identity.positioned,
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
+        axis_measurement: None,
         definite_height: None,
         definite_width: false,
         inline_line: None,

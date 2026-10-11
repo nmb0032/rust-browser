@@ -62,12 +62,30 @@ fn translate_own(b: &mut LayoutBox, dx: f32, dy: f32, diagnostics: &mut Vec<Diag
     for f in &mut b.inline_fragments {
         rect(&mut f.rect, dx, dy, id, diagnostics);
         rect(&mut f.content_rect, dx, dy, id, diagnostics);
-        point(&mut f.baseline, dy, id, diagnostics);
+        point(
+            &mut f.baseline,
+            if b.style.writing_mode.vertical() {
+                dx
+            } else {
+                dy
+            },
+            id,
+            diagnostics,
+        );
     }
     for line in &mut b.line_boxes {
         rect(&mut line.rect, dx, dy, id, diagnostics);
         rect(&mut line.content_rect, dx, dy, id, diagnostics);
-        point(&mut line.baseline, dy, id, diagnostics);
+        point(
+            &mut line.baseline,
+            if b.style.writing_mode.vertical() {
+                dx
+            } else {
+                dy
+            },
+            id,
+            diagnostics,
+        );
     }
     for f in &mut b.text_fragments {
         rect(&mut f.ink_rect, dx, dy, id, diagnostics);
@@ -581,6 +599,9 @@ pub(super) fn intrinsic_content(
     font: &crate::text::FontContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (f32, f32) {
+    if let Some(m) = b.axis_measurement {
+        return (m.x, m.y);
+    }
     if b.style.container_type != crate::css::container::ContainerType::Normal {
         return (0.0, 0.0);
     }

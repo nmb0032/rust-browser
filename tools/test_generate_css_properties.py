@@ -16,17 +16,18 @@ class GenerationTests(unittest.TestCase):
         properties, longhands, supported = generator.engine_registry(self.data, self.engine)
         self.assertEqual(len(properties), 821)
         self.assertEqual(sum("legacyAliasOf" in p for p in properties.values()), 64)
-        self.assertEqual(len(longhands), 87)
-        self.assertEqual(len(supported), 116)
+        self.assertEqual(len(longhands), 122)
+        self.assertEqual(len(supported), 169)
         self.assertEqual(supported["flex"]["targets"], ["flex-grow", "flex-shrink", "flex-basis"])
         self.assertEqual(supported["flex-flow"]["targets"], ["flex-direction", "flex-wrap"])
         self.assertEqual(supported["gap"]["targets"], ["row-gap", "column-gap"])
         self.assertIn("grid-template-columns", supported)
         self.assertNotIn("grid-template", supported)
         self.assertEqual(supported["overflow"]["targets"], ["overflow-x", "overflow-y"])
-        self.assertNotIn("overflow-inline", supported)
+        self.assertIn("overflow-inline", supported)
         self.assertNotIn("scrollbar-color", supported)
         self.assertNotIn("direction", supported["all"]["targets"])
+        self.assertNotIn("unicode-bidi", supported["all"]["targets"])
         self.assertEqual(supported["-webkit-box-sizing"]["targets"], ["box-sizing"])
         self.assertNotIn("initial", properties["-webkit-box-sizing"])
         self.assertEqual(supported["margin"]["targets"],
@@ -35,7 +36,13 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(supported["white-space"]["targets"], ["white-space-collapse", "text-wrap-mode"])
         self.assertNotIn("white-space-trim", supported)
         self.assertEqual(supported["inset"]["targets"], ["top", "right", "bottom", "left"])
-        self.assertNotIn("inset-inline-start", supported)
+        self.assertIn("inset-inline-start", supported)
+        self.assertEqual(supported["margin-inline"]["targets"],
+                         ["margin-inline-start", "margin-inline-end"])
+        self.assertEqual(supported["border-block"]["targets"],
+                         ["border-block-start-width", "border-block-start-style",
+                          "border-block-start-color", "border-block-end-width",
+                          "border-block-end-style", "border-block-end-color"])
         self.assertEqual(supported["background"]["targets"],
                          ["background-color", "background-image"])
         self.assertIn("font-variant-ligatures", supported["font"]["missing"])

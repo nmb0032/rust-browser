@@ -120,6 +120,25 @@ impl FontFace {
         }
     }
 
+    pub(crate) fn units_for_style(&self, style: &ComputedStyle) -> FontUnits {
+        let mut units = self.units(style.font_size);
+        if style.writing_mode.vertical() {
+            let face = self.shaper();
+            let advance = |c| {
+                face.glyph_index(c)
+                    .and_then(|id| face.glyph_ver_advance(id))
+                    .map_or(style.font_size, |a| {
+                        a as f32 * style.font_size / self.units_per_em
+                    })
+            };
+            units.ic = advance('水');
+            if style.text_orientation == crate::style::TextOrientation::Upright {
+                units.ch = advance('0');
+            }
+        }
+        units
+    }
+
     fn load(
         bytes: Arc<[u8]>,
         index: u32,
@@ -697,18 +716,29 @@ impl FontContext {
                 return face;
             }
             if let Some(parent) = &self.0.parent {
-                // Never admit document faces through the installed fallback cache.
-                let mut installed = style.clone();
-                installed.font_family.0.retain(|family| {
-                    !matches!(family, FamilyName::Named(name) if self.0.author.iter().any(|f| f.descriptor.family.eq_ignore_ascii_case(name)))
-                });
-                return parent.fallback(
-                    &installed,
-                    text,
-                    &parent.select(&installed),
-                    remaining_probes,
-                );
+                let author_family = matches!(name, FamilyName::Named(name) if self.0.author.iter().any(|f|f.descriptor.family.eq_ignore_ascii_case(name)));
+                if !author_family
+                    && let Some(face) = parent.query_text(style, Self::family(name), Some(text))
+                    && face.covers(text)
+                {
+                    return face;
+                }
             }
+        }
+        if let Some(parent) = &self.0.parent {
+            // Exhaust declared web families before installed fallback; the
+            // parent's cache must never admit document-owned faces.
+            let mut installed = style.clone();
+            installed.font_family.0.retain(|family| {
+                !matches!(family,FamilyName::Named(name)
+                if self.0.author.iter().any(|f|f.descriptor.family.eq_ignore_ascii_case(name)))
+            });
+            return parent.fallback(
+                &installed,
+                text,
+                &parent.select(&installed),
+                remaining_probes,
+            );
         }
         {
             let cache = self.0.cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -817,6 +847,18 @@ impl FontContext {
         before: &str,
         after: &str,
     ) -> Arc<ShapedText> {
+        self.shape_resolved(style, text, paint_boundaries, before, after, None)
+    }
+
+    pub(crate) fn shape_resolved(
+        &self,
+        style: &ComputedStyle,
+        text: &str,
+        paint_boundaries: &[usize],
+        before: &str,
+        after: &str,
+        rtl: Option<bool>,
+    ) -> Arc<ShapedText> {
         if text.len() > MAX_TEXT_BYTES {
             let mut cache = self.0.cache.lock().unwrap_or_else(|e| e.into_inner());
             Self::report(
@@ -838,7 +880,7 @@ impl FontContext {
                         .to_bits(),
                 )
             };
-            style_key(style).map(|key| format!("{key}:{}:{:?}:{}:{}:{line_height:?}:{paint_boundaries:?}:{before:?}:{after:?}:{text}", style.font_size, style.font_language, style.bold, style.italic))
+            style_key(style).map(|key| format!("{key}:{}:{:?}:{}:{}:{line_height:?}:{rtl:?}:{:?}:{:?}:{paint_boundaries:?}:{before:?}:{after:?}:{text}", style.font_size, style.font_language, style.bold, style.italic, style.writing_mode, style.text_orientation))
         } else {
             None
         };
@@ -864,6 +906,7 @@ impl FontContext {
         let mut face = primary.clone();
         let mut script = Script::Common;
         let mut pending = String::new();
+        let mut orientation = unicode_vo::Orientation::Rotated;
         let mut remaining_probes = MAX_COVERAGE_PROBES;
         // A whole grapheme chooses one font; consecutive same-script graphemes
         // share shaping. Prefer a face covering the entire script word, so a
@@ -877,6 +920,11 @@ impl FontContext {
                     .map(|c| c.script())
                     .find(|s| !matches!(s, Script::Common | Script::Inherited | Script::Unknown))
                     .unwrap_or(script);
+                let next_orientation = grapheme
+                    .chars()
+                    .next()
+                    .map(unicode_vo::char_orientation)
+                    .unwrap_or(unicode_vo::Orientation::Rotated);
                 let author_word = self
                     .0
                     .author
@@ -888,7 +936,12 @@ impl FontContext {
                     } else {
                         self.fallback(style, grapheme, &primary, &mut remaining_probes)
                     };
-                if !pending.is_empty() && (!Arc::ptr_eq(&face, &next_face) || script != next_script)
+                if !pending.is_empty()
+                    && (!Arc::ptr_eq(&face, &next_face)
+                        || script != next_script
+                        || style.writing_mode.vertical()
+                            && style.text_orientation == crate::style::TextOrientation::Mixed
+                            && orientation != next_orientation)
                 {
                     result.append(&shape_face(
                         &face,
@@ -899,6 +952,7 @@ impl FontContext {
                         if start == 0 { before } else { &text[..start] },
                         &text[offset..],
                         paint_boundaries,
+                        rtl,
                     ));
                     pending.clear();
                 }
@@ -907,6 +961,7 @@ impl FontContext {
                     start = offset;
                     face = next_face;
                     script = next_script;
+                    orientation = next_orientation;
                 }
                 pending.push_str(grapheme);
             }
@@ -921,6 +976,7 @@ impl FontContext {
                 if start == 0 { before } else { &text[..start] },
                 after,
                 paint_boundaries,
+                rtl,
             ));
         }
         let source: Arc<str> = Arc::from(text);
@@ -958,9 +1014,39 @@ pub struct ShapedGlyph {
     pub rtl: bool,
     pub bold: bool,
     pub italic: bool,
+    pub rotation: GlyphRotation,
+    pub upright: bool,
     /// Optional horizontal paint slice, relative to the glyph's positioned x.
     /// Mandatory clusters crossing paint owners retain one shaping result.
     pub clip: Option<(f32, f32)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GlyphRotation {
+    #[default]
+    None,
+    Clockwise,
+    CounterClockwise,
+}
+
+impl GlyphRotation {
+    pub fn point(self, x: f32, y: f32) -> (f32, f32) {
+        match self {
+            Self::None => (x, y),
+            Self::Clockwise => (-y, x),
+            Self::CounterClockwise => (y, -x),
+        }
+    }
+    pub fn rect(self, rect: Rect) -> Rect {
+        let a = self.point(rect.x, rect.y);
+        let b = self.point(rect.x + rect.width, rect.y + rect.height);
+        Rect {
+            x: a.0.min(b.0),
+            y: a.1.min(b.1),
+            width: (b.0 - a.0).abs(),
+            height: (b.1 - a.1).abs(),
+        }
+    }
 }
 
 impl fmt::Debug for ShapedGlyph {
@@ -979,6 +1065,8 @@ impl fmt::Debug for ShapedGlyph {
             .field("bold", &self.bold)
             .field("italic", &self.italic)
             .field("clip", &self.clip)
+            .field("rotation", &self.rotation)
+            .field("upright", &self.upright)
             .finish()
     }
 }
@@ -1030,9 +1118,9 @@ impl ShapedText {
         for glyph in &self.glyphs {
             let metrics = glyph.face.metrics_indexed(glyph.id, glyph.size);
             if metrics.width != 0 && metrics.height != 0 {
-                let mut rect = Rect {
-                    x: x + glyph.x + metrics.xmin as f32,
-                    y: baseline - glyph.y - (metrics.ymin as f32 + metrics.height as f32),
+                let mut local = Rect {
+                    x: metrics.xmin as f32,
+                    y: -(metrics.ymin as f32 + metrics.height as f32),
                     width: metrics.width as f32
                         + if glyph.bold { 1.0 } else { 0.0 }
                         + if glyph.italic {
@@ -1043,11 +1131,14 @@ impl ShapedText {
                     height: metrics.height as f32,
                 };
                 if let Some((left, right)) = glyph.clip {
-                    let start = rect.x.max(x + glyph.x + left);
-                    let end = (rect.x + rect.width).min(x + glyph.x + right);
-                    rect.x = start;
-                    rect.width = (end - start).max(0.0);
+                    let start = local.x.max(left);
+                    let end = (local.x + local.width).min(right);
+                    local.x = start;
+                    local.width = (end - start).max(0.0);
                 }
+                let mut rect = glyph.rotation.rect(local);
+                rect.x += x + glyph.x;
+                rect.y += baseline - glyph.y;
                 bounds = bounds.union(rect);
             }
         }
@@ -1065,6 +1156,7 @@ fn shape_face(
     before: &str,
     after: &str,
     paint_boundaries: &[usize],
+    resolved_rtl: Option<bool>,
 ) -> ShapedText {
     let shaper = face.shaper();
     let mut buffer = UnicodeBuffer::new();
@@ -1092,7 +1184,25 @@ fn shape_face(
         buffer.set_language(language);
     }
     buffer.guess_segment_properties();
-    let rtl = buffer.direction() == rustybuzz::Direction::RightToLeft;
+    if let Some(rtl) = resolved_rtl {
+        buffer.set_direction(if rtl {
+            rustybuzz::Direction::RightToLeft
+        } else {
+            rustybuzz::Direction::LeftToRight
+        });
+    }
+    let upright = style.writing_mode.vertical()
+        && !matches!(
+            style.writing_mode,
+            crate::style::WritingMode::SidewaysRl | crate::style::WritingMode::SidewaysLr
+        )
+        && (style.text_orientation == crate::style::TextOrientation::Upright
+            || style.text_orientation == crate::style::TextOrientation::Mixed
+                && text.chars().any(vertical_upright));
+    if upright {
+        buffer.set_direction(rustybuzz::Direction::TopToBottom);
+    }
+    let rtl = !upright && buffer.direction() == rustybuzz::Direction::RightToLeft;
     let mut features = Vec::new();
     for &boundary in paint_boundaries {
         if boundary > base && boundary < base + text.len() {
@@ -1109,6 +1219,32 @@ fn shape_face(
         }
     }
     let output = rustybuzz::shape(&shaper, &features, buffer);
+    if upright
+        && style.text_orientation == crate::style::TextOrientation::Mixed
+        && text.chars().all(|c| {
+            unicode_vo::char_orientation(c) == unicode_vo::Orientation::TransformedOrRotated
+        })
+        && output.glyph_infos().iter().all(|g| {
+            text[g.cluster as usize..]
+                .chars()
+                .next()
+                .is_some_and(|c| g.glyph_id == u32::from(face.lookup_glyph_index(c)))
+        })
+    {
+        let mut fallback = style.clone();
+        fallback.text_orientation = crate::style::TextOrientation::Sideways;
+        return shape_face(
+            face,
+            &fallback,
+            size,
+            text,
+            base,
+            before,
+            after,
+            paint_boundaries,
+            resolved_rtl,
+        );
+    }
     let scale = size / shaper.units_per_em() as f32;
     let metrics = face.horizontal_line_metrics(size);
     let line_extents = metrics.map(|m| {
@@ -1129,6 +1265,16 @@ fn shape_face(
         line_extents,
         ..ShapedText::default()
     };
+    if style.writing_mode.vertical() {
+        result.ascent = size * 0.5;
+        result.descent = size * 0.5;
+        let height = if style.line_height == crate::css::values::LineHeight::Normal {
+            size
+        } else {
+            style.line_height.used_with_diagnostic(size, |_| {})
+        };
+        result.line_extents = Some((height * 0.5, height * 0.5));
+    }
     let mut clusters: Vec<_> = output
         .glyph_infos()
         .iter()
@@ -1143,7 +1289,12 @@ fn shape_face(
             .get(clusters.partition_point(|&c| c <= cluster))
             .copied()
             .unwrap_or(text.len());
-        let advance = pos.x_advance as f32 * scale;
+        let advance = if upright {
+            -pos.y_advance
+        } else {
+            pos.x_advance
+        } as f32
+            * scale;
         result.glyphs.push(ShapedGlyph {
             source: Arc::from(""),
             face: face.clone(),
@@ -1151,20 +1302,38 @@ fn shape_face(
             size,
             cluster: base + cluster,
             cluster_end: base + end,
-            x: result.width + pos.x_offset as f32 * scale,
-            y: pos.y_offset as f32 * scale,
+            x: result.width + if upright { -pos.y_offset } else { pos.x_offset } as f32 * scale,
+            y: if upright {
+                pos.x_offset as f32 * scale
+            } else {
+                pos.y_offset as f32 * scale
+                    - if style.writing_mode.vertical() {
+                        metrics.map_or(size * 0.3, |m| (m.ascent + m.descent) * 0.5)
+                    } else {
+                        0.0
+                    }
+            },
             advance,
-            x_offset: pos.x_offset as f32 * scale,
-            y_offset: pos.y_offset as f32 * scale,
+            x_offset: if upright { -pos.y_offset } else { pos.x_offset } as f32 * scale,
+            y_offset: if upright { pos.x_offset } else { pos.y_offset } as f32 * scale,
             unsafe_to_break: info.unsafe_to_break(),
             rtl,
             bold: style.bold && face.weight < 600,
             italic: style.italic && !face.italic,
+            rotation: GlyphRotation::None,
+            upright,
             clip: None,
         });
         result.width += advance;
     }
+
     result
+}
+
+/// UAX #50 drives orientation, including vertical substitutions before the
+/// specified rotated fallback for Tr characters.
+fn vertical_upright(c: char) -> bool {
+    unicode_vo::char_orientation(c) != unicode_vo::Orientation::Rotated
 }
 
 fn style_distance(request: FontStyle, candidate: FontStyle) -> u8 {

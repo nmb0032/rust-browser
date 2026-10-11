@@ -235,7 +235,10 @@ fn physical_and_logical_alignment_inherit_and_ignore_child_direction() {
         let host = box_for(&document, &tree, "host");
         let width = font.metrics('H', 16.0).advance_width + 20.0;
         let shift = (160.0 - width) * factor;
-        close(texts(host)[0].x, host.content_rect().x + shift);
+        close(
+            texts(host)[0].x,
+            host.content_rect().x + shift + if direction == "rtl" { 20.0 } else { 0.0 },
+        );
         close(
             box_for(&document, &tree, "span").inline_fragments()[0]
                 .rect
@@ -244,7 +247,13 @@ fn physical_and_logical_alignment_inherit_and_ignore_child_direction() {
         );
         close(
             box_for(&document, &tree, "image").rect.x,
-            host.content_rect().x + shift + width - 20.0,
+            host.content_rect().x
+                + shift
+                + if direction == "rtl" {
+                    0.0
+                } else {
+                    width - 20.0
+                },
         );
         assert_eq!(
             box_for(&document, &tree, "span").style.text_align,

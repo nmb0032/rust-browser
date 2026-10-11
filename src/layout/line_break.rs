@@ -9,6 +9,39 @@ use crate::style::{ComputedStyle, TextWrapMode, WhiteSpaceCollapse};
 
 use super::{Assembly, BoxData, Token, finite_used};
 
+const MAX_PARAGRAPH_BYTES: usize = 262_144;
+
+fn bound_paragraph(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
+    let bytes: usize = tokens
+        .iter()
+        .map(|t| match t {
+            Token::Begin(id) => super::super::bidi::controls(&assembly.boxes[*id].style)
+                .0
+                .len(),
+            Token::End(id) => super::super::bidi::controls(&assembly.boxes[*id].style)
+                .1
+                .len(),
+            Token::Text(_, text, _) | Token::Glyphs(_, text, _) => text.len(),
+            t => character(t).map_or(0, |(_, c)| c.len_utf8()),
+        })
+        .sum();
+    if bytes > MAX_PARAGRAPH_BYTES {
+        assembly.diagnostics.push(crate::style::Diagnostic {
+            node_id: None,
+            message: format!(
+                "bidi paragraph exceeds {MAX_PARAGRAPH_BYTES}-byte limit; paragraph text omitted"
+            ),
+        });
+        for t in tokens {
+            if matches!(
+                t,
+                Token::Text(..) | Token::Glyphs(..) | Token::Space(..) | Token::Control(..)
+            ) {
+                *t = Token::Omitted;
+            }
+        }
+    }
+}
 fn character(token: &Token) -> Option<(usize, char)> {
     match token {
         Token::Text(id, text, _) | Token::Glyphs(id, text, _) => Some((*id, text.chars().next()?)),
@@ -134,15 +167,21 @@ fn same_font(a: &ComputedStyle, b: &ComputedStyle) -> bool {
         && a.font_weight == b.font_weight
         && a.font_style == b.font_style
         && a.font_language == b.font_language
+        && a.writing_mode == b.writing_mode
+        && a.text_orientation == b.text_orientation
 }
 
-fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
+fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: &mut Assembly<'_>) {
     let mut logical = String::new();
     let mut offsets = Vec::with_capacity(tokens.len());
     for token in tokens.iter() {
         offsets.push(logical.len());
         if logical.len() <= crate::text::MAX_TEXT_BYTES {
-            if let Some((_, c)) = character(token) {
+            if let Token::Begin(id) = token {
+                logical.push_str(super::super::bidi::controls(&assembly.boxes[*id].style).0);
+            } else if let Token::End(id) = token {
+                logical.push_str(super::super::bidi::controls(&assembly.boxes[*id].style).1);
+            } else if let Some((_, c)) = character(token) {
                 logical.push(c);
             } else if token.width(assembly.boxes) != 0.0 {
                 logical.push('\u{fffc}');
@@ -165,12 +204,16 @@ fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
             continue;
         }
         let start = index;
+        let level = levels[start];
         let mut source = String::new();
         let mut positions = Vec::new();
         let mut paint_boundaries = Vec::new();
         let mut paint_owner = owner;
         let mut oversized = false;
         while index < tokens.len() {
+            if levels[index] != level {
+                break;
+            }
             let offset = offsets[index];
             let cluster = graphemes.get(graphemes.partition_point(|&(_, end)| end <= offset));
             let continues_cluster = context_bounded
@@ -207,7 +250,8 @@ fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
                     }
                 }
                 Token::Begin(_) | Token::End(_) | Token::Positioned(_)
-                    if tokens[index].width(assembly.boxes) == 0.0 => {}
+                    if tokens[index].width(assembly.boxes) == 0.0
+                        && offsets.get(index + 1).copied().unwrap_or(logical.len()) == offset => {}
                 _ => break,
             }
             index += 1;
@@ -239,12 +283,13 @@ fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
         } else {
             ("", "")
         };
-        let run = assembly.font.shape_with_context(
+        let run = assembly.font.shape_resolved(
             &assembly.boxes[owner].style,
             &source,
             &paint_boundaries,
             before,
             after,
+            Some(level.is_rtl()),
         );
         let mut widths = vec![0.0; positions.len()];
         let mut glyphs = vec![Vec::new(); positions.len()];
@@ -348,7 +393,24 @@ fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
             }
         }
         let mut logical_x = 0.0;
+        let mut group_start = 0;
+        let mut group_origin = 0.0;
         for (position, &(token_index, offset, id)) in positions.iter().enumerate() {
+            if position == group_start {
+                let mut end = position + 1;
+                while end < positions.len() && (unsafe_after[end - 1] || widths[end] == 0.0) {
+                    end += 1;
+                }
+                group_origin = glyphs[position..end]
+                    .iter()
+                    .flatten()
+                    .filter(|g| g.advance != 0.0)
+                    .map(|g| g.x - g.x_offset)
+                    .min_by(f32::total_cmp)
+                    .unwrap_or(logical_x)
+                    - logical_x;
+                group_start = end;
+            }
             let end = positions.get(position + 1).map_or(source.len(), |p| p.1);
             let mut part = crate::text::ShapedText {
                 width: widths[position],
@@ -361,7 +423,7 @@ fn shape_tokens(tokens: &mut [Token], assembly: &mut Assembly<'_>) {
             part.glyphs = std::mem::take(&mut glyphs[position])
                 .into_iter()
                 .map(|mut g| {
-                    g.x -= logical_x;
+                    g.x -= group_origin + logical_x;
                     g
                 })
                 .collect();
@@ -602,6 +664,7 @@ impl Measure {
 
 fn emit(
     tokens: &[Token],
+    levels: &[unicode_bidi::Level],
     boundary: Opportunity,
     soft: bool,
     tab: f64,
@@ -618,7 +681,7 @@ fn emit(
     } else {
         None
     };
-    reshape(&mut tokens, hyphen_at, assembly);
+    reshape(&mut tokens, levels, hyphen_at, assembly);
     let mut measure = Measure::default();
     // Collapsible trailing whitespace is removed before contributing metrics
     // or decorations. Preserved hanging whitespace retains its hit geometry.
@@ -649,6 +712,9 @@ fn emit(
             break;
         }
     }
+    let mut slots = Vec::new();
+    let mut visual_levels = Vec::new();
+    assembly.bidi = levels.iter().any(|l| l.is_rtl());
     for (index, token) in tokens.iter().enumerate() {
         let leading = collapsible(token) && !measure.content;
         let mut token = token.clone();
@@ -661,12 +727,22 @@ fn emit(
         if let Token::Space(_, _, width, _) = &mut token {
             *width = finite_used(advance, None, "whitespace advance", assembly.diagnostics);
         }
-        assembly.add(token);
+        let x = assembly.x;
+        let first = assembly.items.len();
+        assembly.add(token.clone());
+        slots.push((token, x, assembly.x - x, first..assembly.items.len()));
+        visual_levels.push(levels[index]);
     }
+    assembly.visualize(&slots, &visual_levels);
     assembly.finish(measure.aligned(!soft, assembly.width as f64));
 }
 
-fn reshape(tokens: &mut [Token], hyphen_at: Option<usize>, assembly: &mut Assembly<'_>) {
+fn reshape(
+    tokens: &mut [Token],
+    levels: &[unicode_bidi::Level],
+    hyphen_at: Option<usize>,
+    assembly: &mut Assembly<'_>,
+) {
     for (index, token) in tokens.iter_mut().enumerate() {
         if let Token::Glyphs(id, text, _) = token {
             *token = Token::Text(*id, text.clone(), 0.0);
@@ -676,13 +752,17 @@ fn reshape(tokens: &mut [Token], hyphen_at: Option<usize>, assembly: &mut Assemb
             *token = Token::Text(*id, "-".into(), 0.0);
         }
     }
-    shape_tokens(tokens, assembly);
+    shape_tokens(tokens, levels, assembly);
 }
 
 pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut Assembly<'_>) {
     let mut tokens = normalize(tokens, assembly);
+    bound_paragraph(&mut tokens, assembly);
+    let paragraph = super::super::bidi::Paragraph::new(&tokens, assembly.boxes, block);
+    let bidi = unicode_bidi::BidiInfo::new(&paragraph.text, paragraph.base);
+    let levels = paragraph.levels(&bidi, 0..tokens.len(), false);
     let opportunities = opportunities(&tokens, assembly.boxes, block);
-    shape_tokens(&mut tokens, assembly);
+    shape_tokens(&mut tokens, &levels, assembly);
     let face = assembly.font.select(block);
     let tab = (face.metrics(' ', block.font_size).advance_width as f64 * 8.0).max(0.0001);
     let half_ch = face.metrics('0', block.font_size).advance_width as f64 * 0.5;
@@ -735,7 +815,12 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
                     .iter()
                     .rposition(|t| matches!(t, Token::Control(owner, '\u{00ad}') if *owner == id))
             });
-            reshape(&mut candidate, hyphen_at, assembly);
+            reshape(
+                &mut candidate,
+                &levels[start..boundary.end],
+                hyphen_at,
+                assembly,
+            );
             let mut fitted = Measure::default();
             for token in &candidate {
                 fitted.add(token, assembly.boxes, tab, half_ch);
@@ -755,8 +840,12 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
             && let Some(last) = previous
             && before.content
         {
+            if block.unicode_bidi == crate::style::UnicodeBidi::Plaintext {
+                assembly.direction = paragraph.direction(&bidi, start);
+            }
             emit(
                 &tokens[start..measured_to],
+                &paragraph.levels(&bidi, start..measured_to, true),
                 last,
                 true,
                 tab,
@@ -771,7 +860,7 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
                     .iter()
                     .position(|t| matches!(t, Token::Space(..) | Token::Break(_) | Token::Image(_)))
                     .map_or(tokens.len(), |i| start + i);
-                reshape(&mut tokens[start..end], None, assembly);
+                reshape(&mut tokens[start..end], &levels[start..end], None, assembly);
             }
             measure = Measure::default();
             for token in &tokens[start..boundary.end] {
@@ -785,8 +874,12 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
         measured_to = boundary.end;
         previous = Some(boundary);
         if boundary.forced {
+            if block.unicode_bidi == crate::style::UnicodeBidi::Plaintext {
+                assembly.direction = paragraph.direction(&bidi, start);
+            }
             emit(
                 &tokens[start..boundary.end],
+                &paragraph.levels(&bidi, start..boundary.end, true),
                 boundary,
                 false,
                 tab,
@@ -808,8 +901,12 @@ pub(super) fn intrinsic(
     assembly: &mut Assembly<'_>,
 ) -> (f32, f32) {
     let mut tokens = normalize(tokens, assembly);
+    bound_paragraph(&mut tokens, assembly);
+    let paragraph = super::super::bidi::Paragraph::new(&tokens, assembly.boxes, block);
+    let bidi = unicode_bidi::BidiInfo::new(&paragraph.text, paragraph.base);
+    let levels = paragraph.levels(&bidi, 0..tokens.len(), false);
     let opportunities = opportunities(&tokens, assembly.boxes, block);
-    shape_tokens(&mut tokens, assembly);
+    shape_tokens(&mut tokens, &levels, assembly);
     let face = assembly.font.select(block);
     let tab = (face.metrics(' ', block.font_size).advance_width as f64 * 8.0).max(0.0001);
     let half_ch = face.metrics('0', block.font_size).advance_width as f64 * 0.5;

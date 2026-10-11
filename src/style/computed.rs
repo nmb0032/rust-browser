@@ -21,13 +21,50 @@ pub enum Content {
     Items(Vec<ContentItem>),
 }
 
-/// Used by the horizontal width equation and logical text alignment.
-/// Text reordering and logical box properties are not implemented.
+/// The inline base direction, used by paragraph bidi and logical geometry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Direction {
     #[default]
     Ltr,
     Rtl,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UnicodeBidi {
+    #[default]
+    Normal,
+    Embed,
+    Isolate,
+    BidiOverride,
+    IsolateOverride,
+    Plaintext,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WritingMode {
+    #[default]
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
+}
+
+impl WritingMode {
+    pub fn vertical(self) -> bool {
+        self != Self::HorizontalTb
+    }
+    pub(crate) fn block_reverse(self) -> bool {
+        matches!(self, Self::VerticalRl | Self::SidewaysRl)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextOrientation {
+    #[default]
+    Mixed,
+    Upright,
+    Sideways,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,6 +124,8 @@ pub enum Float {
     None,
     Left,
     Right,
+    InlineStart,
+    InlineEnd,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -96,6 +135,8 @@ pub enum Clear {
     Left,
     Right,
     Both,
+    InlineStart,
+    InlineEnd,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -429,6 +470,9 @@ pub struct ComputedStyle {
     /// Pre-blockification display used by CSS2's hypothetical static position.
     pub positioned_inline: bool,
     pub direction: Direction,
+    pub unicode_bidi: UnicodeBidi,
+    pub writing_mode: WritingMode,
+    pub text_orientation: TextOrientation,
     pub text_align: TextAlign,
     pub text_align_last: TextAlignLast,
     pub white_space_collapse: WhiteSpaceCollapse,
@@ -523,6 +567,9 @@ impl Default for ComputedStyle {
             overflow_y: Overflow::Visible,
             positioned_inline: false,
             direction: Direction::Ltr,
+            unicode_bidi: UnicodeBidi::Normal,
+            writing_mode: WritingMode::HorizontalTb,
+            text_orientation: TextOrientation::Mixed,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             white_space_collapse: WhiteSpaceCollapse::Collapse,
@@ -599,6 +646,8 @@ impl ComputedStyle {
         Self {
             custom_properties: parent.custom_properties.clone(),
             direction: parent.direction,
+            writing_mode: parent.writing_mode,
+            text_orientation: parent.text_orientation,
             border_collapse: parent.border_collapse,
             border_spacing: parent.border_spacing.clone(),
             caption_side: parent.caption_side,

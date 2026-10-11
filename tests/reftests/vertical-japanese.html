@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="support/writing.css">
+<link rel="match" href="references/vertical-japanese-ref.html">
+<link rel="help" href="https://www.w3.org/TR/css-writing-modes-4/">
+<style>
+.rl { left: 0; writing-mode: vertical-rl; }
+.lr { left: 80px; writing-mode: vertical-lr; }
+.mixed { left: 160px; height: 64px; writing-mode: vertical-rl; font-family: Latin, Japanese; }
+.bidi { left: 240px; height: 96px; width: 16px; writing-mode: vertical-rl; direction: rtl; text-orientation: sideways; font-family: Latin, Hebrew; }
+</style>
+<div class="vertical rl">日本語水</div>
+<div class="vertical lr">日本語水</div>
+<div id="mixed" class="vertical mixed">水0水</div>
+<div class="vertical bidi">אב12</div>

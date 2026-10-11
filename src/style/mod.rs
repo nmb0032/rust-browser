@@ -32,6 +32,7 @@ mod computed;
 mod container;
 mod control;
 mod declarations;
+mod directionality;
 mod generated_properties;
 pub(crate) mod grid;
 mod matching;
@@ -60,7 +61,8 @@ pub use computed::{
     AlignKeyword, Alignment, BaselineShift, BaselineSource, BorderCollapse, BoxSizing, CaptionSide,
     Clear, ComputedStyle, ComputedStyles, Content, ContentItem, Direction, Display, EmptyCells,
     FlexBasis, FlexDirection, FlexWrap, Float, Overflow, Position, TableLayout, TextAlign,
-    TextAlignLast, TextWrapMode, VerticalAlign, WhiteSpaceCollapse, ZIndex,
+    TextAlignLast, TextOrientation, TextWrapMode, UnicodeBidi, VerticalAlign, WhiteSpaceCollapse,
+    WritingMode, ZIndex,
 };
 pub use container::ContainerSnapshot;
 pub(crate) use stylesheets::report_css_errors;
@@ -116,3 +118,5 @@ mod values_tests;
 mod variables_tests;
 #[cfg(test)]
 mod whitespace_tests;
+#[cfg(test)]
+mod writing_tests;

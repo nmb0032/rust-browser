@@ -42,6 +42,7 @@ fn style(source: &str) -> ComputedStyle {
 fn projection(style: &ComputedStyle, property: Property) -> String {
     use Property as P;
     match property {
+        P::Logical(_) => projection(style, property.physical(style)),
         P::Float => format!("{:?}", style.float),
         P::Clear => format!("{:?}", style.clear),
         P::TableLayout => format!("{:?}", style.table_layout),
@@ -61,6 +62,9 @@ fn projection(style: &ComputedStyle, property: Property) -> String {
         P::OverflowX => format!("{:?}", style.overflow_x),
         P::OverflowY => format!("{:?}", style.overflow_y),
         P::Direction => format!("{:?}", style.direction),
+        P::UnicodeBidi => format!("{:?}", style.unicode_bidi),
+        P::WritingMode => format!("{:?}", style.writing_mode),
+        P::TextOrientation => format!("{:?}", style.text_orientation),
         P::TextAlignAll => format!("{:?}", style.text_align),
         P::TextAlignLast => format!("{:?}", style.text_align_last),
         P::WhiteSpaceCollapse => format!("{:?}", style.white_space_collapse),
@@ -225,17 +229,18 @@ fn registry_and_report_totals_are_exact_and_only_explicit_aliases_gain_acceptanc
             longhands.insert(properties[0]);
         }
     }
-    assert_eq!(counts, [0, 116, 642, 63]);
-    assert_eq!(longhands.len(), 87);
+    assert_eq!(counts, [0, 169, 589, 63]);
+    assert_eq!(longhands.len(), 122);
     let all = declarations::properties("all").unwrap();
-    assert_eq!(all.len(), 86);
+    assert_eq!(all.len(), 120);
     longhands.remove(&Property::Direction);
+    longhands.remove(&Property::UnicodeBidi);
     assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), longhands);
     let report = metadata::css_coverage();
     assert!(report.contains("**821**; canonical properties: **757**; legacy aliases: **64**"));
-    assert!(report.contains("**0 implemented**, **115 partial**, **642 unimplemented**"));
+    assert!(report.contains("**0 implemented**, **168 partial**, **589 unimplemented**"));
     assert!(report.contains("**1 accepted (partial targets)**, **63 unimplemented**"));
-    assert!(report.contains("**87 longhands**, **28 shorthands**"));
+    assert!(report.contains("**122 longhands**, **46 shorthands**"));
     assert!(report.contains("Missing reset targets: border-image-source"));
     assert!(report.contains("Missing expansion targets: font-variant"));
     assert!(report.contains("Indefinite percentage-height"));
@@ -329,6 +334,8 @@ fn all_generated_initials_match_existing_defaults_and_every_longhand_wide_rule()
             "border-spacing",
             "caption-side",
             "empty-cells",
+            "writing-mode",
+            "text-orientation",
             "text-align-all",
             "text-align-last",
             "white-space-collapse",

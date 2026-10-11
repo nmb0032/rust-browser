@@ -13,9 +13,9 @@ use crate::css::{
 
 use super::{
     AlignKeyword, Alignment, BaselineShift, BaselineSource, BorderCollapse, BoxSizing, CaptionSide,
-    Clear, Content, ContentItem, Direction, Display, EmptyCells, FlexDirection, FlexWrap, Float,
-    Overflow, Position, TableLayout, TextAlign, TextAlignLast, TextWrapMode, VerticalAlign,
-    WhiteSpaceCollapse, ZIndex,
+    Clear, ComputedStyle, Content, ContentItem, Direction, Display, EmptyCells, FlexDirection,
+    FlexWrap, Float, Overflow, Position, TableLayout, TextAlign, TextAlignLast, TextOrientation,
+    TextWrapMode, UnicodeBidi, VerticalAlign, WhiteSpaceCollapse, WritingMode, ZIndex,
     compat::DeclarationContext,
     generated_properties::{self, Parser},
     variables::TokenValue,
@@ -42,6 +42,9 @@ pub(super) enum Property {
     OverflowX,
     OverflowY,
     Direction,
+    UnicodeBidi,
+    WritingMode,
+    TextOrientation,
     TextAlignAll,
     TextAlignLast,
     WhiteSpaceCollapse,
@@ -92,6 +95,157 @@ pub(super) enum Property {
     BorderWidth(Side),
     BorderColor(Side),
     BorderStyle(Side),
+    Logical(LogicalProperty),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(super) enum LogicalSide {
+    InlineStart,
+    InlineEnd,
+    BlockStart,
+    BlockEnd,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(super) enum LogicalProperty {
+    Margin(LogicalSide),
+    Padding(LogicalSide),
+    Inset(LogicalSide),
+    BorderWidth(LogicalSide),
+    BorderStyle(LogicalSide),
+    BorderColor(LogicalSide),
+    InlineSize,
+    BlockSize,
+    MinInlineSize,
+    MinBlockSize,
+    MaxInlineSize,
+    MaxBlockSize,
+    OverflowInline,
+    OverflowBlock,
+}
+
+impl Property {
+    pub(super) fn physical(self, style: &ComputedStyle) -> Self {
+        use LogicalProperty as L;
+        use LogicalSide as S;
+        let side = |s| {
+            let rtl = style.direction == Direction::Rtl;
+            match (style.writing_mode, s) {
+                (WritingMode::HorizontalTb, S::BlockStart) => Side::Top,
+                (WritingMode::HorizontalTb, S::BlockEnd) => Side::Bottom,
+                (WritingMode::HorizontalTb, S::InlineStart) => {
+                    if rtl {
+                        Side::Right
+                    } else {
+                        Side::Left
+                    }
+                }
+                (WritingMode::HorizontalTb, S::InlineEnd) => {
+                    if rtl {
+                        Side::Left
+                    } else {
+                        Side::Right
+                    }
+                }
+                (mode, S::BlockStart) => {
+                    if mode.block_reverse() {
+                        Side::Right
+                    } else {
+                        Side::Left
+                    }
+                }
+                (mode, S::BlockEnd) => {
+                    if mode.block_reverse() {
+                        Side::Left
+                    } else {
+                        Side::Right
+                    }
+                }
+                (mode, S::InlineStart) => {
+                    if rtl ^ (mode == WritingMode::SidewaysLr) {
+                        Side::Bottom
+                    } else {
+                        Side::Top
+                    }
+                }
+                (mode, S::InlineEnd) => {
+                    if rtl ^ (mode == WritingMode::SidewaysLr) {
+                        Side::Top
+                    } else {
+                        Side::Bottom
+                    }
+                }
+            }
+        };
+        let v = style.writing_mode.vertical();
+        match self {
+            Self::Logical(l) => match l {
+                L::Margin(s) => Self::Margin(side(s)),
+                L::Padding(s) => Self::Padding(side(s)),
+                L::Inset(s) => Self::Inset(side(s)),
+                L::BorderWidth(s) => Self::BorderWidth(side(s)),
+                L::BorderStyle(s) => Self::BorderStyle(side(s)),
+                L::BorderColor(s) => Self::BorderColor(side(s)),
+                L::InlineSize => {
+                    if v {
+                        Self::Height
+                    } else {
+                        Self::Width
+                    }
+                }
+                L::BlockSize => {
+                    if v {
+                        Self::Width
+                    } else {
+                        Self::Height
+                    }
+                }
+                L::MinInlineSize => {
+                    if v {
+                        Self::MinHeight
+                    } else {
+                        Self::MinWidth
+                    }
+                }
+                L::MinBlockSize => {
+                    if v {
+                        Self::MinWidth
+                    } else {
+                        Self::MinHeight
+                    }
+                }
+                L::MaxInlineSize => {
+                    if v {
+                        Self::MaxHeight
+                    } else {
+                        Self::MaxWidth
+                    }
+                }
+                L::MaxBlockSize => {
+                    if v {
+                        Self::MaxWidth
+                    } else {
+                        Self::MaxHeight
+                    }
+                }
+                L::OverflowInline => {
+                    if v {
+                        Self::OverflowY
+                    } else {
+                        Self::OverflowX
+                    }
+                }
+                L::OverflowBlock => {
+                    if v {
+                        Self::OverflowX
+                    } else {
+                        Self::OverflowY
+                    }
+                }
+            },
+            p => p,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +278,9 @@ pub(super) enum Value {
     ZIndex(ZIndex),
     Overflow(Overflow),
     Direction(Direction),
+    UnicodeBidi(UnicodeBidi),
+    WritingMode(WritingMode),
+    TextOrientation(TextOrientation),
     TextAlign(TextAlign),
     TextAlignLast(TextAlignLast),
     WhiteSpaceCollapse(WhiteSpaceCollapse),
@@ -154,6 +311,7 @@ pub(super) enum Value {
     LineHeight(LineHeight),
     Custom(Arc<TokenValue>),
     Pending(Arc<PendingDeclaration>),
+    Mapped(Property, Box<Value>),
 }
 
 #[derive(Clone, Debug)]
@@ -310,6 +468,17 @@ pub(super) fn parse_tokens_with_context(
             Some(vec![
                 value(Property::RowGap, std::slice::from_ref(row))?,
                 value(Property::ColumnGap, std::slice::from_ref(column))?,
+            ])
+        }
+        Parser::Pair => {
+            let (a, b) = match tokens.as_slice() {
+                [a] => (a, a),
+                [a, b] => (a, b),
+                _ => return None,
+            };
+            Some(vec![
+                value(properties[0], std::slice::from_ref(a))?,
+                value(properties[1], std::slice::from_ref(b))?,
             ])
         }
         Parser::Overflow => {
@@ -481,6 +650,9 @@ fn border_properties(side: Side) -> [Property; 3] {
 }
 
 fn value(property: Property, tokens: &[Component]) -> Option<Value> {
+    if matches!(property, Property::Logical(_)) {
+        return value(property.physical(&ComputedStyle::default()), tokens);
+    }
     use Property as P;
     if generated_properties::simple(property) {
         return generated_properties::simple_value(property, tokens);
@@ -556,6 +728,10 @@ fn value(property: Property, tokens: &[Component]) -> Option<Value> {
         | P::OverflowX
         | P::OverflowY
         | P::Direction
+        | P::UnicodeBidi
+        | P::WritingMode
+        | P::TextOrientation
+        | P::Logical(_)
         | P::TextAlignAll
         | P::TextAlignLast
         | P::WhiteSpaceCollapse

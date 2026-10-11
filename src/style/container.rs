@@ -173,7 +173,18 @@ impl ContainerSnapshot {
         };
         while let Some(id) = ancestor {
             if let Some(container) = self.containers.get(&id)
-                && container.kind.supports(width, height)
+                && container.kind.supports(
+                    if container.lengths.vertical {
+                        height
+                    } else {
+                        width
+                    },
+                    if container.lengths.vertical {
+                        width
+                    } else {
+                        height
+                    },
+                )
                 && name.is_none_or(|name| container.names.iter().any(|n| n == name))
             {
                 return Some(container);
@@ -196,6 +207,34 @@ impl ContainerSnapshot {
         lengths.container_height = self
             .select(document, node, pseudo, None, false, true)
             .map(|c| c.size.1);
+        lengths.container_vertical = self
+            .select(document, node, pseudo, None, false, false)
+            .is_some_and(|c| c.lengths.vertical);
+        for inline in [true, false] {
+            let mut ancestor = if pseudo {
+                Some(node)
+            } else {
+                document.node(node).and_then(|n| n.parent())
+            };
+            while let Some(id) = ancestor {
+                if let Some(c) = self.containers.get(&id)
+                    && c.kind.supports(inline, !inline)
+                {
+                    let size = if c.lengths.vertical ^ !inline {
+                        c.size.1
+                    } else {
+                        c.size.0
+                    };
+                    if inline {
+                        lengths.container_inline = Some(size);
+                    } else {
+                        lengths.container_block = Some(size);
+                    }
+                    break;
+                }
+                ancestor = document.node(id).and_then(|n| n.parent());
+            }
+        }
         lengths
     }
 }

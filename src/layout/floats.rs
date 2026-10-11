@@ -31,8 +31,8 @@ impl FloatContext {
         for (side, rect) in &self.entries {
             if rect.y < add(y, height.max(0.001)) && add(rect.y, rect.height) > y {
                 match side {
-                    Float::Left => left = left.max(add(rect.x, rect.width)),
-                    Float::Right => right = right.min(rect.x),
+                    Float::Left | Float::InlineStart => left = left.max(add(rect.x, rect.width)),
+                    Float::Right | Float::InlineEnd => right = right.min(rect.x),
                     Float::None => {}
                 }
             }

@@ -1235,8 +1235,8 @@ not comparisons of encoding throughput on equivalent trees.
   - [x] **7.9.2 Compute contextual and absolute units.** Support `px`, `in`,
     `cm`, `mm`, `q`, `pt`, `pc`, `em`, `rem`, `ch`, `ex`, `lh`, `rlh`, and
     `vw`/`vh`/`vmin`/`vmax` with their small/large/dynamic families.
-    Horizontal logical aliases (`vi`/`vb` and family variants) work in the
-    engine's horizontal writing mode. Root font-size `rem` and root
+    `vi`/`vb` and family variants use the root writing mode's inline/block
+    viewport axes (8.14), rather than aliasing physical `vw`/`vh`. Root font-size `rem` and root
     font-size/line-height `rlh` use initial metrics to break self-dependencies;
     `lh` in font-size/line-height uses the parent's completed line-height.
     Other lengths then use this element's completed font and line-height.
@@ -1288,8 +1288,7 @@ not comparisons of encoding throughput on equivalent trees.
   **Remaining boundaries:** This is a finite numeric subset, not CSS's full
   `infinity`/`-infinity`/`NaN`, signed-zero, overflow, or trigonometric
   singularity semantics. `clamp(none, …, none)`, generalized unhinted
-  percentage type inference, frequency/flex dimensions, `cap`/`ic` and
-  additional root-font metric units, vertical writing modes,
+  percentage type inference, frequency/flex dimensions,
   `attr()`/`env()`, and the
   rest of Values 4's nonnumeric grammars remain unsupported. Container units
   are implemented by the local 7.13 substeps below. Math that becomes
@@ -1463,8 +1462,8 @@ not comparisons of encoding throughput on equivalent trees.
   complete pseudo rendering and shadow/encapsulation contexts remain open. Scope handling
   is an element-tree subset: document/fragment/shadow-root scoping, every
   nesting/scoping combination, CSSOM mutation, and external scope fixtures
-  still need conformance work. Cascade transitions/animations, logical-property
-  groups, complete presentational hints, and properties beyond the current
+  still need conformance work. Cascade transitions/animations,
+  complete presentational hints, and properties beyond the current
   finite set are not implemented. Import loading retains existing UTF-8 CSS
   decoding, per-navigation caching, and current URL/content-type policy, not
   full encoding inheritance, persistent HTTP caching, CSSOM import APIs, or
@@ -1869,7 +1868,8 @@ and the CSSOM parts covered here meet the conformance gate.
   The containing block's CSS `direction` (`ltr` or `rtl`) selects the
   adjusted margin, not the child's direction. This minimal inherited
   property is excluded from `all`; 8.4 also uses it for logical start/end
-  text alignment. It does not implement bidi text or RTL inline flow.
+  text alignment. Step 8.14 extends it to paragraph bidi, RTL inline flow,
+  HTML directional hints and logical writing axes.
 
   Supported block images determine their width using the existing
   intrinsic/explicit/alt-fallback sizing path before solving their margins.
@@ -1902,7 +1902,8 @@ and the CSSOM parts covered here meet the conformance gate.
   fragments, Unicode wrapping, and CSS whitespace. No min/max/intrinsic sizing
   keywords, positioned/floated/
   table/flex/grid layout, writing modes, logical margins, HTML `dir`
-  semantics, or bidi text are added. Those remain in later steps;
+  semantics, or bidi text were added by 8.2. Positioned/flex/grid/float/table
+  layout arrives in 8.8–8.12; writing axes and paragraph bidi arrive in 8.14;
   Milestone 8 is not complete.
 - [x] **8.3 Collapse margins.** Implement vertical margin collapsing.
   *You'll see:* spacing between paragraphs matches browsers.
@@ -2054,8 +2055,8 @@ and the CSSOM parts covered here meet the conformance gate.
   **Supported scope, not full browser/WPT parity:** Baseline is the only
   vertical alignment. Step 8.5 adds UAX #14 and the documented CSS whitespace
   subset; 8.6 adds system fonts, kerning, ligatures, and script shaping.
-  Paragraph bidi/writing modes,
-  justification/automatic hyphenation,
+  Step 8.14 supplies paragraph bidi and native writing modes.
+  Justification/automatic hyphenation,
   advanced vertical alignment, independent last-line alignment,
   `box-decoration-break: clone`, and other formatting contexts remain
   deferred. Existing image sizing caps and indefinite percentage-height
@@ -2150,8 +2151,8 @@ and the CSSOM parts covered here meet the conformance gate.
 
   **Remaining limitations:** This is the supported horizontal block/inline
   model, not full browser/WPT parity. Step 8.6 supplies shaping, kerning,
-  ligatures, and font fallback/selection; full paragraph bidi/writing modes
-  remain 8.14. Dictionary/orthographic segmentation,
+  ligatures, and font fallback/selection; 8.14 adds paragraph UAX #9 and
+  native vertical writing axes. Dictionary/orthographic segmentation,
   word-break/line-break tailoring, automatic hyphenation, text transforms,
   and justification remain 8.16. Advanced whitespace trimming, additional
   collapsing modes, intrinsic sizing, and other formatting contexts are
@@ -2233,9 +2234,9 @@ and the CSSOM parts covered here meet the conformance gate.
   Outline variable fonts use matching default instances only, with a diagnostic;
   variation-axis selection, color/bitmap-only and CFF2 raster formats are not
   supported. Arabic and other individual RTL script runs shape in visual glyph
-  order, but mixed-direction paragraphs/style runs remain in logical run order:
-  no full UAX #9 or RTL inline-flow claim. Web fonts are added in 8.7; paragraph bidi
-  and writing modes remain 8.14; color emoji, advanced font features, dictionary
+  order; 8.14 resolves paragraph levels first and installs UAX #9 visual line
+  order without reversing those glyphs twice. Web fonts are added in 8.7;
+  native vertical shaping/layout arrives in 8.14; color emoji, advanced font features, dictionary
   hyphenation and the wider typography umbrella remain 8.16.
 
   Deterministic tests compare ligatures/kerning with rustybuzz references,
@@ -2313,7 +2314,8 @@ and the CSSOM parts covered here meet the conformance gate.
   bitmap/color-only and CFF2 faces cannot rasterize. Downloadable collections
   and URL collection fragments are rejected rather than guessing an index;
   exact local collection faces retain their fontdb index through shaping/paint.
-  Paragraph bidi, writing modes and advanced typography remain later steps.
+  Step 8.14 adds paragraph bidi, native vertical writing, and declared web-face
+  fallback across scripts; advanced typography remains 8.16.
   `--bundled-fonts` disables general installed selection, not author downloads;
   explicit local() still resolves installed names. Deterministic tests use
   the licensed bundled local full name instead of depending on OS font names.
@@ -2394,8 +2396,9 @@ and the CSSOM parts covered here meet the conformance gate.
   Clippy, formatting, all-target/bench compilation and regeneration checks pass.
 
   **Not a full CSS conformance gate:** floats/tables and their Appendix E phases
-  wait for 8.12; paragraph bidi/RTL inline static-position geometry, writing modes
-  and logical insets wait for 8.14. Min/max/general intrinsic sizing, anchors,
+  are supplied by 8.12; paragraph bidi, native writing axes and logical insets
+  are supplied by 8.14. Complex orthogonal inline static positions remain partial.
+  General intrinsic sizing, anchors,
   transforms/effect-created containing blocks/contexts, integer math/animation,
   and paged media remain absent. Fixed auto follows CSS2 (not the modern rule
   that fixed unconditionally creates a context). Overflow clips/nested scroll
@@ -2424,9 +2427,10 @@ and the CSSOM parts covered here meet the conformance gate.
   whose containing-block ancestry contributes to the container. Intervening
   axis clips bound outer/document extents, so hidden contents cannot enlarge
   the root scroll range. Negative ink remains inspectable; the horizontal LTR
-  origin and downward vertical origin do not expose the negative area. RTL
-  containers have a bounded negative horizontal range, not RTL inline/bidi
-  layout. Zero-size ports have zero ranges, and invalid offsets or
+  origin and downward vertical origin do not expose the negative area. Step 8.14
+  chooses origins by writing axes: vertical-rl has negative X ranges; reversed
+  inline flow can have negative Y ranges. Wheel deltas remain physical.
+  Zero-size ports have zero ranges, and invalid offsets or
   unrepresentable arithmetic produce retained used-value diagnostics.
 
   A document-owned `ScrollState` uses real `NodeId` plus originating pseudo
@@ -2487,8 +2491,8 @@ and the CSSOM parts covered here meet the conformance gate.
   regenerated from `tools/css-spec/engine-support.json`, not edited by hand.
 
   **Limits:** only the current horizontal block/replaced formatting model;
-  non-replaced inline overflow, logical overflow axes, overflow-clip-margin,
-  generalized min/max/intrinsic sizing, bidi/writing modes, floats/tables,
+  non-replaced inline overflow, overflow-clip-margin,
+  generalized min/max/intrinsic sizing,
   transforms and paged media remain their later steps. No scroll anchoring,
   smooth scrolling, keyboard focus reveal inside panels, styled/reserved
   scrollbar gutters or root scrollbar UI is claimed. Sticky positioning,
@@ -2581,10 +2585,11 @@ and the CSSOM parts covered here meet the conformance gate.
   CSS coverage is generated from the engine overlay: **68 longhands** and
   **22 shorthands**, still classified partial, with no WPT/parity claim.
 
-  **Finite limits:** horizontal writing only; no floats/tables,
-  `visibility:collapse` struts, pagination, intrinsic-size keyword grammar,
+  **Finite limits:** 8.12 adds floats/tables and 8.14 adds native vertical/orthogonal
+  children and logical allocation. No `visibility:collapse` struts,
+  pagination, intrinsic-size keyword grammar,
   `aspect-ratio` property, complete replaced min/max ratio constraints,
-  paragraph bidi, last-baseline groups or generalized Box Alignment.
+  last-baseline groups or generalized Box Alignment.
   Column and `align-content` baseline alignment diagnose a flex-start
   fallback. Cyclic intrinsic percentage decorations and multi-line column
   intrinsic cross sizing remain partial. These are not CSS Flexbox WPT
@@ -2659,7 +2664,7 @@ and the CSSOM parts covered here meet the conformance gate.
   cell probes** per grid placement pass. Oversized repeats, lines, spans and
   extents are bounded with diagnostics; exhausted placement uses bounded
   overlap fallback cells. No subgrid/masonry, nested repeats, `grid` or
-  `grid-template` shorthands, vertical writing, paragraph bidi, last-baseline
+  `grid-template` shorthands, last-baseline
   groups, legacy center/left/right alignment or general intrinsic-size/
   aspect-ratio property grammar is claimed. Unanchored named auto spans
   diagnose integer-span fallback; inline-axis and align-content baseline
@@ -2711,12 +2716,13 @@ and the CSSOM parts covered here meet the conformance gate.
   generator tests**. CSS coverage is generated from the engine overlay: **87
   longhands and 28 shorthands**, still classified partial.
 
-  **Finite CSS2 subset, not full WPT/browser parity:** horizontal writing only;
+  **Finite CSS2 subset, not full WPT/browser parity:** 8.14 extends the grid/
+  exclusion geometry to vertical writing with native cells and float children;
   at most **4,096 exclusions per BFC**, with diagnosed conservative full-width
   exclusion/vertical stacking beyond that; tables allow **512 rows, 128 columns,
   65,536 slots**, bounded integer spans and **1,000,000px per used size/intrinsic
   contribution** (excess is diagnosed). No pagination/repeated paged headers,
-  `visibility:collapse`, logical float/clear/caption axes, shape-outside,
+  `visibility:collapse`, inline-side caption keywords, shape-outside,
   alternative script baselines, complete cyclic percentage table sizing,
   advanced table height-distribution/conformance algorithms or unsupported
   groove/ridge/inset/outset border styles are claimed. Non-baseline ordinary
@@ -2764,12 +2770,93 @@ and the CSSOM parts covered here meet the conformance gate.
   compared before ready. JavaScript/WebDriver readiness remains pending 9.8/10;
   PNG links and native scroll options are local conveniences, not a WPT parity
   claim. The ordinary HTML reference-link format is retained for later
-  wptrunner use. **8.14 remains unchecked; milestone 8 is not complete.**
-- [ ] **8.14 Support writing modes and bidirectional text.** Implement the
+  wptrunner use. Step 8.14 adds deterministic multilingual/vertical fixtures;
+  **milestone 8 is not complete.**
+- [x] **8.14 Support writing modes and bidirectional text.** Implement the
   Unicode Bidirectional Algorithm (UAX #9), CSS Writing Modes 4, logical
   properties, and vertical text.
   *You'll see:* Arabic, Hebrew, and vertical Japanese pages lay out
   correctly.
+
+  `layout::bidi` assembles a bounded Unicode paragraph from normalized logical
+  inline text, CSS embedding/isolation/override events, and U+FFFC atomic/replaced
+  boundaries. `unicode-bidi` supplies UAX #9 paragraph levels, bracket/number/
+  neutral resolution, per-line L1 resets and L2 visual order. Levels select
+  `rustybuzz` run direction before shaping. UAX #14 opportunities and greedy
+  fitting remain logical; only the selected line is visually reordered, without
+  reversing an already RTL-shaped run. Source clusters, cross-node graphemes,
+  contextual Arabic joining, fallback faces and DOM/pseudo ownership survive.
+  Visual inline decorations/hit intervals may be disjoint. Invisible controls
+  affect levels, not painted glyph masks. CSS scopes reopen at paragraph breaks;
+  `plaintext` resolves each paragraph's base independently. HTML `dir=ltr/rtl/
+  auto`, `bdi` and `bdo` have UA defaults; first-strong auto hints skip independent
+  directional subtrees. Anonymous block runs retain their containing override.
+
+  Typed inherited `writing-mode` supports `horizontal-tb`, `vertical-rl`,
+  `vertical-lr`, `sideways-rl` and `sideways-lr`; `text-orientation` supports
+  `mixed`, `upright` and `sideways`. `layout::writing::FlowAxes` installs a
+  formatting context's physical rectangles from native inline/block axes:
+  vertical line lengths use available height, columns progress right-to-left or
+  left-to-right, and block children stack on the block axis. Orthogonal blocks
+  and inlines lay out in their own modes (orthogonal inlines are atomic).
+  Images keep physical dimensions; no page/subtree rotation substitutes for
+  layout. OpenType TTB shaping uses vertical advances and `vert`/`vrt2`;
+  UAX #50 orientation selects upright CJK, rotated Latin and transformed glyphs
+  with rotated fallback. Paint rotates individual indexed masks using the same
+  glyph transform as ink geometry, including synthesis and cluster clipping.
+  Physical baselines, clips, hits and fractional raster scales share coordinates.
+  Selected vertical `ic` and upright `ch` use the selected face's vertical metrics.
+
+  Logical margin/padding/border width/style/color/inset sides and pairs,
+  inline/block sizes and min/max bounds, and overflow-inline/block map after
+  computing writing axes. Logical and physical declarations compete by original
+  priority/order in shared buckets, including pending shorthands, variables,
+  explicit logical inheritance, `revert` and `revert-layer`. Direction and
+  unicode-bidi are excluded from `all`. `vi`/`vb` use root viewport axes;
+  `cqi`/`cqb` use each individually eligible container's axes, independently of
+  the consumer. Percentage decorations use the containing inline reference;
+  physical sizes/insets retain their physical references. Flex/grid allocation
+  uses geometry-only logical measurement boxes and reflows real native children;
+  no oracle glyphs are painted. Float exclusions/clearance and table grid/border
+  geometry use logical axes with native cells. Parallel vertical sibling margins
+  collapse. Relative/absolute/fixed placement and scroll extents remain physical;
+  vertical-rl exposes negative X overflow and reversed inline flow negative Y.
+  Document scroll identity and offsets survive stable relayout/cloning.
+
+  **Deterministic evidence:** `tests/pages/writing_modes_bidi.html` demonstrates
+  Arabic/Hebrew isolation, override, Japanese columns, orientation, an orthogonal
+  context and physical overflow. Two new native reftests compare mixed
+  Arabic/Hebrew+numbers/isolation with independently ordered flex runs, and
+  vertical Japanese/mixed Latin/vertical bidi with independently positioned
+  glyph cells and an explicit visual-order reference. All font inputs are
+  licensed static URL fixtures (Latin, Arabic, Hebrew, Japanese), never system
+  discovery. The Japanese subset contains real vertical punctuation substitutions;
+  unit contracts compare IDs, advances and coordinates with independent TTB
+  OpenType output, and verify nonzero glyph ink. Pixel/hit contracts cover scales
+  1, 1.5 and 2, clipping and stable relayout; native reftests use exact equality at
+  scales 1 and 2. Coverage remains partial, not a WPT gate.
+
+  Validation: **785 all-features Rust tests**, including **22 writing/bidi
+  cascade/layout contracts** and the licensed-font native reference contracts,
+  pass. All ten native reftests are exact at scales 1 and 2. Formatting, strict
+  all-feature/all-target Clippy, benchmark compilation, offline regeneration
+  checks and **7 generator tests** pass. Generated coverage records **122
+  longhands and 46 shorthands**, all still partial.
+
+  **Genuine boundaries:** no full CSS Writing Modes/WPT or exhaustive external
+  UAX #9 conformance run is claimed. UAX #50 uses `unicode-vo` revision-17 data,
+  not the latest Unicode orientation database. Advanced script/orthogonal
+  baseline groups, `text-combine-upright`, ruby, fragmentation, complex vertical
+  parent/empty-through margin collapse and shared cross-anonymous BFC exclusions,
+  advanced vertical table caption/span/height distribution, and auto-size
+  containment remain partial. Orthogonal percentage/intrinsic cycles and
+  complex inline static positions are not a complete CSS Sizing model.
+  Paragraph text is bounded to 262,144 UTF-8 bytes with diagnosed omission;
+  existing font/shaping/float/table/grid limits still apply. Vertical flex/grid
+  intrinsic feedback has four passes and diagnoses non-convergence.
+  Logical border radii are not implemented. General display/sizing/replaced
+  grammar remains 8.15; advanced typography remains 8.16. **8.15 is unchanged
+  and milestone 8 is not complete.**
 - [ ] **8.15 Complete display types, sizing, and replaced elements.**
   Implement CSS Display 3 (`contents`, `flow-root`, and multi-keyword
   values), Box Alignment 3, CSS Sizing 3 and 4 (`min-content`,

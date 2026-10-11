@@ -649,6 +649,42 @@ fn resolve_internal_fonts<const MODE: u8>(
                     &mut winners,
                     &mut matching,
                 );
+                let direction = match element
+                    .attribute("dir")
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                {
+                    Some("ltr") => Some(super::Direction::Ltr),
+                    Some("rtl") => Some(super::Direction::Rtl),
+                    Some("auto") => Some(super::directionality::auto(document, node_id)),
+                    _ if element.tag_name() == "bdi" => {
+                        Some(super::directionality::auto(document, node_id))
+                    }
+                    _ => None,
+                };
+                if let Some(direction) = direction {
+                    insert(
+                        &mut winners,
+                        &StyledDeclaration {
+                            property: DeclarationProperty::Longhand(Property::Direction),
+                            value: Value::Direction(direction),
+                            important: false,
+                            order: 0,
+                        },
+                        Priority {
+                            level: CascadeLevel::UserAgent,
+                            inline: false,
+                            layer_rank: 0,
+                            specificity: Specificity::default(),
+                            proximity: std::cmp::Reverse(usize::MAX),
+                            sheet: usize::MAX,
+                            rule: 0,
+                            declaration: 0,
+                            layer: 0,
+                            normal_rank: 0,
+                        },
+                    );
+                }
                 for (attribute, property) in
                     [("width", Property::Width), ("height", Property::Height)]
                 {
@@ -1634,7 +1670,9 @@ fn select_candidate(
     if let Some((priority, value)) = candidates.iter().max_by_key(|(priority, _)| *priority)
         && !matches!(
             value,
-            Value::Wide(WideKeyword::Revert | WideKeyword::RevertLayer) | Value::Pending(_)
+            Value::Wide(WideKeyword::Revert | WideKeyword::RevertLayer)
+                | Value::Pending(_)
+                | Value::Mapped(..)
         )
     {
         return Some((*priority, value.clone()));
@@ -1693,7 +1731,9 @@ fn substitute_winners(
         let winner = &winners.longhands[&property];
         if !matches!(
             winner.1,
-            Value::Wide(WideKeyword::Revert | WideKeyword::RevertLayer) | Value::Pending(_)
+            Value::Wide(WideKeyword::Revert | WideKeyword::RevertLayer)
+                | Value::Pending(_)
+                | Value::Mapped(..)
         ) {
             result.insert(property, winner.clone());
             continue;
@@ -1705,8 +1745,25 @@ fn substitute_winners(
             .map(Vec::as_slice)
             .unwrap_or(fallback);
         let selected = select_candidate(candidates, |value| {
+            let (original, value) = if let Value::Mapped(original, value) = value {
+                (*original, value.as_ref())
+            } else {
+                (property, value)
+            };
+            let wrap = |value: Value| {
+                if original != property
+                    && !matches!(
+                        value,
+                        Value::Wide(WideKeyword::Revert | WideKeyword::RevertLayer)
+                    )
+                {
+                    Value::Mapped(original, Box::new(value))
+                } else {
+                    value
+                }
+            };
             let Value::Pending(declaration) = value else {
-                return value.clone();
+                return wrap(value.clone());
             };
             let values = pending.entry(Arc::as_ptr(declaration)).or_insert_with(|| {
                 let result = declaration
@@ -1728,12 +1785,14 @@ fn substitute_winners(
             let index = declarations::properties(&declaration.name)
                 .unwrap()
                 .iter()
-                .position(|candidate| *candidate == property)
+                .position(|candidate| *candidate == original)
                 .unwrap();
-            values
-                .as_ref()
-                .map(|values| values[index].clone())
-                .unwrap_or(Value::Wide(WideKeyword::Unset))
+            wrap(
+                values
+                    .as_ref()
+                    .map(|values| values[index].clone())
+                    .unwrap_or(Value::Wide(WideKeyword::Unset)),
+            )
         });
         if let Some(selected) = selected {
             result.insert(property, selected);
@@ -1791,6 +1850,7 @@ pub(super) struct RootFontMetrics {
     font_size: f32,
     line_height: f32,
     units: crate::text::FontUnits,
+    vertical: bool,
 }
 
 impl RootFontMetrics {
@@ -1798,7 +1858,8 @@ impl RootFontMetrics {
         Self {
             font_size: style.font_size,
             line_height: style.used_line_height(),
-            units: style.font_face.units(style.font_size),
+            units: style.font_face.units_for_style(style),
+            vertical: style.writing_mode.vertical(),
         }
     }
 }
@@ -1817,6 +1878,9 @@ pub(super) fn length_context(
         })
     });
     let mut context = LengthContext {
+        vertical: style.writing_mode.vertical(),
+        container_vertical: false,
+        viewport_vertical: root.vertical,
         font_size: style.font_size,
         root_font_size: root.font_size,
         zero_advance: style.font_size * 0.5,
@@ -1834,13 +1898,18 @@ pub(super) fn length_context(
         dynamic_viewport: environment.dynamic_viewport.unwrap_or(viewport),
         container_width: None,
         container_height: None,
+        container_inline: None,
+        container_block: None,
     };
     set_selected_metrics(&mut context, style);
     context
 }
 
 fn set_selected_metrics(context: &mut LengthContext, style: &ComputedStyle) {
-    let units = style.font_face.units(context.font_size);
+    let units = style.font_face.units_for_style(&ComputedStyle {
+        font_size: context.font_size,
+        ..style.clone()
+    });
     context.zero_advance = units.ch;
     context.x_height = units.ex;
     context.cap_height = units.cap;
@@ -1890,12 +1959,96 @@ fn compute_with_context(
         diagnostics,
         registrations,
     );
-    let winners = substitute_winners(winners, &environment, &mut budget, node_id, diagnostics);
+    let mut axis_winners = Winners::default();
+    for property in [
+        Property::Direction,
+        Property::WritingMode,
+        Property::TextOrientation,
+    ] {
+        if let Some(winner) = winners.longhands.get(&property) {
+            axis_winners.longhands.insert(property, winner.clone());
+        }
+        if let Some(candidates) = winners.candidates.get(&property) {
+            axis_winners.candidates.insert(property, candidates.clone());
+        }
+    }
+    let axes = substitute_winners(
+        &axis_winners,
+        &environment,
+        &mut budget,
+        node_id,
+        diagnostics,
+    );
     let initial = ComputedStyle {
         font_size: initial_font_size,
         ..ComputedStyle::default()
     };
     let mut style = ComputedStyle::inherit(&parent.style);
+    for property in [
+        Property::Direction,
+        Property::WritingMode,
+        Property::TextOrientation,
+    ] {
+        if let Some((_, value)) = axes.get(&property) {
+            apply(
+                &mut style,
+                &parent.style,
+                property,
+                computed_value(value, property, parent, &initial),
+            );
+        }
+    }
+    context.vertical = style.writing_mode.vertical();
+    if is_root {
+        context.viewport_vertical = context.vertical;
+    }
+    let mut physical = Winners::default();
+    for (&property, candidates) in &winners.candidates {
+        for (priority, value) in candidates {
+            let mapped = property.physical(&style);
+            let value = if mapped != property {
+                Value::Mapped(property, Box::new(value.clone()))
+            } else {
+                value.clone()
+            };
+            physical
+                .candidates
+                .entry(mapped)
+                .or_default()
+                .push((*priority, value.clone()));
+            if physical
+                .longhands
+                .get(&mapped)
+                .is_none_or(|(old, _)| priority >= old)
+            {
+                physical.longhands.insert(mapped, (*priority, value));
+            }
+        }
+    }
+    // Some test/benchmark callers construct winners without candidate history.
+    for (&property, (priority, value)) in &winners.longhands {
+        if !winners.candidates.contains_key(&property) {
+            let mapped = property.physical(&style);
+            let value = if mapped != property {
+                Value::Mapped(property, Box::new(value.clone()))
+            } else {
+                value.clone()
+            };
+            physical
+                .candidates
+                .entry(mapped)
+                .or_default()
+                .push((*priority, value.clone()));
+            if physical
+                .longhands
+                .get(&mapped)
+                .is_none_or(|(old, _)| priority >= old)
+            {
+                physical.longhands.insert(mapped, (*priority, value));
+            }
+        }
+    }
+    let winners = substitute_winners(&physical, &environment, &mut budget, node_id, diagnostics);
     style.custom_properties = environment;
     style.border_width = Edges::all(3.0);
     let mut colors = ComputedColors {
@@ -1903,6 +2056,11 @@ fn compute_with_context(
         ..ComputedColors::default()
     };
     for (&property, (_, value)) in &winners {
+        let value = if let Value::Mapped(_, inner) = value {
+            inner.as_ref()
+        } else {
+            value
+        };
         if matches!(property, Property::Margin(_)) {
             let margin = match value {
                 Value::Auto => Some(crate::css::values::LengthOrAuto::Auto),
@@ -2054,6 +2212,41 @@ fn compute_with_context(
         }
     }
     let (x, y) = (style.overflow_x, style.overflow_y);
+    let rtl = style.direction == super::Direction::Rtl;
+    style.float = match style.float {
+        super::Float::InlineStart => {
+            if rtl {
+                super::Float::Right
+            } else {
+                super::Float::Left
+            }
+        }
+        super::Float::InlineEnd => {
+            if rtl {
+                super::Float::Left
+            } else {
+                super::Float::Right
+            }
+        }
+        v => v,
+    };
+    style.clear = match style.clear {
+        super::Clear::InlineStart => {
+            if rtl {
+                super::Clear::Right
+            } else {
+                super::Clear::Left
+            }
+        }
+        super::Clear::InlineEnd => {
+            if rtl {
+                super::Clear::Left
+            } else {
+                super::Clear::Right
+            }
+        }
+        v => v,
+    };
     style.overflow_x = x.coupled(y);
     style.overflow_y = y.coupled(x);
     style.positioned_inline = style.position.out_of_flow()
@@ -2168,6 +2361,9 @@ fn computed_value(
     parent: &ComputedNode,
     initial: &ComputedStyle,
 ) -> Value {
+    if let Value::Mapped(original, value) = value {
+        return computed_value(value, *original, parent, initial);
+    }
     if let Value::FontSizeKeyword(keyword) = value {
         return Value::Length(Length::Px(keyword.resolve(initial.font_size)));
     }
@@ -2206,6 +2402,7 @@ fn computed_value(
     let style = &parent.style;
     use Property as P;
     match property {
+        P::Logical(_) => computed_value(value, property.physical(style), parent, initial),
         P::Content => Value::Content(style.content.clone()),
         P::Color => Value::Color(Color::Absolute(style.text_color)),
         P::TextFillColor => Value::Color(parent.colors.fill.clone()),
@@ -2231,6 +2428,9 @@ fn computed_value(
             crate::css::values::LengthOrAuto::Auto => Value::Auto,
         },
         P::Direction => Value::Direction(style.direction),
+        P::UnicodeBidi => Value::UnicodeBidi(style.unicode_bidi),
+        P::WritingMode => Value::WritingMode(style.writing_mode),
+        P::TextOrientation => Value::TextOrientation(style.text_orientation),
         P::TextAlignAll => Value::TextAlign(style.text_align),
         P::TextAlignLast => Value::TextAlignLast(style.text_align_last),
         P::WhiteSpaceCollapse => Value::WhiteSpaceCollapse(style.white_space_collapse),
@@ -2360,6 +2560,9 @@ fn apply(style: &mut ComputedStyle, parent: &ComputedStyle, property: Property, 
         (P::CaptionSide, Value::CaptionSide(v)) => style.caption_side = v,
         (P::EmptyCells, Value::EmptyCells(v)) => style.empty_cells = v,
         (P::Direction, Value::Direction(direction)) => style.direction = direction,
+        (P::UnicodeBidi, Value::UnicodeBidi(v)) => style.unicode_bidi = v,
+        (P::WritingMode, Value::WritingMode(v)) => style.writing_mode = v,
+        (P::TextOrientation, Value::TextOrientation(v)) => style.text_orientation = v,
         (P::TextAlignAll, Value::TextAlign(align)) => style.text_align = align,
         (P::TextAlignLast, Value::TextAlignLast(align)) => style.text_align_last = align,
         (P::WhiteSpaceCollapse, Value::WhiteSpaceCollapse(mode)) => {

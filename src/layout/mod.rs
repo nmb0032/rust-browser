@@ -16,6 +16,7 @@
 //! Paragraph bidi and advanced language-dependent text tailoring are deferred.
 //! Consumes computed styles, never CSS source.
 
+mod bidi;
 mod block;
 mod flex;
 mod floats;
@@ -29,6 +30,7 @@ mod sizing;
 mod stacking;
 mod table;
 mod tree;
+mod writing;
 
 pub use geometry::{ActualRect, Rect};
 pub use overflow::{
@@ -61,3 +63,5 @@ mod positioning_tests;
 mod tests;
 #[cfg(test)]
 mod width_tests;
+#[cfg(test)]
+mod writing_bidi_tests;
