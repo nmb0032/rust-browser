@@ -2,6 +2,7 @@
 //! indexed-font/image rasterizer as the opaque path, then sampled through the
 //! layout plane's inverse. Intermediate canvases are never opaque white.
 use super::DisplayItem;
+use crate::display::{ColorProfile, RasterOptions};
 use crate::{
     css::values::ResolvedColor,
     layout::{CoordinateSpace, Mat4, Rect, SpatialState},
@@ -296,15 +297,19 @@ impl Group {
     }
 }
 
-pub(crate) fn rasterize(
+pub(crate) fn rasterize_profile(
     list: &[DisplayItem],
     font: &crate::text::FontContext,
     pixels: &mut [u32],
     width: usize,
     height: usize,
-    scale: f64,
-    scroll: f32,
+    options: RasterOptions,
 ) {
+    let RasterOptions {
+        scale,
+        scroll,
+        profile,
+    } = options;
     if let Err(error) = validate(list, width, height, scale) {
         eprintln!("CSS: {error}; effects render suppressed");
         return;
@@ -359,7 +364,7 @@ pub(crate) fn rasterize(
                 let filters = layer.effects.filters(Property::BackdropFilter);
                 if !filters.is_empty() {
                     let mut captured = (0..n).map(|i| parent.effective(i)).collect::<Vec<_>>();
-                    apply_filters(
+                    apply_filters_profile(
                         &mut captured,
                         w,
                         h,
@@ -367,6 +372,7 @@ pub(crate) fn rasterize(
                         layer.size,
                         layer.color,
                         &filters,
+                        profile,
                     );
                     for y in 0..h {
                         for x in 0..w {
@@ -400,7 +406,7 @@ pub(crate) fn rasterize(
                 }
                 let mut group = stack.pop().unwrap();
                 let layer = group.layer.take().unwrap();
-                apply_filters(
+                apply_filters_profile(
                     &mut group.source,
                     w,
                     h,
@@ -408,6 +414,7 @@ pub(crate) fn rasterize(
                     layer.size,
                     layer.color,
                     &layer.effects.filters(Property::Filter),
+                    profile,
                 );
                 let parent = stack.last_mut().unwrap();
                 let Value::Shape(shape) = layer.effects.get(Property::ClipPath) else {
@@ -456,7 +463,7 @@ pub(crate) fn rasterize(
                 let g = stack.last_mut().unwrap();
                 for y in pad..pad + height {
                     for x in pad..pad + width {
-                        g.source[y * w + x] = *color | 0xff000000;
+                        g.source[y * w + x] = profile.rgb(*color) | 0xff000000;
                     }
                 }
             }
@@ -494,14 +501,17 @@ pub(crate) fn rasterize(
                     },
                     ..SpatialState::default()
                 };
-                super::rasterizer::rasterize_rgba(
+                super::rasterizer::rasterize_rgba_profile(
                     &[DisplayItem::Spatial(Box::new(state)), item.clone()],
                     font,
                     &mut source,
                     sw,
                     sh,
-                    scale as f64,
-                    0.0,
+                    RasterOptions {
+                        scale: scale as f64,
+                        scroll: 0.0,
+                        profile,
+                    },
                 );
                 let left = (visual.x * scale + pad as f32).floor().clamp(0.0, w as f32) as usize;
                 let top = (visual.y * scale + pad as f32).floor().clamp(0.0, h as f32) as usize;
@@ -658,6 +668,29 @@ pub fn apply_filters(
     current: ResolvedColor,
     filters: &[Filter],
 ) {
+    apply_filters_profile(
+        pixels,
+        width,
+        height,
+        scale,
+        size,
+        current,
+        filters,
+        ColorProfile::Srgb,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_filters_profile(
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+    scale: f32,
+    size: f32,
+    current: ResolvedColor,
+    filters: &[Filter],
+    profile: ColorProfile,
+) {
     for f in filters {
         match f {
             Filter::Blur(l) => gaussian(
@@ -668,7 +701,7 @@ pub fn apply_filters(
             ),
             Filter::DropShadow { x, y, blur, color } => {
                 let color = color.resolve(current).unwrap_or(current);
-                let (rgb, alpha) = color.to_srgb8();
+                let (rgb, alpha) = profile.color(color);
                 let original = pixels.to_vec();
                 let mut shadow = original
                     .iter()
@@ -698,6 +731,17 @@ pub fn apply_filters(
             _ => {
                 for p in pixels.iter_mut() {
                     let mut c = unpack(*p);
+                    let convert = profile != ColorProfile::Srgb && !matches!(f, Filter::Opacity(_));
+                    if convert {
+                        let color = ResolvedColor {
+                            space: profile.space(),
+                            channels: [c[0] as f64, c[1] as f64, c[2] as f64],
+                            alpha: c[3] as f64,
+                            missing: 0,
+                        }
+                        .convert(crate::css::values::ColorSpace::Srgb);
+                        c[..3].copy_from_slice(&color.channels.map(|v| v as f32));
+                    }
                     let (r, g, b) = (c[0], c[1], c[2]);
                     match f {
                         Filter::Brightness(n) => {
@@ -751,6 +795,12 @@ pub fn apply_filters(
                                 + (0.072 + 0.928 * k + 0.072 * s) * b;
                         }
                         _ => unreachable!(),
+                    }
+                    if convert {
+                        let color =
+                            ResolvedColor::srgb(c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64)
+                                .convert(profile.space());
+                        c[..3].copy_from_slice(&color.channels.map(|v| v as f32));
                     }
                     *p = pack(c);
                 }

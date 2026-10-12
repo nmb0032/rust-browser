@@ -3509,12 +3509,82 @@ and the CSSOM parts covered here meet the conformance gate.
   relative/pseudo-unit mpadded sizing, unsupported variants and bevelled fractions
   are diagnosed/finite gaps. Available document fonts determine symbol coverage;
   there is no implicit system math-font discovery. These bounds do not establish
-  complete SVG 2/MathML Core or full WPT conformance. **8.22 and milestone 9 remain
-  unimplemented.**
-- [ ] **8.22 Support high-DPI and color management.** Render at the device
+  complete SVG 2/MathML Core or full WPT conformance. Wide-gamut and zoom behavior
+  is defined in 8.22 below; milestone 9 remains unimplemented.
+- [x] **8.22 Support high-DPI and color management.** Render at the device
   pixel ratio, support page zoom, and convert images and CSS colors between
   color spaces for the display profile.
   *You'll see:* crisp text on Retina displays and accurate wide-gamut color.
+
+  **Implemented (finite output/scaling contract):** `display::ViewScale` and
+  retained `Frame::{set_viewport,set_page_zoom,view_scale}` share the native and
+  headless contract. Physical buffers remain viewport × DPR; CSS viewport,
+  viewport units and media-query geometry divide by page zoom; glyph/vector
+  rasterization, `resolution`, transformed inverse hits, cursor/drag coordinates
+  and physical wheel deltas use DPR × zoom. Snap/fragment targets and retained
+  scroll offsets remain CSS pixels and clamp to rebuilt ranges. Native
+  Command/Ctrl +, −, 0 controls and headless `--page-zoom` reflow the retained
+  DOM/cascade/resources without resampling a page bitmap or replacing document
+  identity. Author and animation-sampled styles stay separate. DPR 0.125–8,
+  zoom 0.25–4 and their product 0.125–8 are finite validated limits.
+  Physical print layout is zoom-independent; captures/preview magnify and
+  rerasterize sheets, not re-paginate them.
+
+  Explicit `--color-profile srgb|display-p3` selects the RGB8 working/output
+  encoding. Shared existing CSS Color 4 conversion science reaches legacy and
+  extended CSS backgrounds, text/decorations/borders/scrollbars, shadow/filter
+  groups, SVG paths/gradients/patterns/images and SVG/MathML glyphs. Images
+  retain sRGB and P3 buffers converted from source metadata before sampling,
+  with alpha and EXIF orientation preserved; both buffers count toward bounded
+  decode/page-resource accounting. The already-transitive pure-Rust moxcms
+  0.8.1 and png 0.18.1 are now direct dependencies for RGB ICC matrix/LUT
+  transforms and PNG metadata. P3 PNGs carry a real D65 RGB ICC profile, not an
+  sRGB-clipped bitmap with a new label. sRGB output carries an sRGB chunk and
+  preserves all previous exact ordinary/timed/scroll/fragment/print/vector
+  scale-1/2 references. Profile-specific references convert explicitly and
+  mismatched screenshot encodings cannot compare silently.
+
+  **Evidence:** twelve new headless/CLI contracts and two native-renderer/input
+  contracts check known D65 primary matrices, independently generated ICC,
+  cICP and gamma fixtures, four analytic profile/DPR references, exact P3
+  primitive/group/vector/text pixels, fractional 2.5-effective-scale glyphs
+  against an independent 102.5-ppem fontdue outline raster, media reflow,
+  transformed hits, CSS scrolling/fragments, retained identity/resources,
+  tagged PNG round trips, physical-print invariance, finite errors and native
+  P3 rejection. `tests/pages/display.html` is the executable demo:
+
+  ```sh
+  cargo run --quiet -- tests/pages/display.html --screenshot target/display-p3.png \
+    --viewport 600x500 --device-scale 2 --page-zoom 1.25 --color-profile display-p3
+  cargo test --all-features --test display
+  PYTHONDONTWRITEBYTECODE=1 python3 tools/generate_display_reference.py --check
+  ```
+
+  Validation: **959 Rust tests** (945 existing + 14 new), formatting, strict
+  all-target/all-feature Clippy, benches check, seven CSS-generator unit tests,
+  CSS metadata integrity, independent vector/display fixture regeneration and
+  `git diff --check` pass. The native demo starts with the documented profile
+  diagnostic; interactive GUI capture was unavailable on the validation host.
+
+  **Honest limits:** softbuffer 0.4.8 has no monitor ICC query/tagged output
+  surface; on macOS its transport is device RGB. Native presentation therefore
+  diagnoses **assumed sRGB / unavailable monitor-profile management**, and
+  rejects P3 before opening a window rather than mispresenting wide-gamut
+  bytes. Tagged headless P3 requires a color-managed viewer/display. Arbitrary
+  output ICC profiles, automatic calibrated display detection, native
+  wide-gamut/HDR transport, scene-linear/high-bit-depth compositing, perceptual
+  gamut mapping, pinch zoom and general CSS overflow anchoring are not claimed.
+  Inputs support bounded RGB ICC profiles, SDR sRGB/P3 cICP, standard D65
+  sRGB/P3 cHRM and gAMA 0.1–10; unsupported/invalid profiles diagnose and reject.
+  ICC/CLUTs are <=1 MiB, TRCs <=4096 entries; source/profile raster buffers share
+  the 64 MiB image and 128 MiB page-image budgets. Existing device effects/
+  vectors remain bounded to 4,194,304 pixels, group/halo budgets and explicit
+  errors. See [reftests.md](reftests.md) for metadata precedence, output working
+  space and detailed test/provenance boundaries.
+
+  **All executable finite 8.1–8.22 steps are implemented; the milestone-8 exit
+  gate is NOT established.** No whole WPT suite was run, no full Baseline
+  feature coverage or browser parity is asserted, and milestone 9 is untouched.
 
 **Exit criteria:** Every Baseline layout and rendering feature is
 implemented. WPT `css/` layout, text, fonts, writing modes, transforms,

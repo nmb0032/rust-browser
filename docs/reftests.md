@@ -1,4 +1,4 @@
-# Native headless reftests (milestones 8.13–8.21)
+# Native headless reftests (milestones 8.13–8.22)
 
 Run from the repository root:
 
@@ -26,10 +26,15 @@ finite transform projection and RGBA effect groups**.
 There is no screenshot proxy, character-based renderer, alternative
 layout engine, or UI capture path. Normal interactive loading remains unchanged.
 
-- Default viewport: **800×600 CSS pixels**, device scale **1**, light color scheme,
+- Default viewport: **800×600 unzoomed logical pixels**, device scale **1**,
+  page zoom **1**, light color scheme,
   opaque white canvas; unavailable media capabilities retain their normal
-  unknown values. `--viewport WIDTHxHEIGHT` and `--device-scale N` set layout/media
-  dimensions and `resolution` separately from framebuffer dimensions.
+  unknown values. At zoom 1 these are CSS pixels. `--viewport WIDTHxHEIGHT`,
+  `--device-scale N` (alias `--scale`) and `--page-zoom Z` use one contract:
+  physical buffers are `viewport * DPR`, CSS layout/media dimensions are
+  `viewport / zoom`, and rasterization/resolution queries/input conversion use
+  **DPR × zoom**. Zoom reflows the retained document; it does not enlarge or
+  resample a low-resolution screenshot. Ordinary scale-1/2 references are unchanged.
 - `--scroll X,Y` and repeatable `--panel-scroll ID:X:Y` use CSS-pixel offsets.
   Root and panel axes are clamped by production layout scroll ranges; fixed
   content remains in viewport coordinates. Missing, ambiguous or non-scrollable
@@ -44,7 +49,8 @@ layout engine, or UI capture path. Normal interactive loading remains unchanged.
   not WPT scrolling/readiness metadata; the complete options are recorded in
   each manifest. See [scrolling.md](scrolling.md).
 - Device dimensions must be integral, positive and at most **4096×4096**; scales
-  are finite **0.125–8**. Fractional device dimensions are rejected, not rounded.
+  are finite **0.125–8**, zoom **0.25–4**, and DPR × zoom **0.125–8**.
+  Fractional device dimensions are rejected, not rounded.
   Scroll inputs must be finite with magnitude at most 1,000,000 CSS pixels;
   at most 128 panel requests are accepted.
 - `--animation-time N` freezes the document animation clock. Bare values are
@@ -52,11 +58,20 @@ layout engine, or UI capture path. Normal interactive loading remains unchanged.
   ordinary tests. Time must be finite, nonnegative and at most 1,000,000,000
   seconds. Resources settle before effects are established at zero and sampled
   at the requested time; no wall clock or sleep enters comparisons.
-- Output and comparison are **unpremultiplied RGBA8 sRGB**. Native rasterization
-  composites onto white (alpha 255). PNG references are interpreted as sRGB
-  channel values, decoded to RGBA8 and alpha-composited onto white with the same
-  integer rounding as paint. No desktop/ICC color-management transform or
-  perceptual/UI-color tolerance is applied. Use sRGB PNG fixtures.
+- Output and comparison are **unpremultiplied RGBA8 in the selected encoding**:
+  default `--color-profile srgb`, or `--color-profile display-p3`. Native
+  rasterization composites onto white (alpha 255). sRGB PNG output has an sRGB
+  chunk; P3 output has a real D65 Display-P3 RGB ICC matrix/TRC profile, with
+  consistent full-range/identity-matrix cICP metadata inside the ICC profile.
+  The standard ICC header date is pinned, so PNG bytes do not depend on wall time.
+  CSS colors are converted directly from retained extended-range colors into
+  the selected encoding, not clipped through sRGB first. ICC/cICP/gamma-tagged
+  image pixels convert before sampling/compositing, preserving alpha and EXIF
+  orientation. Tagged PNG references convert to the selected encoding before
+  comparison; untagged references are assumed sRGB. `Screenshot::read_png`
+  remains the sRGB convenience API; `read_png_profile` is explicit. Comparing
+  two differently encoded `Screenshot`s is an error, not an RGB-only success.
+  No monitor profile, desktop transform or perceptual tolerance enters tests.
 - HTML parser recovery is retained, including DOM-decoded HTML entities and
   ordinary escaped/percent-encoded URL paths. Parse diagnostics may appear on
   stderr; they do not themselves invalidate recoverable HTML. Frame errors and
@@ -70,6 +85,72 @@ layout engine, or UI capture path. Normal interactive loading remains unchanged.
   These failures reject screenshots before raster allocation, not produce a
   successful blank/partially painted result. CSS pixels and device scales
   remain distinct; Gaussian sigma is capped at 64 device pixels.
+
+### High-DPI, page zoom and profile evidence (8.22)
+
+```sh
+cargo test --all-features --test display
+PYTHONDONTWRITEBYTECODE=1 python3 tools/generate_display_reference.py --check
+cargo run --quiet -- tests/pages/display.html \
+  --screenshot target/display-p3.png --viewport 600x500 \
+  --device-scale 2 --page-zoom 1.25 --color-profile display-p3
+cargo run --quiet -- tests/pages/display.html --page-zoom 1.25 --bundled-fonts
+```
+
+The headless example produces a **1200×1000 ICC-tagged P3 PNG**, with a
+480×400 CSS viewport and effective scale 2.5. Open it in a color-managed viewer
+on a suitable display to see the difference between sRGB and P3 red.
+The native window offers **Command/Ctrl + or =, −, and 0** for zoom/reset.
+Cursor/inverse transformed hits, scrollbar drags and pixel-wheel deltas divide
+by DPR × zoom; line/keyboard scrolling, retained offsets, snap targets and
+fragment anchors remain CSS pixels with normal range clamping. Resource caches,
+document identity, author styles and sampled animation styles remain separate.
+This is not pinch zoom or general CSS overflow anchoring.
+
+`tests/display.rs` checks independently known CSS D65 primary matrices,
+original ICC/cICP/linear-gamma image fixtures and four independently generated
+profile/scale references. `tools/generate_display_reference.py` uses Python's
+standard library, W3C CSS Color 4 matrices and original ICC.1 matrix/TRC tags,
+never engine captures. ICC fixed-point quantization permits at most **one
+channel level** in these new image/profile references; existing native ordinary,
+timed, scrolling, fragment, print and vector references still match exactly.
+Known pixels exercise CSS backgrounds/borders, group opacity, shadow colors,
+filter/transform groups, SVG gradients/patterns/images and CSS/SVG/MathML glyphs.
+The fractional-scale glyph test independently rasterizes the original CC0
+geometric font at 102.5 ppem with fontdue and compares every device pixel;
+it cannot pass by enlarging an old page bitmap.
+
+**Truthful platform boundary:** softbuffer 0.4.8 exposes only untagged
+`0x00RRGGBB` presentation, no display-profile query or tagged surface API.
+Its macOS backend uses device RGB, not a selectable P3 color space. Native
+output is therefore explicitly **assumed sRGB**, with an availability diagnostic,
+not a guarantee of calibrated monitor output. Native `--color-profile display-p3`
+fails before opening a window and recommends a tagged headless PNG. No automatic
+monitor ICC discovery, arbitrary output ICC selection, native wide-gamut/HDR
+transport, 10/16-bit output, perceptual gamut mapping or scene-linear compositing
+is claimed. Composition/blur/vector interpolation use the selected encoded
+RGB8 working surface; CSS color-matrix filters convert extended values through
+sRGB and back without an intermediate sRGB byte clamp.
+
+RGB image ICC profiles use the existing pure-Rust **moxcms 0.8.1** CMS
+(already an image dependency; now direct), relative-colorimetric transforms.
+PNG metadata uses **png 0.18.1** (also already transitive), with precedence
+cICP > ICC > sRGB > cHRM/gAMA. SDR full-range RGB cICP is limited to sRGB/P3
+primaries and the sRGB transfer; other cICP/HDR inputs diagnose/reject.
+cHRM supports standard D65 sRGB/P3 primaries, gAMA 0.1–10; absent transfer
+metadata assumes sRGB. Other primaries require an RGB ICC profile.
+Gray/CMYK image ICC profiles and invalid ICCs reject rather than silently
+mislabel pixels. ICC metadata is bounded to 1 MiB, CLUT storage to 1 MiB,
+TRCs to 4096 entries. Two retained sRGB/P3 image buffers together fit the
+existing 64 MiB per-image budget and count toward the 128 MiB page-image budget;
+4096 per-axis limits and all resource policies remain in force.
+
+Physical `PrintOptions`/`@page` layout and page selection **do not change with
+page zoom**. `--print-page` magnifies the already-laid-out sheet at DPR × zoom;
+native preview multiplies its fit-to-window view by zoom and rerasterizes glyphs
+and vectors (bounded effective scale 0.125–8), without re-pagination.
+These executable finite steps do **not** establish the milestone-8 exit gate,
+every Baseline feature, browser parity or full-WPT conformance.
 
 ### Fonts and local resources
 

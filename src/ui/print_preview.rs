@@ -8,11 +8,19 @@ use winit::{
     dpi::LogicalSize,
     event::{ElementState, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop, OwnedDisplayHandle},
-    keyboard::{Key, NamedKey},
+    keyboard::{Key, ModifiersState, NamedKey},
     window::{Window, WindowId},
 };
 
 pub fn run(layout: PrintLayout) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_zoom(layout, 1.0)
+}
+
+pub fn run_with_zoom(layout: PrintLayout, zoom: f64) -> Result<(), Box<dyn std::error::Error>> {
+    crate::display::ViewScale::new(1.0, zoom)?;
+    eprintln!(
+        "Display: print preview uses softbuffer assumed sRGB; monitor ICC/tagged wide-gamut presentation unavailable"
+    );
     let event_loop = EventLoop::new()?;
     let context = Context::new(event_loop.owned_display_handle())?;
     let mut preview = Preview {
@@ -21,6 +29,8 @@ pub fn run(layout: PrintLayout) -> Result<(), Box<dyn std::error::Error>> {
         window: None,
         surface: None,
         scroll: 0.0,
+        zoom,
+        modifiers: ModifiersState::empty(),
     };
     event_loop.run_app(&mut preview)?;
     Ok(())
@@ -31,6 +41,8 @@ struct Preview {
     window: Option<Rc<Window>>,
     surface: Option<Surface<OwnedDisplayHandle, Rc<Window>>>,
     scroll: f32,
+    zoom: f64,
+    modifiers: ModifiersState,
 }
 impl Preview {
     fn fit(&self) -> f32 {
@@ -43,7 +55,10 @@ impl Preview {
             .iter()
             .map(|p| p.sheet.width)
             .fold(1.0, f32::max);
-        ((width - 48.0).max(1.0) / sheet).clamp(0.125, 1.0)
+        let dpr = self.window.as_ref().map_or(1.0, |w| w.scale_factor());
+        let magnification =
+            f64::from(((width - 48.0).max(1.0) / sheet).clamp(0.125, 1.0)) * self.zoom;
+        ((dpr * magnification).clamp(0.125, 8.0) / dpr) as f32
     }
     fn move_scroll(&mut self, delta: f32) {
         let viewport = self.window.as_ref().map_or(0.0, |w| {
@@ -134,6 +149,7 @@ impl ApplicationHandler for Preview {
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.draw() {
@@ -158,6 +174,14 @@ impl ApplicationHandler for Preview {
                 self.move_scroll(delta);
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if let Some(zoom) =
+                    super::window::zoom_shortcut(&event.logical_key, self.modifiers, self.zoom)
+                {
+                    let dpr = self.window.as_ref().map_or(1.0, |w| w.scale_factor());
+                    self.zoom = zoom.clamp(0.25, (8.0 / dpr).min(4.0));
+                    self.move_scroll(0.0);
+                    return;
+                }
                 let page = self.window.as_ref().map_or(600.0, |w| {
                     w.inner_size().height as f32 / w.scale_factor() as f32
                 });

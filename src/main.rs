@@ -45,12 +45,21 @@ struct Args {
     #[arg(long, default_value = ".")]
     resource_root: PathBuf,
 
-    /// CSS-pixel viewport for screenshot/reftests.
+    /// Unzoomed logical viewport for screenshot/reftests (physical / DPR).
     #[arg(long, default_value = "800x600", value_parser = viewport)]
     viewport: (u32, u32),
 
-    #[arg(long, default_value = "1")]
+    #[arg(long, alias = "scale", default_value = "1")]
     device_scale: f64,
+
+    /// Page magnification; CSS viewport shrinks, device buffers stay fixed.
+    #[arg(long, default_value = "1")]
+    page_zoom: f64,
+
+    /// Encoded output profile. Display-P3 requires a tagged headless PNG;
+    /// native softbuffer supports assumed sRGB only.
+    #[arg(long, value_enum, default_value = "srgb")]
+    color_profile: rust_browser::display::ColorProfile,
 
     /// Root document offset in CSS pixels, X,Y; clamped to the layout range.
     #[arg(long, default_value = "0,0", value_parser = scroll)]
@@ -151,6 +160,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: args.viewport.0,
         height: args.viewport.1,
         scale: args.device_scale,
+        zoom: args.page_zoom,
+        color_profile: args.color_profile,
         scroll: args.scroll,
         panels: args.panel_scroll,
         snap_scroll: args.snap_scroll,
@@ -158,6 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         animation_time: args.animation_time,
     };
     if args.print_preview {
+        args.color_profile.validate_native()?;
         let url = rust_browser::net::location_url(&args.location)?;
         let mut frame = rust_browser::screenshot::load_url(&url, &args.resource_root, &options)?;
         frame.layout_with_container_queries(&rust_browser::text::FontContext::bundled());
@@ -170,7 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
             .into());
         }
-        return rust_browser::ui::print_preview::run(layout);
+        return rust_browser::ui::print_preview::run_with_zoom(layout, args.page_zoom);
     }
     if let Some(suite) = args.reftests {
         let report =
@@ -204,11 +216,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}x{} PNG: {}", image.width, image.height, path.display());
         return Ok(());
     }
-    rust_browser::app::run_with_fonts(
+    if args.dump.is_none() {
+        args.color_profile.validate_native()?;
+    }
+    rust_browser::app::run_with_display(
         &args.location,
         args.dump,
         args.trace,
         args.throttle_ms,
         args.bundled_fonts,
+        args.page_zoom,
+        args.color_profile,
     )
 }

@@ -97,6 +97,9 @@ impl Fuzzy {
 pub fn compare(actual: &Screenshot, expected: &Screenshot) -> Result<(Metrics, Screenshot)> {
     actual.validate()?;
     expected.validate()?;
+    if actual.color_profile != expected.color_profile {
+        return Err(io::Error::other("reference color profile mismatch").into());
+    }
     if (actual.width, actual.height) != (expected.width, expected.height) {
         return Err(io::Error::other(format!(
             "reference size mismatch: actual {}x{}, expected {}x{}",
@@ -114,7 +117,7 @@ pub fn compare(actual: &Screenshot, expected: &Screenshot) -> Result<(Metrics, S
         .zip(expected.rgba.as_chunks::<4>().0)
     {
         if a[3] != 255 || b[3] != 255 {
-            return Err(io::Error::other("comparison requires opaque normalized sRGB").into());
+            return Err(io::Error::other("comparison requires opaque normalized pixels").into());
         }
         let delta = [
             a[0].abs_diff(b[0]),
@@ -132,6 +135,7 @@ pub fn compare(actual: &Screenshot, expected: &Screenshot) -> Result<(Metrics, S
             width: actual.width,
             height: actual.height,
             rgba,
+            color_profile: actual.color_profile,
         },
     ))
 }
@@ -351,7 +355,10 @@ impl Runner<'_> {
             .extension()
             .is_some_and(|s| s.eq_ignore_ascii_case("png"))
         {
-            (Metadata::default(), Screenshot::read_png(&path)?)
+            (
+                Metadata::default(),
+                Screenshot::read_png_profile(&path, self.options.color_profile)?,
+            )
         } else if is_html(&path) {
             let mut frame = screenshot::load_url(url, self.root, self.options)?;
             (

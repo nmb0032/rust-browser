@@ -1,0 +1,22 @@
+<!doctype html>
+<style>
+body{margin:0}
+.tile{position:fixed;top:0;width:20px;height:20px}
+#srgb{left:0;background:red}
+#p3{left:20px;background:color(display-p3 1 0 0)}
+#image{left:40px}
+#linear{left:60px}
+svg{position:fixed;left:0;top:20px}
+</style>
+<div id=srgb class=tile></div><div id=p3 class=tile></div>
+<img id=image class=tile src=p3-alpha.png><img id=linear class=tile src=linear.png>
+<svg width="80" height="20" viewBox="0 0 80 20">
+  <defs>
+    <linearGradient id="p3"><stop offset="0" stop-color="color(display-p3 1 0 0)"/><stop offset="1" stop-color="color(display-p3 1 0 0)"/></linearGradient>
+    <pattern id="pattern" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="url(#p3)"/></pattern>
+  </defs>
+  <rect width="20" height="20" fill="red"/>
+  <rect x="20" width="20" height="20" fill="url(#p3)"/>
+  <image x="40" width="20" height="20" href="p3-alpha.png"/>
+  <rect x="60" width="20" height="20" fill="url(#pattern)"/>
+</svg>

@@ -31,6 +31,28 @@ pub fn run_with_fonts(
     throttle_ms: Option<u64>,
     bundled_fonts: bool,
 ) -> Result<(), Box<dyn Error>> {
+    run_with_display(
+        location,
+        dump,
+        trace,
+        throttle_ms,
+        bundled_fonts,
+        1.0,
+        crate::display::ColorProfile::Srgb,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_display(
+    location: &str,
+    dump: Option<DumpFormat>,
+    trace: bool,
+    throttle_ms: Option<u64>,
+    bundled_fonts: bool,
+    page_zoom: f64,
+    color_profile: crate::display::ColorProfile,
+) -> Result<(), Box<dyn Error>> {
+    crate::display::ViewScale::new(1.0, page_zoom)?;
     if dump == Some(DumpFormat::CssCoverage) {
         print!("{}", crate::style::metadata::css_coverage());
         return Ok(());
@@ -43,12 +65,15 @@ pub fn run_with_fonts(
         crate::text::FontContext::system()
     };
     if let Some(format) = dump {
-        let frame = load_page(&url, options, |_| Ok(()), || false)?;
+        let mut frame = load_page(&url, options, |_| Ok(()), || false)?;
+        if page_zoom != 1.0 {
+            frame.set_page_zoom(page_zoom)?;
+        }
         return dump_frame(frame, format, &fonts);
     }
     let mut navigation = Navigation::new(url, options);
     navigation.start_load()?;
-    crate::ui::window::run(navigation, fonts)
+    crate::ui::window::run_with_view(navigation, fonts, page_zoom, color_profile)
 }
 
 fn dump_frame(

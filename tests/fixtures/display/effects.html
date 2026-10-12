@@ -1,0 +1,16 @@
+<!doctype html>
+<style>
+@font-face{font-family:Geometry;src:url("../../../assets/fonts/typography/GeometryVariable.ttf")}
+body{margin:0}
+#border{position:fixed;left:0;top:0;width:20px;height:20px;box-sizing:border-box;border:2px solid color(display-p3 1 0 0);background:red}
+#shadow{position:fixed;left:30px;top:0;width:20px;height:20px;background:black;filter:drop-shadow(10px 0 0 color(display-p3 1 0 0))}
+#alpha{position:fixed;left:70px;top:0;width:20px;height:20px;background:color(display-p3 1 0 0);opacity:.5}
+#transform{position:fixed;left:100px;top:0;width:20px;height:20px;background:color(display-p3 1 0 0);transform:translateX(10px);filter:brightness(1)}
+#text{position:fixed;left:3px;top:30px;font:40px/40px Geometry;color:color(display-p3 1 0 0)}
+svg{position:fixed;left:30px;top:30px}
+math{position:fixed;left:60px;top:30px;font:40px/40px Geometry;color:color(display-p3 1 0 0)}
+</style>
+<div id=border></div><div id=shadow></div><div id=alpha></div><div id=transform></div>
+<div id=text>A</div>
+<svg width="25" height="40"><text x="0" y="32" font-family="Geometry" font-size="40" fill="color(display-p3 1 0 0)">A</text></svg>
+<math><mi>A</mi></math>

@@ -2,30 +2,42 @@
 use tiny_skia::{Pixmap, Transform};
 
 use super::{Brush, Command, Scene, Spread};
+use crate::display::ColorProfile;
 
+#[cfg(test)]
 pub(crate) fn render(
     scene: &Scene,
     width: u32,
     height: u32,
     fonts: &crate::text::FontContext,
 ) -> Option<Vec<u32>> {
-    render_at(
-        scene,
-        width,
-        height,
-        width as f32 / scene.width,
-        height as f32 / scene.height,
-        fonts,
-    )
+    render_profile(scene, width, height, fonts, ColorProfile::Srgb)
 }
 
-pub(crate) fn render_at(
+pub(crate) fn render_profile(
     scene: &Scene,
     width: u32,
     height: u32,
-    sx: f32,
-    sy: f32,
     fonts: &crate::text::FontContext,
+    profile: ColorProfile,
+) -> Option<Vec<u32>> {
+    render_at_profile(
+        scene,
+        width,
+        height,
+        (width as f32 / scene.width, height as f32 / scene.height),
+        fonts,
+        profile,
+    )
+}
+
+pub(crate) fn render_at_profile(
+    scene: &Scene,
+    width: u32,
+    height: u32,
+    (sx, sy): (f32, f32),
+    fonts: &crate::text::FontContext,
+    profile: ColorProfile,
 ) -> Option<Vec<u32>> {
     if width == 0
         || height == 0
@@ -37,7 +49,14 @@ pub(crate) fn render_at(
     }
     validate(scene, width, height).ok()?;
     let mut pixmap = Pixmap::new(width, height)?;
-    draw(scene, &mut pixmap, Transform::from_scale(sx, sy), fonts, 0);
+    draw(
+        scene,
+        &mut pixmap,
+        Transform::from_scale(sx, sy),
+        fonts,
+        0,
+        profile,
+    );
     Some(
         pixmap
             .pixels()
@@ -190,8 +209,8 @@ fn area(width: f32, height: f32) -> Result<usize, String> {
     Ok(width as usize * height as usize)
 }
 
-fn sk_color(color: crate::css::values::ResolvedColor) -> tiny_skia::Color {
-    let (rgb, a) = color.to_srgb8();
+fn sk_color(color: crate::css::values::ResolvedColor, profile: ColorProfile) -> tiny_skia::Color {
+    let (rgb, a) = profile.color(color);
     tiny_skia::Color::from_rgba8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, a as u8)
 }
 fn spread(value: Spread) -> tiny_skia::SpreadMode {
@@ -208,6 +227,7 @@ fn draw(
     transform: Transform,
     fonts: &crate::text::FontContext,
     depth: usize,
+    profile: ColorProfile,
 ) {
     if depth > 64 || !transform.is_finite() {
         return;
@@ -224,7 +244,7 @@ fn draw(
             } => {
                 let transform = transform.pre_concat(*local);
                 if let Some(brush) = fill {
-                    with_paint(brush, transform, fonts, depth, |paint| {
+                    with_paint(brush, transform, fonts, depth, profile, |paint| {
                         pixmap.fill_path(
                             path,
                             &paint,
@@ -239,7 +259,7 @@ fn draw(
                     });
                 }
                 if let Some(stroke) = stroke {
-                    with_paint(&stroke.brush, transform, fonts, depth, |paint| {
+                    with_paint(&stroke.brush, transform, fonts, depth, profile, |paint| {
                         pixmap.stroke_path(
                             path,
                             &paint,
@@ -267,13 +287,13 @@ fn draw(
             } => {
                 let matrix = transform.pre_concat(*local);
                 if *opacity == 1.0 && clip.is_none() {
-                    draw(scene, pixmap, matrix, fonts, depth + 1);
+                    draw(scene, pixmap, matrix, fonts, depth + 1, profile);
                     continue;
                 }
                 let Some(mut layer) = Pixmap::new(pixmap.width(), pixmap.height()) else {
                     continue;
                 };
-                draw(scene, &mut layer, matrix, fonts, depth + 1);
+                draw(scene, &mut layer, matrix, fonts, depth + 1, profile);
                 let mask = clip.and_then(super::rect_path).and_then(|path| {
                     let mut mask = tiny_skia::Mask::new(pixmap.width(), pixmap.height())?;
                     mask.fill_path(&path, tiny_skia::FillRule::Winding, true, matrix);
@@ -307,6 +327,7 @@ fn draw(
                     *color,
                     transform.pre_concat(*local),
                     fonts,
+                    profile,
                 );
             }
             Command::Image {
@@ -326,11 +347,11 @@ fn draw(
                     let (sx, sy) = matrix.get_scale();
                     let w = (image.width() as f32 * sx).ceil().clamp(1.0, 4096.0) as u32;
                     let h = (image.height() as f32 * sy).ceil().clamp(1.0, 4096.0) as u32;
-                    render(scene, w, h, fonts).map(|rgba| (rgba, w, h))
+                    render_profile(scene, w, h, fonts, profile).map(|rgba| (rgba, w, h))
                 } else {
                     Some((
                         image
-                            .rgba()
+                            .rgba_for(profile)
                             .as_chunks::<4>()
                             .0
                             .iter()
@@ -371,6 +392,7 @@ fn with_paint(
     transform: Transform,
     fonts: &crate::text::FontContext,
     depth: usize,
+    profile: ColorProfile,
     mut draw: impl FnMut(tiny_skia::Paint<'_>),
 ) {
     let mut paint = tiny_skia::Paint {
@@ -378,7 +400,7 @@ fn with_paint(
         ..Default::default()
     };
     match brush {
-        Brush::Solid(color) => paint.set_color(sk_color(*color)),
+        Brush::Solid(color) => paint.set_color(sk_color(*color, profile)),
         Brush::Linear {
             start,
             end,
@@ -389,7 +411,9 @@ fn with_paint(
         } => {
             let stops = stops
                 .iter()
-                .map(|&(offset, color)| tiny_skia::GradientStop::new(offset, sk_color(color)))
+                .map(|&(offset, color)| {
+                    tiny_skia::GradientStop::new(offset, sk_color(color, profile))
+                })
                 .collect();
             let Some(shader) = tiny_skia::LinearGradient::new(
                 tiny_skia::Point::from_xy(start.0, start.1),
@@ -413,7 +437,9 @@ fn with_paint(
         } => {
             let stops = stops
                 .iter()
-                .map(|&(offset, color)| tiny_skia::GradientStop::new(offset, sk_color(color)))
+                .map(|&(offset, color)| {
+                    tiny_skia::GradientStop::new(offset, sk_color(color, profile))
+                })
                 .collect();
             let Some(shader) = tiny_skia::RadialGradient::new(
                 tiny_skia::Point::from_xy(focus.0, focus.1),
@@ -439,7 +465,7 @@ fn with_paint(
             let (sx, sy) = transform.pre_concat(*local).get_scale();
             let w = (tile.width * sx).ceil().clamp(1.0, 4096.0) as u32;
             let h = (tile.height * sy).ceil().clamp(1.0, 4096.0) as u32;
-            let Some(pixels) = render(scene, w, h, fonts) else {
+            let Some(pixels) = render_profile(scene, w, h, fonts, profile) else {
                 return;
             };
             let Some(source) = from_pixels(&pixels, w, h) else {
@@ -475,6 +501,7 @@ fn from_pixels(pixels: &[u32], width: u32, height: u32) -> Option<Pixmap> {
     Some(pixmap)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn text(
     pixmap: &mut Pixmap,
     glyphs: &crate::text::ShapedText,
@@ -483,6 +510,7 @@ fn text(
     color: crate::css::values::ResolvedColor,
     transform: Transform,
     fonts: &crate::text::FontContext,
+    profile: ColorProfile,
 ) {
     // Reuse the exact indexed glyph mask/synthesis/variation rasterizer, then
     // transform each bounded run. The shaped glyph offsets are never rewritten.
@@ -507,7 +535,7 @@ fn text(
         return;
     }
     let mut pixels = vec![0; w as usize * h as usize];
-    crate::paint::rasterizer::rasterize_rgba(
+    crate::paint::rasterizer::rasterize_rgba_profile(
         &[crate::paint::DisplayItem::ColorText {
             x: x - origin_x,
             y: baseline - origin_y,
@@ -523,8 +551,11 @@ fn text(
         &mut pixels,
         w as usize,
         h as usize,
-        scale as f64,
-        0.0,
+        crate::display::RasterOptions {
+            scale: scale as f64,
+            scroll: 0.0,
+            profile,
+        },
     );
     if let Some(source) = from_pixels(&pixels, w, h) {
         pixmap.draw_pixmap(

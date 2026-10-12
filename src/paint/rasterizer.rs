@@ -1,4 +1,5 @@
 use super::DisplayItem;
+use crate::display::{ColorProfile, RasterOptions};
 
 #[derive(Clone, Copy)]
 struct PixelRect {
@@ -31,6 +32,7 @@ struct TextRun<'a> {
     color: u32,
     alpha: u32,
     clip: PixelRect,
+    profile: ColorProfile,
 }
 
 pub(crate) fn rasterize_display_list(
@@ -42,6 +44,33 @@ pub(crate) fn rasterize_display_list(
     scale_factor: f64,
     scroll_offset: f32,
 ) {
+    rasterize_display_list_profile(
+        display_list,
+        font,
+        pixels,
+        width,
+        height,
+        RasterOptions {
+            scale: scale_factor,
+            scroll: scroll_offset,
+            profile: ColorProfile::Srgb,
+        },
+    );
+}
+
+pub(crate) fn rasterize_display_list_profile(
+    display_list: &[DisplayItem],
+    font: &crate::text::FontContext,
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+    options: RasterOptions,
+) {
+    let RasterOptions {
+        scale: scale_factor,
+        scroll: scroll_offset,
+        profile,
+    } = options;
     if let Err(error) = super::compositor::validate(display_list, width, height, scale_factor) {
         eprintln!("paint: {error}; render suppressed");
         return;
@@ -54,43 +83,42 @@ pub(crate) fn rasterize_display_list(
         }
         _ => false,
     }) {
-        super::compositor::rasterize(
-            display_list,
-            font,
-            pixels,
-            width,
-            height,
-            scale_factor,
-            scroll_offset,
-        );
+        super::compositor::rasterize_profile(display_list, font, pixels, width, height, options);
         return;
     }
     for p in pixels.iter_mut() {
         *p |= 0xff000000;
     }
-    rasterize_rgba(
+    rasterize_rgba_profile(
         display_list,
         font,
         pixels,
         width,
         height,
-        scale_factor,
-        scroll_offset,
+        RasterOptions {
+            scale: scale_factor,
+            scroll: scroll_offset,
+            profile,
+        },
     );
     for p in pixels.iter_mut() {
         *p &= 0x00ffffff;
     }
 }
 
-pub(crate) fn rasterize_rgba(
+pub(crate) fn rasterize_rgba_profile(
     display_list: &[DisplayItem],
     _font: &crate::text::FontContext,
     pixels: &mut [u32],
     width: usize,
     height: usize,
-    scale_factor: f64,
-    scroll_offset: f32,
+    options: RasterOptions,
 ) {
+    let RasterOptions {
+        scale: scale_factor,
+        scroll: scroll_offset,
+        profile,
+    } = options;
     let scale = scale_factor as f32;
     if !scale.is_finite()
         || scale <= 0.0
@@ -129,13 +157,16 @@ pub(crate) fn rasterize_rgba(
                 let top = (rect.y + spatial.offset.y - item_scroll) * scale;
                 let w = (rect.width * scale).ceil().max(0.0) as u32;
                 let h = (rect.height * scale).ceil().max(0.0) as u32;
-                let Some(source) = crate::vector::raster::render_at(
+                let Some(source) = crate::vector::raster::render_at_profile(
                     scene,
                     w,
                     h,
-                    rect.width * scale / scene.width,
-                    rect.height * scale / scene.height,
+                    (
+                        rect.width * scale / scene.width,
+                        rect.height * scale / scene.height,
+                    ),
                     _font,
+                    profile,
                 ) else {
                     continue;
                 };
@@ -174,7 +205,7 @@ pub(crate) fn rasterize_rgba(
                     width: rect.width * scale,
                     height: rect.height * scale,
                 };
-                let (foreground, alpha) = color.to_srgb8();
+                let (foreground, alpha) = profile.color(*color);
                 draw_decoration(
                     pixels,
                     width,
@@ -216,14 +247,14 @@ pub(crate) fn rasterize_rgba(
                         right: (*w * scale).ceil() as i32,
                         bottom: (*h * scale).ceil() as i32,
                     },
-                    *color,
+                    profile.rgb(*color),
                     255,
                 );
             }
             DisplayItem::Rect { x, y, w, h, .. } | DisplayItem::ColorRect { x, y, w, h, .. } => {
                 let (color, alpha) = match item {
-                    DisplayItem::Rect { color, .. } => (*color, 255),
-                    DisplayItem::ColorRect { color, .. } => color.to_srgb8(),
+                    DisplayItem::Rect { color, .. } => (profile.rgb(*color), 255),
+                    DisplayItem::ColorRect { color, .. } => profile.color(*color),
                     _ => unreachable!(),
                 };
                 let Some(actual) = (crate::layout::Rect {
@@ -257,14 +288,22 @@ pub(crate) fn rasterize_rgba(
                     right: ((*x + spatial.offset.x + *w) * scale).ceil() as i32,
                     bottom: ((*y + spatial.offset.y - item_scroll + *h) * scale).ceil() as i32,
                 };
-                draw_outline_rect(pixels, width, height, rect, clip, scale, *color);
+                draw_outline_rect(
+                    pixels,
+                    width,
+                    height,
+                    rect,
+                    clip,
+                    scale,
+                    profile.rgb(*color),
+                );
             }
             DisplayItem::Image { x, y, w, h, image } => {
                 if let Some(scene) = image.vector() {
                     let mut clipped = spatial;
                     clipped.clip.x = Some((clip.left as f32 / scale, clip.right as f32 / scale));
                     clipped.clip.y = Some((clip.top as f32 / scale, clip.bottom as f32 / scale));
-                    rasterize_rgba(
+                    rasterize_rgba_profile(
                         &[
                             DisplayItem::Spatial(Box::new(clipped)),
                             DisplayItem::Vector {
@@ -281,8 +320,10 @@ pub(crate) fn rasterize_rgba(
                         pixels,
                         width,
                         height,
-                        scale_factor,
-                        0.0,
+                        RasterOptions {
+                            scroll: 0.0,
+                            ..options
+                        },
                     );
                     continue;
                 }
@@ -310,7 +351,7 @@ pub(crate) fn rasterize_rgba(
                             .min(image.width() - 1);
                         let source =
                             (source_y as usize * image.width() as usize + source_x as usize) * 4;
-                        let rgba = &image.rgba()[source..source + 4];
+                        let rgba = &image.rgba_for(profile)[source..source + 4];
                         let foreground = (u32::from(rgba[0]) << 16)
                             | (u32::from(rgba[1]) << 8)
                             | u32::from(rgba[2]);
@@ -333,8 +374,8 @@ pub(crate) fn rasterize_rgba(
             } => {
                 let baseline = *baseline + spatial.offset.y - item_scroll;
                 let (color, alpha) = match item {
-                    DisplayItem::Text { color, .. } => (*color, 255),
-                    DisplayItem::ColorText { color, .. } => color.to_srgb8(),
+                    DisplayItem::Text { color, .. } => (profile.rgb(*color), 255),
+                    DisplayItem::ColorText { color, .. } => profile.color(*color),
                     _ => unreachable!(),
                 };
                 draw_text(
@@ -349,6 +390,7 @@ pub(crate) fn rasterize_rgba(
                         color,
                         alpha,
                         clip,
+                        profile,
                     },
                 );
             }
@@ -595,7 +637,11 @@ fn draw_text(pixels: &mut [u32], width: usize, height: usize, run: TextRun<'_>) 
                 let (foreground, coverage) = if bitmap.color {
                     let rgba = &bitmap.pixels[sample * 4..sample * 4 + 4];
                     (
-                        (u32::from(rgba[0]) << 16) | (u32::from(rgba[1]) << 8) | u32::from(rgba[2]),
+                        run.profile.rgb(
+                            (u32::from(rgba[0]) << 16)
+                                | (u32::from(rgba[1]) << 8)
+                                | u32::from(rgba[2]),
+                        ),
                         u32::from(rgba[3]) * run.alpha / 255,
                     )
                 } else {

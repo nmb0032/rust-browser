@@ -13,6 +13,8 @@ pub struct DecodedImage {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    rgba_p3: Vec<u8>,
+    color_source: super::ImageColorSource,
     vector: Option<Arc<crate::vector::Scene>>,
 }
 
@@ -42,9 +44,16 @@ impl DecodedImage {
                 width: scene.width.ceil() as u32,
                 height: scene.height.ceil() as u32,
                 rgba: Vec::new(),
+                rgba_p3: Vec::new(),
+                color_source: super::ImageColorSource::UntaggedSrgb,
                 vector: Some(scene),
             });
         }
+        let png_profile = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Some(super::color::png_profile(bytes)?)
+        } else {
+            None
+        };
         let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
         let mut limits = image::Limits::default();
         limits.max_image_width = Some(MAX_DIMENSION);
@@ -52,14 +61,43 @@ impl DecodedImage {
         limits.max_alloc = Some(MAX_DECODED_BYTES);
         reader.limits(limits);
         let mut decoder = reader.into_decoder()?;
+        let (color_source, profile) = if let Some(profile) = png_profile {
+            profile
+        } else if let Some(profile) = decoder.icc_profile()? {
+            (
+                super::ImageColorSource::Icc,
+                Some(super::color::icc(&profile)?),
+            )
+        } else {
+            (super::ImageColorSource::UntaggedSrgb, None)
+        };
+        if u64::from(decoder.dimensions().0) * u64::from(decoder.dimensions().1) * 8
+            > MAX_DECODED_BYTES
+        {
+            return Err(std::io::Error::other("image profile buffers exceed 64 MiB").into());
+        }
         let orientation = decoder.orientation()?;
         let mut image = image::DynamicImage::from_decoder(decoder)?;
         image.apply_orientation(orientation);
         let image = image.to_rgba8();
+        let original = image.as_raw();
+        let source = profile
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| crate::display::ColorProfile::Srgb.icc());
+        let rgba_p3 =
+            super::color::convert(original, &source, crate::display::ColorProfile::DisplayP3)?;
+        let rgba = if profile.is_some() {
+            super::color::convert(original, &source, crate::display::ColorProfile::Srgb)?
+        } else {
+            original.clone()
+        };
         Ok(Self {
             width: image.width(),
             height: image.height(),
-            rgba: image.into_raw(),
+            rgba,
+            rgba_p3,
+            color_source,
             vector: None,
         })
     }
@@ -74,6 +112,17 @@ impl DecodedImage {
 
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
+    }
+
+    pub fn rgba_for(&self, profile: crate::display::ColorProfile) -> &[u8] {
+        match profile {
+            crate::display::ColorProfile::Srgb => &self.rgba,
+            crate::display::ColorProfile::DisplayP3 => &self.rgba_p3,
+        }
+    }
+
+    pub fn color_source(&self) -> super::ImageColorSource {
+        self.color_source
     }
 
     pub fn vector(&self) -> Option<&Arc<crate::vector::Scene>> {
@@ -91,6 +140,7 @@ impl DecodedImage {
     /// Apply the same resource budget to deferred vectors as decoded rasters.
     pub(crate) fn decoded_bytes(&self) -> usize {
         self.width as usize * self.height as usize * 4
+            + self.rgba_p3.len()
             + self.vector.as_ref().map_or(0, |s| s.estimated_bytes())
     }
 }

@@ -51,6 +51,7 @@ fn pixels(values: &[[u8; 3]]) -> Screenshot {
     Screenshot {
         width: values.len() as u32,
         height: 1,
+        color_profile: Default::default(),
         rgba: values
             .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
@@ -553,6 +554,7 @@ fn png_references_decode_with_bounds_and_normalize_alpha_and_report_size_errors(
         width: 1,
         height: 1,
         rgba: vec![0, 0, 0, 0],
+        color_profile: Default::default(),
     };
     let path = workspace.0.join("alpha.png");
     transparent.save(&path).unwrap();
@@ -564,6 +566,7 @@ fn png_references_decode_with_bounds_and_normalize_alpha_and_report_size_errors(
         width: 1,
         height: 1,
         rgba: vec![10, 20, 30, 128],
+        color_profile: Default::default(),
     }
     .save(&path)
     .unwrap();
@@ -623,6 +626,8 @@ fn scale_root_scroll_panel_scroll_and_fixed_pixels_use_native_spatial_states() {
         height: 160,
         scale: 2.0,
         print: None,
+        zoom: 1.0,
+        color_profile: Default::default(),
         scroll: ScrollOffset { x: 0.0, y: 100.0 },
         panels: vec![PanelScroll {
             id: "panel".into(),

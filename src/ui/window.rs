@@ -28,6 +28,20 @@ pub fn run(
     navigation: Navigation,
     font: crate::text::FontContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_view(navigation, font, 1.0, crate::display::ColorProfile::Srgb)
+}
+
+pub fn run_with_view(
+    navigation: Navigation,
+    font: crate::text::FontContext,
+    page_zoom: f64,
+    profile: crate::display::ColorProfile,
+) -> Result<(), Box<dyn std::error::Error>> {
+    profile.validate_native()?;
+    crate::display::ViewScale::new(1.0, page_zoom)?;
+    eprintln!(
+        "Display: softbuffer untagged RGB8, assumed sRGB; monitor ICC detection/tagged wide-gamut presentation unavailable"
+    );
     let event_loop = EventLoop::new()?;
     let context = Context::new(event_loop.owned_display_handle())?;
     let frame = Arc::new(Frame::new(
@@ -57,6 +71,7 @@ pub fn run(
         reconciling_interaction: false,
         animation_origin: Instant::now(),
         animation_deadline: None,
+        page_zoom,
     };
 
     event_loop.run_app(&mut app)?;
@@ -84,9 +99,40 @@ struct BrowserWindow {
     reconciling_interaction: bool,
     animation_origin: Instant,
     animation_deadline: Option<Instant>,
+    page_zoom: f64,
+}
+
+pub(crate) fn zoom_shortcut(key: &Key, modifiers: ModifiersState, zoom: f64) -> Option<f64> {
+    if !(modifiers.control_key() || modifiers.super_key()) || modifiers.alt_key() {
+        return None;
+    }
+    match key {
+        Key::Character(key) if key == "+" || key == "=" => Some(zoom * 1.25),
+        Key::Character(key) if key == "-" => Some(zoom / 1.25),
+        Key::Character(key) if key == "0" => Some(1.0),
+        _ => None,
+    }
 }
 
 impl BrowserWindow {
+    fn effective_scale(&self) -> f64 {
+        self.window.as_ref().map_or(1.0, |w| w.scale_factor()) * self.page_zoom
+    }
+
+    fn zoom_to(&mut self, zoom: f64) {
+        let dpr = self.window.as_ref().map_or(1.0, |w| w.scale_factor());
+        let zoom = zoom.clamp((0.125 / dpr).max(0.25), (8.0 / dpr).min(4.0));
+        if zoom == self.page_zoom {
+            return;
+        }
+        self.page_zoom = zoom;
+        self.scrollbar_drag = None;
+        self.layout_tree.cancel_scroll_animations();
+        Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+        self.rebuild_display_list();
+        self.request_redraw();
+    }
+
     fn resize_surface(&mut self, width: u32, height: u32) {
         self.scrollbar_drag = None;
         let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) else {
@@ -112,6 +158,18 @@ impl BrowserWindow {
         let scale_factor = window.scale_factor();
         let size = window.inner_size();
         let frame = Arc::make_mut(&mut self.frame);
+        if let Err(error) =
+            crate::display::ViewScale::new(scale_factor, self.page_zoom).and_then(|scale| {
+                frame.set_viewport(
+                    size.width as f32 / scale_factor as f32,
+                    size.height as f32 / scale_factor as f32,
+                    scale,
+                )
+            })
+        {
+            eprintln!("Display scale: {error}");
+            return;
+        }
         if let Err(error) = frame.set_animation_time(self.animation_origin.elapsed().as_secs_f64())
         {
             eprintln!("Animation clock: {error}");
@@ -143,8 +201,8 @@ impl BrowserWindow {
     }
 
     fn scroll_key_by(&mut self, delta: crate::layout::ScrollOffset) {
-        let Some(window) = &self.window else { return };
-        let scale = window.scale_factor();
+        let Some(_) = &self.window else { return };
+        let scale = self.effective_scale();
         let (x, y) = self.cursor.map_or((-1.0, -1.0), |(x, y)| {
             input::document_point(x, y, scale, 0.0)
         });
@@ -172,7 +230,7 @@ impl BrowserWindow {
         let Some(window) = &self.window else {
             return;
         };
-        let scale_factor = window.scale_factor();
+        let scale_factor = self.effective_scale();
         let (x, y) = self.cursor.map_or((-1.0, -1.0), |(x, y)| {
             input::document_point(x, y, scale_factor, 0.0)
         });
@@ -309,10 +367,10 @@ impl BrowserWindow {
     }
 
     fn cursor_link(&self) -> Result<Option<url::Url>, Box<dyn std::error::Error>> {
-        let (Some(window), Some((x, y))) = (&self.window, self.cursor) else {
+        let (Some(_), Some((x, y))) = (&self.window, self.cursor) else {
             return Ok(None);
         };
-        let (x, y) = input::document_point(x, y, window.scale_factor(), 0.0);
+        let (x, y) = input::document_point(x, y, self.effective_scale(), 0.0);
         let Some(node) = self.layout_tree.hit_test_viewport(x, y, self.scroll_offset) else {
             return Ok(None);
         };
@@ -341,7 +399,7 @@ impl BrowserWindow {
                 .window
                 .as_ref()
                 .zip(self.cursor)
-                .map(|(window, (x, y))| input::document_point(x, y, window.scale_factor(), 0.0));
+                .map(|(_, (x, y))| input::document_point(x, y, self.effective_scale(), 0.0));
             if !update_interaction_for_window_scrolled(
                 Arc::make_mut(&mut self.frame),
                 &self.layout_tree,
@@ -595,14 +653,16 @@ fn render_for_window_size(
     outlines: bool,
     scroll: f32,
 ) -> (LayoutTree, Vec<DisplayItem>, f32) {
-    let logical = size.to_logical::<f32>(scale_factor);
-    let environment = MediaEnvironment {
-        viewport_width: logical.width,
-        viewport_height: logical.height,
-        resolution_dppx: Some(scale_factor as f32),
-        ..frame.media_environment()
-    };
-    frame.set_media_environment(environment);
+    let scale = crate::display::ViewScale::new(scale_factor, frame.view_scale().zoom)
+        .expect("validated window scale");
+    let logical = size.to_logical::<f32>(scale.effective());
+    frame
+        .set_viewport(
+            logical.width * scale.zoom as f32,
+            logical.height * scale.zoom as f32,
+            scale,
+        )
+        .expect("positive window viewport");
     let external_scroll = scroll != frame.scroll_state().viewport_scroll().y;
     let mut tree = frame.layout_with_container_queries(font);
     let range = tree.viewport_scroll_container().range;
@@ -647,6 +707,11 @@ impl ApplicationHandler for BrowserWindow {
                 .expect("failed to create window"),
         );
         let size = window.inner_size();
+        if let Err(error) = crate::display::ViewScale::new(window.scale_factor(), self.page_zoom) {
+            eprintln!("Display scale: {error}");
+            event_loop.exit();
+            return;
+        }
         let surface = Surface::new(&self.context, Rc::clone(&window))
             .expect("failed to create software surface");
 
@@ -671,7 +736,7 @@ impl ApplicationHandler for BrowserWindow {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = Some((position.x, position.y));
                 if let Some((bar, grab)) = self.scrollbar_drag {
-                    let scale = self.window.as_ref().expect("active window").scale_factor();
+                    let scale = self.effective_scale();
                     let (x, y) = input::document_point(position.x, position.y, scale, 0.0);
                     if self.layout_tree.drag_scrollbar(bar, x, y, grab) {
                         self.scroll_offset = self.layout_tree.viewport_scroll().y;
@@ -707,7 +772,7 @@ impl ApplicationHandler for BrowserWindow {
                 if state == ElementState::Pressed
                     && let Some((x, y)) = self.cursor
                 {
-                    let scale = self.window.as_ref().expect("active window").scale_factor();
+                    let scale = self.effective_scale();
                     let (x, y) = input::document_point(x, y, scale, 0.0);
                     if let Some(bar) = self.layout_tree.scrollbar_at(x, y) {
                         let grab = self.layout_tree.scrollbar_grab(bar, x, y);
@@ -752,6 +817,15 @@ impl ApplicationHandler for BrowserWindow {
                 self.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { .. } => {
+                let dpr = self.window.as_ref().expect("active window").scale_factor();
+                if let Err(error) = crate::display::ViewScale::new(dpr, 1.0) {
+                    eprintln!("Display scale: {error}");
+                    event_loop.exit();
+                    return;
+                }
+                self.page_zoom = self
+                    .page_zoom
+                    .clamp((0.125 / dpr).max(0.25), (8.0 / dpr).min(4.0));
                 let size = self
                     .window
                     .as_ref()
@@ -760,11 +834,7 @@ impl ApplicationHandler for BrowserWindow {
                 self.resize_surface(size.width, size.height);
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
-                let scale_factor = self
-                    .window
-                    .as_ref()
-                    .expect("window event must belong to the active window")
-                    .scale_factor() as f32;
+                let scale_factor = self.effective_scale() as f32;
                 let scroll_delta = match delta {
                     MouseScrollDelta::LineDelta(x, y) => crate::layout::ScrollOffset {
                         x: -x * paint::LINE_HEIGHT,
@@ -787,6 +857,12 @@ impl ApplicationHandler for BrowserWindow {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                if let Some(zoom) =
+                    zoom_shortcut(&event.logical_key, self.modifiers, self.page_zoom)
+                {
+                    self.zoom_to(zoom);
+                    return;
+                }
                 if let Some(direction) = input::history_shortcut(&event.logical_key, self.modifiers)
                 {
                     self.traverse_history(direction);
@@ -824,11 +900,14 @@ impl ApplicationHandler for BrowserWindow {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let scale_factor = self
-                    .window
-                    .as_ref()
-                    .expect("window event must belong to the active window")
-                    .scale_factor();
+                let scale_factor = self.effective_scale();
+                if let Err(error) = crate::display::ViewScale::new(
+                    self.window.as_ref().expect("active window").scale_factor(),
+                    self.page_zoom,
+                ) {
+                    eprintln!("Display scale: {error}; presentation suppressed");
+                    return;
+                }
                 if let Some(surface) = &mut self.surface {
                     let mut buffer = surface
                         .buffer_mut()
@@ -915,6 +994,97 @@ impl ApplicationHandler for BrowserWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_zoom_matches_headless_geometry_inverse_hits_and_retained_css_scroll() {
+        let source = include_str!("../../tests/fixtures/display/zoom.html").replace(
+            "</style>",
+            "a{transform:translateX(5px);filter:opacity(1)}</style>",
+        );
+        let document = crate::html::parser::parse(&source).unwrap();
+        let mut frame = Frame::new(url::Url::parse("https://example.test/").unwrap(), document);
+        let font = crate::text::FontContext::bundled();
+        let snapshot = frame.clone();
+        frame.set_page_zoom(2.0).unwrap();
+        for dpr in [1.0, 2.0] {
+            let (tree, list, scroll) = render_for_window_size(
+                &mut frame,
+                PhysicalSize::new((200.0 * dpr) as u32, (160.0 * dpr) as u32),
+                dpr,
+                &font,
+                false,
+                100.0,
+            );
+            assert_eq!(scroll, 100.0);
+            assert!(frame.same_animation_document(&snapshot));
+            assert_eq!(frame.media_environment().viewport_width, 100.0);
+            let point = input::document_point(32.0 * dpr, 22.0 * dpr, dpr * 2.0, 0.0);
+            let hit = tree.hit_test_viewport(point.0, point.1, scroll).unwrap();
+            assert_eq!(
+                frame
+                    .document
+                    .node(hit)
+                    .unwrap()
+                    .as_element()
+                    .unwrap()
+                    .attribute("id"),
+                Some("link")
+            );
+            let (width, height) = ((200.0 * dpr) as usize, (160.0 * dpr) as usize);
+            let mut pixels = vec![0xffffff; width * height];
+            paint::rasterize_display_list(
+                &list,
+                &font,
+                &mut pixels,
+                width,
+                height,
+                dpr * 2.0,
+                scroll,
+            );
+            assert_eq!(
+                pixels[(22.0 * dpr) as usize * width + (32.0 * dpr) as usize],
+                0xff0000
+            );
+            assert_eq!(
+                pixels[(22.0 * dpr) as usize * width + (82.0 * dpr) as usize],
+                0x0000ff
+            );
+        }
+        frame.set_page_zoom(1.0).unwrap();
+        let (tree, _, scroll) = render_for_window_size(
+            &mut frame,
+            PhysicalSize::new(400, 320),
+            2.0,
+            &font,
+            false,
+            100.0,
+        );
+        assert_eq!(scroll, 100.0);
+        assert_eq!(tree.viewport_scroll().y, 100.0);
+        assert_eq!(frame.media_environment().viewport_width, 200.0);
+    }
+
+    #[test]
+    fn native_zoom_shortcuts_are_bounded_by_controller_and_have_reset() {
+        let primary = ModifiersState::CONTROL;
+        assert_eq!(
+            zoom_shortcut(&Key::Character("+".into()), primary, 1.0),
+            Some(1.25)
+        );
+        assert_eq!(
+            zoom_shortcut(&Key::Character("-".into()), primary, 1.25),
+            Some(1.0)
+        );
+        assert_eq!(
+            zoom_shortcut(&Key::Character("0".into()), ModifiersState::SUPER, 4.0),
+            Some(1.0)
+        );
+        assert_eq!(
+            zoom_shortcut(&Key::Character("+".into()), ModifiersState::empty(), 1.0),
+            None
+        );
+    }
+
     #[test]
     fn native_resize_renderer_samples_root_smooth_scroll_without_old_offset_overwrite() {
         let document = crate::html::parser::parse("<!doctype html><style>html,body{margin:0}html{scroll-behavior:smooth}#s{position:sticky;top:0;height:20px;background:red}#tail{height:800px}</style><div id=s></div><div id=tail></div>").unwrap();

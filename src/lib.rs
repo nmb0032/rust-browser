@@ -1,6 +1,7 @@
 pub mod app;
 pub mod css;
 pub mod devtools;
+pub mod display;
 pub mod dom;
 pub mod engine;
 pub mod html;

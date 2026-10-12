@@ -31,6 +31,8 @@ pub struct Options {
     pub width: u32,
     pub height: u32,
     pub scale: f64,
+    pub zoom: f64,
+    pub color_profile: crate::display::ColorProfile,
     pub scroll: ScrollOffset,
     pub panels: Vec<PanelScroll>,
     /// Interpret configured offsets as instant programmatic snap requests.
@@ -48,6 +50,8 @@ impl Default for Options {
             width: 800,
             height: 600,
             scale: 1.0,
+            zoom: 1.0,
+            color_profile: crate::display::ColorProfile::Srgb,
             scroll: ScrollOffset::default(),
             panels: Vec::new(),
             snap_scroll: false,
@@ -59,6 +63,7 @@ impl Default for Options {
 
 impl Options {
     pub fn dimensions(&self) -> Result<(u32, u32)> {
+        self.view_scale().map_err(io::Error::other)?;
         if let Some(print) = self.print {
             print.options.validate().map_err(io::Error::other)?;
             if print.page == 0 || print.page > print.options.max_pages {
@@ -105,28 +110,34 @@ impl Options {
 
     pub fn environment(&self) -> MediaEnvironment {
         let mut result = MediaEnvironment {
-            viewport_width: self.width as f32,
-            viewport_height: self.height as f32,
-            resolution_dppx: Some(self.scale as f32),
+            viewport_width: self.width as f32 / self.zoom as f32,
+            viewport_height: self.height as f32 / self.zoom as f32,
+            resolution_dppx: Some((self.scale * self.zoom) as f32),
             color_scheme: Some(ColorScheme::Light),
             ..MediaEnvironment::default()
         };
         if let Some(print) = self.print {
             result.media_type = crate::css::media::MediaType::Print;
+            result.resolution_dppx = Some(self.scale as f32);
             result.viewport_width = print.options.width - 2.0 * print.options.margin;
             result.viewport_height = print.options.height - 2.0 * print.options.margin;
         }
         result
     }
+
+    pub fn view_scale(&self) -> std::result::Result<crate::display::ViewScale, &'static str> {
+        crate::display::ViewScale::new(self.scale, self.zoom)
+    }
 }
 
-/// RGBA8, unpremultiplied sRGB. Native paint composites onto an opaque white
+/// RGBA8, unpremultiplied, encoded in `color_profile`. Paint composites onto white
 /// canvas, so actual screenshots always have alpha=255.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Screenshot {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    pub color_profile: crate::display::ColorProfile,
 }
 
 impl Screenshot {
@@ -147,20 +158,34 @@ impl Screenshot {
         if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(io::Error::other("screenshot output is a symlink").into());
         }
-        image::save_buffer_with_format(
-            path,
-            &self.rgba,
-            self.width,
-            self.height,
-            image::ColorType::Rgba8,
-            image::ImageFormat::Png,
-        )?;
+        let mut info = png::Info::with_size(self.width, self.height);
+        info.color_type = png::ColorType::Rgba;
+        info.bit_depth = png::BitDepth::Eight;
+        match self.color_profile {
+            crate::display::ColorProfile::Srgb => {
+                info.srgb = Some(png::SrgbRenderingIntent::RelativeColorimetric)
+            }
+            crate::display::ColorProfile::DisplayP3 => {
+                info.icc_profile = Some(std::borrow::Cow::Owned(self.color_profile.encoded_icc()?));
+            }
+        }
+        let mut writer =
+            png::Encoder::with_info(std::fs::File::create(path)?, info)?.write_header()?;
+        writer.write_image_data(&self.rgba)?;
+        writer.finish()?;
         Ok(())
     }
 
-    /// PNG references are bounded and interpreted as RGBA8 sRGB, without
-    /// platform color management. Transparent pixels composite onto white.
+    /// PNG references are bounded and converted to sRGB. For profile-specific
+    /// exact references use `read_png_profile`; no platform profile is consulted.
     pub fn read_png(path: &Path) -> Result<Self> {
+        Self::read_png_profile(path, crate::display::ColorProfile::Srgb)
+    }
+
+    pub fn read_png_profile(
+        path: &Path,
+        color_profile: crate::display::ColorProfile,
+    ) -> Result<Self> {
         use std::io::Read;
         let mut bytes = Vec::new();
         std::fs::File::open(path)?
@@ -172,7 +197,7 @@ impl Screenshot {
             return Err(io::Error::other("reference must be a PNG of at most 16 MiB").into());
         }
         let decoded = crate::media::DecodedImage::decode(&bytes)?;
-        let mut rgba = decoded.rgba().to_vec();
+        let mut rgba = decoded.rgba_for(color_profile).to_vec();
         for pixel in rgba.as_chunks_mut::<4>().0 {
             let alpha = u32::from(pixel[3]);
             for channel in &mut pixel[..3] {
@@ -184,6 +209,7 @@ impl Screenshot {
             width: decoded.width(),
             height: decoded.height(),
             rgba,
+            color_profile,
         };
         result.validate()?;
         Ok(result)
@@ -199,7 +225,14 @@ pub fn load(path: &Path, resource_root: &Path, options: &Options) -> Result<Fram
 
 pub fn load_url(url: &url::Url, resource_root: &Path, options: &Options) -> Result<Frame> {
     options.dimensions()?;
-    let frame = load_local_page(url, resource_root, options.environment())?;
+    let mut frame = load_local_page(url, resource_root, options.environment())?;
+    if options.print.is_none() {
+        frame.set_viewport(
+            options.width as f32,
+            options.height as f32,
+            options.view_scale()?,
+        )?;
+    }
     check_ready(&frame)?;
     Ok(frame)
 }
@@ -258,7 +291,12 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
             ))
             .into());
         }
-        return render_print_page(&layout, print.page, options.scale);
+        return render_print_page_profile(
+            &layout,
+            print.page,
+            options.scale * options.zoom,
+            options.color_profile,
+        );
     }
     if let Some(fragment) = &options.fragment {
         frame.url.set_fragment(Some(fragment));
@@ -266,6 +304,11 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
     }
     let fonts = FontContext::bundled();
     frame.set_media_environment(options.environment());
+    frame.set_viewport(
+        options.width as f32,
+        options.height as f32,
+        options.view_scale()?,
+    )?;
     // Viewport changes can activate font rules not requested during initial load.
     for _ in 0..16 {
         if !frame.has_pending_web_fonts() {
@@ -333,18 +376,28 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
         .into());
     }
     frame.retain_scroll_state(&tree);
-    let list = paint::build_display_list(&tree, options.width as f32, options.height as f32, false);
-    paint::compositor::validate(&list, width as usize, height as usize, options.scale)
+    let environment = frame.media_environment();
+    let scale = options.view_scale()?.effective();
+    let list = paint::build_display_list(
+        &tree,
+        environment.viewport_width,
+        environment.viewport_height,
+        false,
+    );
+    paint::compositor::validate(&list, width as usize, height as usize, scale)
         .map_err(io::Error::other)?;
     let mut pixels = vec![0xffffff; width as usize * height as usize];
-    paint::rasterize_display_list(
+    paint::rasterize_display_list_profile(
         &list,
         frame.font_context(),
         &mut pixels,
         width as usize,
         height as usize,
-        options.scale,
-        tree.viewport_scroll().y,
+        crate::display::RasterOptions {
+            scale,
+            scroll: tree.viewport_scroll().y,
+            profile: options.color_profile,
+        },
     );
     let rgba = pixels
         .into_iter()
@@ -354,6 +407,7 @@ pub fn render(frame: &mut Frame, options: &Options) -> Result<Screenshot> {
         width,
         height,
         rgba,
+        color_profile: options.color_profile,
     })
 }
 
@@ -367,6 +421,15 @@ pub fn render_print_page(
     layout: &crate::engine::PrintLayout,
     number: usize,
     scale: f64,
+) -> Result<Screenshot> {
+    render_print_page_profile(layout, number, scale, crate::display::ColorProfile::Srgb)
+}
+
+pub fn render_print_page_profile(
+    layout: &crate::engine::PrintLayout,
+    number: usize,
+    scale: f64,
+    color_profile: crate::display::ColorProfile,
 ) -> Result<Screenshot> {
     let page = number
         .checked_sub(1)
@@ -388,14 +451,17 @@ pub fn render_print_page(
     paint::compositor::validate(&page.display_list, width, height, scale)
         .map_err(io::Error::other)?;
     let mut pixels = vec![0xffffff; width * height];
-    paint::rasterize_display_list(
+    paint::rasterize_display_list_profile(
         &page.display_list,
         &layout.fonts,
         &mut pixels,
         width,
         height,
-        scale,
-        0.0,
+        crate::display::RasterOptions {
+            scale,
+            scroll: 0.0,
+            profile: color_profile,
+        },
     );
     Ok(Screenshot {
         width: width as u32,
@@ -404,6 +470,7 @@ pub fn render_print_page(
             .into_iter()
             .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, 255])
             .collect(),
+        color_profile,
     })
 }
 
@@ -431,6 +498,13 @@ pub fn capture_print_pages(
         .into());
     }
     (1..=layout.pages.len())
-        .map(|page| render_print_page(&layout, page, options.scale))
+        .map(|page| {
+            render_print_page_profile(
+                &layout,
+                page,
+                options.scale * options.zoom,
+                options.color_profile,
+            )
+        })
         .collect()
 }

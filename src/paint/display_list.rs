@@ -218,24 +218,13 @@ pub(crate) fn build_display_list(
                 display_list.push(DisplayItem::Spatial(Box::new(bar.spatial)));
                 spatial = bar.spatial;
                 for (rect, color) in [(bar.track, bar.track_color), (bar.thumb, bar.thumb_color)] {
-                    let (rgb, alpha) = color.to_srgb8();
-                    if alpha == 255 {
-                        display_list.push(DisplayItem::Rect {
-                            x: rect.x,
-                            y: rect.y,
-                            w: rect.width,
-                            h: rect.height,
-                            color: rgb,
-                        });
-                    } else {
-                        display_list.push(DisplayItem::ColorRect {
-                            x: rect.x,
-                            y: rect.y,
-                            w: rect.width,
-                            h: rect.height,
-                            color,
-                        });
-                    }
+                    display_list.push(rect_item(DisplayItem::ColorRect {
+                        x: rect.x,
+                        y: rect.y,
+                        w: rect.width,
+                        h: rect.height,
+                        color,
+                    }));
                 }
             }
         }

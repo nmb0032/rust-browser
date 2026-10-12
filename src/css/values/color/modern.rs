@@ -132,10 +132,13 @@ impl ResolvedColor {
         result
     }
 
-    /// The current softbuffer is an opaque sRGB surface. Clip here, not during
-    /// parsing, relative-color calculation, inheritance, or interpolation.
+    /// Clip only at the selected output encoding, not during computation.
     pub fn to_srgb8(self) -> (u32, u32) {
-        let color = self.convert(ColorSpace::Srgb);
+        self.to_rgb8(ColorSpace::Srgb)
+    }
+
+    pub fn to_rgb8(self, space: ColorSpace) -> (u32, u32) {
+        let color = self.convert(space);
         let bytes = color
             .channels
             .map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u32);

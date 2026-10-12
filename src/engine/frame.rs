@@ -37,6 +37,7 @@ pub struct Frame {
     pub parse_errors: Vec<crate::html::tokenizer::ParseError>,
     pub dropped_parse_errors: usize,
     media_environment: MediaEnvironment,
+    view_scale: crate::display::ViewScale,
     interaction_state: InteractionState,
     scroll_state: layout::ScrollState,
     // Keep collection/resource diagnostics separate from resolution diagnostics,
@@ -89,6 +90,11 @@ impl Frame {
             parse_errors: Vec::new(),
             dropped_parse_errors: 0,
             media_environment,
+            view_scale: crate::display::ViewScale::new(
+                f64::from(media_environment.resolution_dppx.unwrap_or(1.0)),
+                1.0,
+            )
+            .unwrap_or_default(),
             interaction_state: InteractionState::default(),
             scroll_state: layout::ScrollState::default(),
             collected_stylesheets,
@@ -102,6 +108,46 @@ impl Frame {
 
     pub fn media_environment(&self) -> MediaEnvironment {
         self.media_environment
+    }
+
+    pub fn view_scale(&self) -> crate::display::ViewScale {
+        self.view_scale
+    }
+
+    /// Unzoomed logical viewport (physical / DPR). Resource and scroll identity
+    /// remain retained; CSS viewport, resolution queries and layout change once.
+    pub fn set_viewport(
+        &mut self,
+        width: f32,
+        height: f32,
+        scale: crate::display::ViewScale,
+    ) -> Result<bool, &'static str> {
+        crate::display::ViewScale::new(scale.dpr, scale.zoom)?;
+        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+            return Err("viewport must have finite positive dimensions");
+        }
+        let ratio = (self.view_scale.zoom / scale.zoom) as f32;
+        let resize = |viewport: Option<(f32, f32)>| viewport.map(|(w, h)| (w * ratio, h * ratio));
+        self.view_scale = scale;
+        Ok(self.set_media_environment(MediaEnvironment {
+            viewport_width: width / scale.zoom as f32,
+            viewport_height: height / scale.zoom as f32,
+            resolution_dppx: Some(scale.effective() as f32),
+            small_viewport: resize(self.media_environment.small_viewport),
+            large_viewport: resize(self.media_environment.large_viewport),
+            dynamic_viewport: resize(self.media_environment.dynamic_viewport),
+            ..self.media_environment
+        }))
+    }
+
+    pub fn set_page_zoom(&mut self, zoom: f64) -> Result<bool, &'static str> {
+        let old = self.view_scale;
+        let next = crate::display::ViewScale::new(old.dpr, zoom)?;
+        self.set_viewport(
+            self.media_environment.viewport_width * old.zoom as f32,
+            self.media_environment.viewport_height * old.zoom as f32,
+            next,
+        )
     }
 
     pub fn interaction_state(&self) -> &InteractionState {

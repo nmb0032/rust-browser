@@ -11,3 +11,4 @@ pub(crate) use display_list::{
     max_scroll_offset,
 };
 pub(crate) use rasterizer::rasterize_display_list;
+pub(crate) use rasterizer::rasterize_display_list_profile;

@@ -1,0 +1,24 @@
+<!doctype html>
+<title>Device scale, zoom and SDR profiles</title>
+<style>
+body{margin:32px;font:18px sans-serif;color:#18212a}
+h1{font-size:32px}
+.samples{display:flex;gap:12px;flex-wrap:wrap}
+.sample{width:180px;height:100px;border:2px solid currentColor;padding:12px;box-sizing:border-box}
+.srgb{background:red;color:white}
+.p3{background:color(display-p3 1 0 0);color:white}
+svg{border:2px solid color(display-p3 0 .7 .3);margin-top:16px}
+@media(max-width:500px){body{margin:16px}}
+</style>
+<h1>Crisp geometry. Explicit color.</h1>
+<p>Native: Command/Ctrl +, −, 0 zooms and reflows. Retina uses actual device glyphs.</p>
+<div class=samples><div class="sample srgb">sRGB red</div><div class="sample p3">Display-P3 red</div></div>
+<p>Wide-gamut comparison requires an ICC-tagged Display-P3 PNG and a color-managed viewer.
+The native softbuffer path is assumed sRGB, not a tagged wide-gamut surface.</p>
+<svg width="380" height="100" viewBox="0 0 380 100">
+<defs><linearGradient id="g"><stop offset="0" stop-color="color(display-p3 1 .1 0)"/><stop offset="1" stop-color="color(display-p3 0 .8 .3)"/></linearGradient></defs>
+<rect width="380" height="100" fill="url(#g)"/>
+<text x="16" y="60" font-size="24" fill="white">Device-time vector text</text>
+</svg>
+<p><img src="../fixtures/display/p3-alpha.png" width="80" height="80" alt="ICC P3 alpha sample">
+ICC image preserves alpha and converts from its source profile before composition.</p>
