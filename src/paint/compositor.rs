@@ -69,6 +69,33 @@ pub(crate) fn validate(
     height: usize,
     scale: f64,
 ) -> Result<(), String> {
+    for item in list {
+        let vector = match item {
+            DisplayItem::Vector { rect, scene } => Some((*rect, scene)),
+            DisplayItem::Image { x, y, w, h, image } => image.vector().map(|scene| {
+                (
+                    Rect {
+                        x: *x,
+                        y: *y,
+                        width: *w,
+                        height: *h,
+                    },
+                    scene,
+                )
+            }),
+            _ => None,
+        };
+        if let Some((rect, scene)) = vector {
+            let (w, h) = (
+                (rect.width * scale as f32).ceil(),
+                (rect.height * scale as f32).ceil(),
+            );
+            if !w.is_finite() || !h.is_finite() || w > 4096.0 || h > 4096.0 {
+                return Err("vector device dimensions exceed 4096".into());
+            }
+            crate::vector::raster::validate(scene, w.max(0.0) as u32, h.max(0.0) as u32)?;
+        }
+    }
     let active=list.iter().any(|i| matches!(i,DisplayItem::BeginLayer(_)) || matches!(i,DisplayItem::Spatial(s) if s.matrix!=Mat4::translation(s.offset.x as f64,s.offset.y as f64,0.0) || s.hidden));
     if !active {
         return Ok(());
@@ -529,6 +556,7 @@ fn contains(r: Rect, x: f32, y: f32) -> bool {
 }
 fn item_bounds(item: &DisplayItem) -> Option<Rect> {
     Some(match item {
+        DisplayItem::Vector { rect, .. } => *rect,
         DisplayItem::Rect { x, y, w, h, .. }
         | DisplayItem::ColorRect { x, y, w, h, .. }
         | DisplayItem::Image { x, y, w, h, .. }

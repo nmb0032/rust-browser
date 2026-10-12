@@ -1,0 +1,15 @@
+<!doctype html>
+<link rel=match href="references/svg-geometry-ref.html">
+<style>body{margin:0}svg{display:block}</style>
+<svg width=120 height=80 viewBox="0 0 120 80">
+<defs>
+ <symbol id=box viewBox="0 0 10 10"><path d="M0 0H10V10H0Z" fill=red /></symbol>
+ <marker id=end markerUnits=userSpaceOnUse markerWidth=8 markerHeight=8 refX=4 refY=4 orient=auto><rect width=8 height=8 fill=green /></marker>
+</defs>
+<use href="#box" width=20 height=20 />
+<path d="M30 4H50" fill=none stroke=blue stroke-width=8 />
+<path d="M60 4H80" fill=none marker-end="url(#end)"/>
+<polygon points="0,30 20,30 20,50 0,50" fill=purple />
+<g transform="translate(30 30) scale(2)"><path d="M0 0h10v10H0z" fill=orange /></g>
+<path d="M60 30H90V60H60Z M70 40V50H80V40Z" fill=black fill-rule=evenodd />
+</svg>

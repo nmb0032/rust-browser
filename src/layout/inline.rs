@@ -398,7 +398,11 @@ fn collect(
         data.atomic_baseline = if mode.vertical() {
             data.rect.height * 0.5
         } else {
-            data.rect.height + data.margin.bottom
+            image
+                .baseline(size.1)
+                .map_or(data.rect.height + data.margin.bottom, |baseline| {
+                    data.padding.top + data.border.top + baseline
+                })
         };
         boxes.push(data);
         if layout.style.position.out_of_flow() {

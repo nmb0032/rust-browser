@@ -3423,10 +3423,94 @@ and the CSSOM parts covered here meet the conformance gate.
   balance-all, arbitrary margin-box sizing/overlap negotiation, running
   elements and footnotes are unsupported. This finite native implementation
   does not establish the milestone's full WPT conformance gate.
-- [ ] **8.21 Render SVG and MathML.** Implement SVG 2 rendering, including
+- [x] **8.21 Render SVG and MathML.** Implement SVG 2 rendering, including
   paths, text, gradients, patterns, markers, `use`, and SVG images, and
   implement MathML Core layout.
   *You'll see:* inline SVG icons and equations render as in browsers.
+
+  **Implemented (finite native surface):** `src/vector` constructs immutable
+  path, shaped-text, image and opacity-group scenes from namespaced DOM nodes.
+  Outer SVG/MathML units participate in the existing block/inline, flex/grid,
+  table, intrinsic/replaced sizing, object fitting, baseline, stacking and
+  fragment-copy paths. Final inline SVG viewports are rebuilt at used dimensions:
+  absent a viewBox, CSS sizing does not incorrectly enlarge font/user units.
+  MathML uses a measured mathematical baseline, not the image bottom edge.
+  `DisplayItem::Vector` rasterizes geometry at paint time through `tiny-skia`,
+  then participates in the existing spatial clips, homography projection and
+  RGBA effect groups. There is no browser screenshot, pre-baked SVG bitmap or
+  alternate screenshot/print renderer. Shaped glyph face/index/variation,
+  cluster and original DOM source ranges remain retained, including clones and
+  physical page/column fragments; local glyph offsets are not absolutized.
+
+  **SVG:** absolute/relative moveto/line/horizontal/vertical, cubic/smooth,
+  quadratic/smooth, elliptical arc and closepath commands; rectangles (including
+  rounded corners), circles/ellipses and polygons/polylines; nonzero/evenodd fill,
+  solid/currentColor fill/stroke, stroke caps/joins/miter/dashes; SVG transform
+  lists, viewBox meet/slice/none, nested viewport clips and group opacity.
+  Text/tspan uses the actual document font context, inherited presentation font
+  attributes, scalar x/y/dx/dy and per-chunk text-anchor. Linear/radial gradients
+  include stops, stop opacity, units/transforms, pad/repeat/reflect and local href
+  inheritance. Patterns repeat actual vector tiles with units/content units,
+  viewBox and transforms. Local use/symbol references (including xlink:href) and
+  start/mid/end markers execute with reference points, marker units and
+  fixed/auto/auto-start-reverse orientation. Inline image nodes load through
+  Frame's bounded resource policy/cache, including raster and SVG assets.
+  HTML img SVG assets retain vector scenes and natural dimensions; standalone
+  namespaced SVG documents use the same layout/paint path.
+
+  **MathML:** token boxes, rows and a finite operator-spacing dictionary,
+  scalable vertical fences, fractions, native radical stems/overbars and root
+  degrees, sub/sup/subsup and pre/post multiscripts, under/over/underover limits,
+  matrix rows/cells, mspace, phantom, absolute-length padded boxes, error
+  backgrounds and semantics presentation children. CSS document fonts and
+  variation/shaping feed actual token metrics. Selected OpenType MATH constants
+  supply script scale, axis/rule/gap and script shifts when present; bounded
+  em-derived metrics serve fonts without MATH. An original in-memory MATH table
+  on the existing CC0 geometric font independently verifies that selection path.
+
+  **Evidence:** twelve focused contracts plus four native integration tests.
+  Eight assertion/reference pairs in `tests/reftests-vectors` match exactly at
+  scales 1/2: geometry/use/markers, gradients/patterns/opacity, text, SVG/raster
+  images, CSS spatial effects/clips, equation layout, columns and page units.
+  References use explicit ordinary rectangles/text and an independently
+  positioned fraction rule, not MathML; radial PNGs come from original analytic
+  pixel-center equations in `tools/generate_vector_reference.py`.
+  Two physical print pages additionally match independent pixels at both scales.
+  Continuous gradient samples, real curves/arcs, source/face identity,
+  baseline alignment, restricted resources, reference cycles and device budgets
+  have contracts. `tests/pages/vectors.html` visibly demonstrates reusable icons,
+  a quadratic equation and a matrix through the actual CLI.
+
+  **Validation:** `cargo test --all-features --quiet` passes **945 Rust tests**;
+  `cargo fmt --all --check`, all-target/all-feature clippy with `-D warnings`,
+  all-feature bench checking, the seven CSS-generator Python tests, CSS metadata
+  generation `--check`, analytic vector-reference `--check` and `git diff --check`
+  pass. Evidence is retained in `target/m821-tests.log`,
+  `target/reftests/vectors-scale1`, `target/reftests/vectors-scale2` and
+  `target/vectors-demo.png` (800x720 native CLI).
+
+  **Bounds and remaining gaps:** SVG input images <=4 MiB, dimensions <=4096,
+  expansion depth 32, 16,384 emitted commands, 32,768 expanded node visits,
+  65,536 path segments/glyphs, 256 stops and 256 KiB total shaped text per scene.
+  Device textures are <=4096 per axis/4,194,304 pixels; vector groups are bounded
+  to 64 MiB and 64 scene levels. Resource/decode/policy failures and recognized
+  unsupported constructs diagnose and reject headless capture. Embedded raster
+  data images are bounded; SVG-image documents never perform nested external
+  image/font I/O or script execution. SVG paint CSS cascade is not implemented
+  (inline paint styles diagnose; presentation attributes are the executable
+  paint surface). Full SVG CSS geometry/transform-box, inner-node CSS effects,
+  path text, text stroke/paint servers, position lists, pattern href inheritance,
+  SVG filter/mask/clip references, foreignObject, external use, animation/SMIL and
+  SVG subnode hit/selection are outside this step. Root attribute percentage
+  dimensions diagnose the default-object-viewport approximation.
+  MathML remains horizontal within an atomic outer unit, with finite row RTL
+  ordering/operator data, scaled fences and geometric radicals rather than full
+  MATH glyph assemblies/kerns/accent attachment. Advanced table attributes/spans,
+  relative/pseudo-unit mpadded sizing, unsupported variants and bevelled fractions
+  are diagnosed/finite gaps. Available document fonts determine symbol coverage;
+  there is no implicit system math-font discovery. These bounds do not establish
+  complete SVG 2/MathML Core or full WPT conformance. **8.22 and milestone 9 remain
+  unimplemented.**
 - [ ] **8.22 Support high-DPI and color management.** Render at the device
   pixel ratio, support page zoom, and convert images and CSS colors between
   color spaces for the display profile.

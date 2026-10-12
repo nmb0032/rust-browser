@@ -12,6 +12,10 @@ const OUTLINE_COLOR: u32 = 0x00FF_0000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DisplayItem {
+    Vector {
+        rect: Rect,
+        scene: Arc<crate::vector::Scene>,
+    },
     BeginLayer(Box<super::compositor::Layer>),
     EndLayer,
     TextDecoration {
@@ -322,6 +326,18 @@ fn append_box_items(
         return;
     }
     if phase == PaintPhase::Content
+        && let Some(scene) = layout_box.vector_scene()
+    {
+        let rect = layout_box.object_rect();
+        if rect.width > 0.0 && rect.height > 0.0 {
+            display_list.push(DisplayItem::ObjectClip(layout_box.content_rect()));
+            display_list.push(DisplayItem::Vector {
+                rect,
+                scene: scene.clone(),
+            });
+            display_list.push(DisplayItem::ObjectClipEnd);
+        }
+    } else if phase == PaintPhase::Content
         && let Some(image) = layout_box.decoded_image()
     {
         let rect = layout_box.object_rect();
@@ -343,13 +359,25 @@ fn append_box_items(
         && marker.style.font_size > 0.0
     {
         if let Some(image) = &marker.image {
-            display_list.push(DisplayItem::Image {
-                x: marker.x,
-                y: marker.y,
-                w: image.width() as f32,
-                h: image.height() as f32,
-                image: image.clone(),
-            });
+            if let Some(scene) = image.vector() {
+                display_list.push(DisplayItem::Vector {
+                    rect: Rect {
+                        x: marker.x,
+                        y: marker.y,
+                        width: image.width() as f32,
+                        height: image.height() as f32,
+                    },
+                    scene: scene.clone(),
+                });
+            } else {
+                display_list.push(DisplayItem::Image {
+                    x: marker.x,
+                    y: marker.y,
+                    w: image.width() as f32,
+                    h: image.height() as f32,
+                    image: image.clone(),
+                });
+            }
         }
         if marker.image.is_none() {
             display_list.push(text_item(DisplayItem::ColorText {

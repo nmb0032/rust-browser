@@ -85,6 +85,11 @@ pub(super) fn load_resources(
             element.attribute("src")
         } else if element.tag_name().eq_ignore_ascii_case("video") {
             element.attribute("poster")
+        } else if *element.namespace() == crate::dom::Namespace::Svg
+            && element.tag_name() == "image"
+        {
+            // Bounded data-raster decoding happens inside the SVG compiler.
+            crate::vector::href(element).filter(|value| !value.starts_with("data:"))
         } else {
             continue;
         };
@@ -138,9 +143,11 @@ pub(super) fn load_resources(
                         return Err(io::Error::other("page decoded images exceed 128 MiB").into());
                     }
                     let resource = net::fetch_resource(&url, net::MAX_IMAGE_BYTES)?;
+                    frame.resource_policy.check(&resource.metadata.url)?;
+                    check_page_reference(&frame.url, &resource.metadata.url)?;
                     let image = Arc::new(DecodedImage::decode(&resource.bytes)?);
                     check_cancelled(cancelled)?;
-                    let next_bytes = image_bytes + image.rgba().len();
+                    let next_bytes = image_bytes + image.decoded_bytes();
                     if next_bytes > MAX_PAGE_IMAGE_BYTES {
                         return Err(io::Error::other("page decoded images exceed 128 MiB").into());
                     }
@@ -199,7 +206,7 @@ pub(super) fn load_resources(
             frame.resource_policy.check(&resource.metadata.url)?;
             check_page_reference(&frame.url, &resource.metadata.url)?;
             let image = Arc::new(DecodedImage::decode(&resource.bytes)?);
-            marker_bytes += image.rgba().len();
+            marker_bytes += image.decoded_bytes();
             if image_bytes + marker_bytes > MAX_PAGE_IMAGE_BYTES {
                 return Err(io::Error::other("marker decoded image byte limit").into());
             }
@@ -273,13 +280,19 @@ pub(super) fn load_effect_images(
                 frame.resource_policy.check(&url)?;
                 url.set_fragment(None);
                 if let Some(image) = frame.image_cache.get(&url) {
+                    if image.vector().is_some() {
+                        return Err("SVG effect-mask images are unsupported".into());
+                    }
                     return Ok(Arc::clone(image));
                 }
                 let resource = net::fetch_resource(&url, net::MAX_IMAGE_BYTES)?;
                 frame.resource_policy.check(&resource.metadata.url)?;
                 check_page_reference(&frame.url, &resource.metadata.url)?;
                 let image = Arc::new(DecodedImage::decode(&resource.bytes)?);
-                frame.image_resource_bytes += image.rgba().len();
+                if image.vector().is_some() {
+                    return Err("SVG effect-mask images are unsupported".into());
+                }
+                frame.image_resource_bytes += image.decoded_bytes();
                 if frame.image_resource_bytes > MAX_PAGE_IMAGE_BYTES {
                     return Err(io::Error::other("mask decoded image byte limit").into());
                 }

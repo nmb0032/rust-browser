@@ -272,6 +272,13 @@ impl LayoutBox {
     /// Before finalization, descendants' baselines relative to this border
     /// origin are used to position an outside marker in the parent's flow.
     pub(super) fn first_local_baseline(&self) -> Option<f32> {
+        if let Some(baseline) = self
+            .image
+            .as_ref()
+            .and_then(|i| i.baseline(self.content_rect.height))
+        {
+            return Some(self.padding.top + self.style.border_width.top + baseline);
+        }
         if let Some(m) = self.axis_measurement {
             return Some(m.height);
         }
@@ -327,6 +334,13 @@ impl LayoutBox {
             })
     }
     pub(super) fn last_local_baseline(&self) -> Option<f32> {
+        if let Some(baseline) = self
+            .image
+            .as_ref()
+            .and_then(|i| i.baseline(self.content_rect.height))
+        {
+            return Some(self.padding.top + self.style.border_width.top + baseline);
+        }
         self.line_boxes
             .last()
             .map(|line| line.baseline)
@@ -350,12 +364,17 @@ impl LayoutBox {
     pub(crate) fn decoded_image(&self) -> Option<&Arc<DecodedImage>> {
         self.image.as_ref()?.data.as_ref()
     }
+    pub(crate) fn vector_scene(&self) -> Option<&Arc<crate::vector::Scene>> {
+        self.image.as_ref()?.scene.as_ref()
+    }
     pub(crate) fn object_rect(&self) -> Rect {
         let content = self.content_rect;
-        let Some(image) = self.decoded_image() else {
+        let Some(natural) = self.image.as_ref().and_then(|i| i.natural()) else {
             return content;
         };
-        let natural = (image.width() as f32, image.height() as f32);
+        if natural.0 <= 0.0 || natural.1 <= 0.0 {
+            return content;
+        }
         let contain = (content.width / natural.0).min(content.height / natural.1);
         let scale = match self.style.object_fit {
             style::ObjectFit::Fill => return content,
@@ -637,6 +656,19 @@ impl LayoutTree {
         self.page_clip = None;
         self.root.reset();
         self.diagnostics.clone_from(&self.construction_diagnostics);
+        fn prepare_vectors(
+            b: &mut LayoutBox,
+            font: &crate::text::FontContext,
+            diagnostics: &mut Vec<Diagnostic>,
+        ) {
+            if let Some(image) = &mut b.image {
+                image.prepare(font, diagnostics);
+            }
+            for child in &mut b.children {
+                prepare_vectors(child, font, diagnostics);
+            }
+        }
+        prepare_vectors(&mut self.root, font, &mut self.diagnostics);
         let viewport_width = finite_used(
             viewport_width as f64,
             None,
@@ -697,6 +729,20 @@ impl LayoutTree {
             font,
             &mut self.diagnostics,
         );
+        fn vector_viewports(
+            b: &mut LayoutBox,
+            font: &crate::text::FontContext,
+            diagnostics: &mut Vec<Diagnostic>,
+        ) {
+            let rect = b.object_rect();
+            if let Some(image) = &mut b.image {
+                image.viewport(font, diagnostics, rect.width, rect.height);
+            }
+            for child in &mut b.children {
+                vector_viewports(child, font, diagnostics);
+            }
+        }
+        vector_viewports(&mut self.root, font, &mut self.diagnostics);
         self.finalize_overflow(Rect {
             x: 0.0,
             y: 0.0,
@@ -881,6 +927,8 @@ pub(crate) fn build_layout_tree_with_marker_resources(
     let mut identity = Construction {
         generated: super::counters::evaluate(document, styles, &mut diagnostics),
         images: markers.clone(),
+        foreign_document: Some(Arc::new(document.clone())),
+        foreign_styles: Some(Arc::new(styles.clone())),
         ..Default::default()
     };
     let root = build_box(
@@ -919,6 +967,8 @@ struct Construction {
     grid_parent: bool,
     generated: super::counters::Generated,
     images: ImageMap,
+    foreign_document: Option<Arc<Document>>,
+    foreign_styles: Option<Arc<ComputedStyles>>,
 }
 
 impl Construction {
@@ -1072,7 +1122,8 @@ fn build_boxes(
                 | "select"
                 | "object"
                 | "embed"
-        ) {
+        ) || crate::vector::root(element)
+        {
             return Vec::new();
         }
         let mut result = Vec::new();
@@ -1136,6 +1187,15 @@ fn build_box(
             .expect("every node in this document snapshot must have a computed style")
             .clone(),
     );
+    let foreign = node.as_element().is_some_and(crate::vector::root);
+    if node.as_element().is_some_and(|e| {
+        *e.namespace() == crate::dom::Namespace::MathMl
+            && e.tag_name() == "math"
+            && e.attribute("display") == Some("block")
+    }) && style.display == Display::Inline
+    {
+        style.display = Display::Block;
+    }
     if (identity.flex_parent || identity.grid_parent)
         && node.as_element().is_some()
         && !style.position.out_of_flow()
@@ -1183,9 +1243,9 @@ fn build_box(
         }
     };
     if matches!(style.display, Display::Inline | Display::InlineListItem)
-        && node
-            .as_element()
-            .is_some_and(|e| !matches!(e.tag_name(), "img" | "video" | "canvas" | "iframe"))
+        && node.as_element().is_some_and(|e| {
+            !matches!(e.tag_name(), "img" | "video" | "canvas" | "iframe") && !foreign
+        })
     {
         style.effects.non_transformable();
     }
@@ -1199,7 +1259,7 @@ fn build_box(
     }
     let mut children: Vec<_> = if node
         .as_element()
-        .is_some_and(|e| matches!(e.tag_name(), "img" | "video" | "canvas" | "iframe"))
+        .is_some_and(|e| matches!(e.tag_name(), "img" | "video" | "canvas" | "iframe") || foreign)
     {
         Vec::new()
     } else {
@@ -1267,19 +1327,21 @@ fn finish_box(
     let mut marker_text = None;
     let mut marker_style = None;
     if let Some(element) = node.as_element() {
-        if !matches!(
-            element.tag_name().to_ascii_lowercase().as_str(),
-            "img"
-                | "input"
-                | "textarea"
-                | "select"
-                | "video"
-                | "audio"
-                | "iframe"
-                | "canvas"
-                | "object"
-                | "embed"
-        ) {
+        if !crate::vector::root(element)
+            && !matches!(
+                element.tag_name().to_ascii_lowercase().as_str(),
+                "img"
+                    | "input"
+                    | "textarea"
+                    | "select"
+                    | "video"
+                    | "audio"
+                    | "iframe"
+                    | "canvas"
+                    | "object"
+                    | "embed"
+            )
+        {
             if let Some(before) = generated_box(
                 node_id,
                 element,
@@ -1371,10 +1433,28 @@ fn finish_box(
         content_rect: Rect::default(),
         padding: Edges::default(),
         margin: Edges::default(),
-        image: node
-            .as_element()
-            .filter(|element| matches!(element.tag_name(), "img" | "video" | "canvas" | "iframe"))
-            .map(|element| ImageContent::new(element, images.get(&node_id).cloned())),
+        image: node.as_element().and_then(|element| {
+            if crate::vector::root(element) {
+                Some(ImageContent::foreign(crate::vector::Source {
+                    document: identity
+                        .foreign_document
+                        .as_ref()
+                        .expect("foreign snapshot")
+                        .clone(),
+                    styles: identity
+                        .foreign_styles
+                        .as_ref()
+                        .expect("foreign styles")
+                        .clone(),
+                    images: images.clone(),
+                    root: node_id,
+                }))
+            } else if matches!(element.tag_name(), "img" | "video" | "canvas" | "iframe") {
+                Some(ImageContent::new(element, images.get(&node_id).cloned()))
+            } else {
+                None
+            }
+        }),
         children: std::mem::take(children),
         text_fragments: Vec::new(),
         inline_fragments: Vec::new(),

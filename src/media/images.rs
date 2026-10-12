@@ -13,6 +13,7 @@ pub struct DecodedImage {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    vector: Option<Arc<crate::vector::Scene>>,
 }
 
 impl fmt::Debug for DecodedImage {
@@ -27,6 +28,23 @@ impl fmt::Debug for DecodedImage {
 
 impl DecodedImage {
     pub fn decode(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
+        let first = bytes
+            .iter()
+            .position(|b| !b.is_ascii_whitespace())
+            .unwrap_or(0);
+        if bytes.get(first) == Some(&b'<')
+            || bytes.starts_with(&[0xef, 0xbb, 0xbf])
+            || bytes.starts_with(&[0xff, 0xfe])
+            || bytes.starts_with(&[0xfe, 0xff])
+        {
+            let scene = crate::vector::decode(bytes)?;
+            return Ok(Self {
+                width: scene.width.ceil() as u32,
+                height: scene.height.ceil() as u32,
+                rgba: Vec::new(),
+                vector: Some(scene),
+            });
+        }
         let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
         let mut limits = image::Limits::default();
         limits.max_image_width = Some(MAX_DIMENSION);
@@ -42,6 +60,7 @@ impl DecodedImage {
             width: image.width(),
             height: image.height(),
             rgba: image.into_raw(),
+            vector: None,
         })
     }
 
@@ -55,6 +74,24 @@ impl DecodedImage {
 
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
+    }
+
+    pub fn vector(&self) -> Option<&Arc<crate::vector::Scene>> {
+        self.vector.as_ref()
+    }
+
+    pub(crate) fn natural_size(&self) -> (f32, f32) {
+        self.vector
+            .as_ref()
+            .map_or((self.width as f32, self.height as f32), |s| {
+                (s.width, s.height)
+            })
+    }
+
+    /// Apply the same resource budget to deferred vectors as decoded rasters.
+    pub(crate) fn decoded_bytes(&self) -> usize {
+        self.width as usize * self.height as usize * 4
+            + self.vector.as_ref().map_or(0, |s| s.estimated_bytes())
     }
 }
 

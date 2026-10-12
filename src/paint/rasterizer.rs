@@ -42,6 +42,10 @@ pub(crate) fn rasterize_display_list(
     scale_factor: f64,
     scroll_offset: f32,
 ) {
+    if let Err(error) = super::compositor::validate(display_list, width, height, scale_factor) {
+        eprintln!("paint: {error}; render suppressed");
+        return;
+    }
     if display_list.iter().any(|item| match item {
         DisplayItem::BeginLayer(_) => true,
         DisplayItem::Spatial(s) => {
@@ -120,6 +124,43 @@ pub(crate) fn rasterize_rgba(
         .intersect(framebuffer);
         let clip = object_clip.map_or(clip, |object| clip.intersect(object));
         match item {
+            DisplayItem::Vector { rect, scene } => {
+                let left = (rect.x + spatial.offset.x) * scale;
+                let top = (rect.y + spatial.offset.y - item_scroll) * scale;
+                let w = (rect.width * scale).ceil().max(0.0) as u32;
+                let h = (rect.height * scale).ceil().max(0.0) as u32;
+                let Some(source) = crate::vector::raster::render_at(
+                    scene,
+                    w,
+                    h,
+                    rect.width * scale / scene.width,
+                    rect.height * scale / scene.height,
+                    _font,
+                ) else {
+                    continue;
+                };
+                let x0 = left.floor().clamp(0.0, width as f32) as usize;
+                let y0 = top.floor().clamp(0.0, height as f32) as usize;
+                let x1 = (left + rect.width * scale).ceil().clamp(0.0, width as f32) as usize;
+                let y1 = (top + rect.height * scale).ceil().clamp(0.0, height as f32) as usize;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        if !clip.contains(x as i32, y as i32) {
+                            continue;
+                        }
+                        let sx = (x as f32 + 0.5 - left)
+                            .floor()
+                            .clamp(0.0, w.saturating_sub(1) as f32)
+                            as usize;
+                        let sy = (y as f32 + 0.5 - top)
+                            .floor()
+                            .clamp(0.0, h.saturating_sub(1) as f32)
+                            as usize;
+                        let p = source[sy * w as usize + sx];
+                        pixels[y * width + x] = blend(pixels[y * width + x], p & 0xffffff, p >> 24);
+                    }
+                }
+            }
             DisplayItem::BeginLayer(_) | DisplayItem::EndLayer => {}
             DisplayItem::TextDecoration {
                 rect,
@@ -219,6 +260,32 @@ pub(crate) fn rasterize_rgba(
                 draw_outline_rect(pixels, width, height, rect, clip, scale, *color);
             }
             DisplayItem::Image { x, y, w, h, image } => {
+                if let Some(scene) = image.vector() {
+                    let mut clipped = spatial;
+                    clipped.clip.x = Some((clip.left as f32 / scale, clip.right as f32 / scale));
+                    clipped.clip.y = Some((clip.top as f32 / scale, clip.bottom as f32 / scale));
+                    rasterize_rgba(
+                        &[
+                            DisplayItem::Spatial(Box::new(clipped)),
+                            DisplayItem::Vector {
+                                rect: crate::layout::Rect {
+                                    x: *x,
+                                    y: *y - item_scroll,
+                                    width: *w,
+                                    height: *h,
+                                },
+                                scene: scene.clone(),
+                            },
+                        ],
+                        _font,
+                        pixels,
+                        width,
+                        height,
+                        scale_factor,
+                        0.0,
+                    );
+                    continue;
+                }
                 let left = (*x + spatial.offset.x) * scale;
                 let top = (*y + spatial.offset.y - item_scroll) * scale;
                 let image_width = *w * scale;

@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset=utf-8>
+<title>Native SVG icons and MathML equations</title>
+<style>
+body{margin:0;font:18px/1.5 sans-serif;color:#16324f}
+h1{font-size:30px;margin:0 0 18px}h2{font-size:20px;margin:20px 0 8px}
+section{padding:16px;border:1px solid #c8d6e5;margin:0 0 18px}
+.icons{display:flex;gap:20px;align-items:center}math{font-size:26px}
+@media print{section{break-inside:avoid}h1{font-size:22px}.icons{gap:8px}}
+</style>
+<h1>Vectors and equations, painted natively</h1>
+<section>
+<h2>Paths, reusable symbols, gradients, patterns and markers</h2>
+<div class=icons>
+<svg width=100 height=90 viewBox="0 0 100 90">
+<defs>
+<linearGradient id=sky x2=0 y2=1><stop stop-color="#2f80ed"/><stop offset=1 stop-color="#9b51e0"/></linearGradient>
+<symbol id=star viewBox="0 0 100 100"><path d="M50 2 61 35 96 35 68 56 79 90 50 69 21 90 32 56 4 35 39 35Z"/></symbol>
+</defs>
+<use href="#star" width=90 height=90 fill="url(#sky)"/>
+</svg>
+<svg width=100 height=90>
+<defs><pattern id=tiles patternUnits=userSpaceOnUse width=12 height=12><rect width=12 height=12 fill="#e5f4fc"/><circle cx=6 cy=6 r=3 fill="#2f80ed"/></pattern></defs>
+<rect x=4 y=4 rx=12 width=80 height=80 fill="url(#tiles)"/>
+<text x=18 y=56 font-size=24 fill="#16324f">SVG</text>
+</svg>
+<svg width=120 height=90>
+<defs><marker id=arrow markerWidth=10 markerHeight=10 refX=8 refY=5 orient=auto><path d="M0 0 10 5 0 10Z" fill="#219653"/></marker></defs>
+<path d="M8 70 C20 4 80 4 90 60" fill=none stroke="#219653" stroke-width=3 marker-end="url(#arrow)"/>
+</svg>
+</div>
+</section>
+<section>
+<h2>Fractions, radicals, scripts and a matrix</h2>
+<p>The quadratic formula:</p>
+<math display=block>
+<mi>x</mi><mo>=</mo><mfrac><mrow><mo>−</mo><mi>b</mi><mo>±</mo><msqrt><msup><mi>b</mi><mn>2</mn></msup><mo>−</mo><mn>4</mn><mi>a</mi><mi>c</mi></msqrt></mrow><mrow><mn>2</mn><mi>a</mi></mrow></mfrac>
+</math>
+<p>A symmetric matrix:</p>
+<math display=block><mo>(</mo><mtable>
+<mtr><mtd><msub><mi>a</mi><mn>1</mn></msub></mtd><mtd><mi>b</mi></mtd></mtr>
+<mtr><mtd><mi>b</mi></mtd><mtd><msub><mi>a</mi><mn>2</mn></msub></mtd></mtr>
+</mtable><mo>)</mo></math>
+</section>

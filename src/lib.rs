@@ -13,4 +13,5 @@ pub mod screenshot;
 pub mod style;
 pub mod text;
 pub mod ui;
+pub mod vector;
 pub mod xml;

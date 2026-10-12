@@ -1,4 +1,4 @@
-# Native headless reftests (milestones 8.13–8.19)
+# Native headless reftests (milestones 8.13–8.21)
 
 Run from the repository root:
 
@@ -173,6 +173,51 @@ metadata and are never fetched. Bounded data-font sources remain supported.
 Existing production HTML/CSS/image/font byte, import and decode limits apply.
 
 ## Test format and enumeration
+
+Milestone 8.21 adds **eight** pairs in `tests/reftests-vectors`, separately
+enumerated from the historical suites:
+
+```sh
+cargo test --all-features --test vectors
+cargo run --quiet -- --reftests tests/reftests-vectors \
+  --artifacts target/reftests/vectors-scale1
+cargo run --quiet -- --reftests tests/reftests-vectors --device-scale 2 \
+  --artifacts target/reftests/vectors-scale2
+cargo run --quiet -- tests/pages/vectors.html --viewport 800x720 \
+  --screenshot target/vectors-demo.png
+PYTHONDONTWRITEBYTECODE=1 python3 tools/generate_vector_reference.py --check
+```
+
+These run native vector display items through the production resource loader,
+used viewport/intrinsic/replaced sizing, shaped glyphs, stacking/spatial effects,
+tiny-skia path coverage, existing RGBA compositor, columns and physical print
+trees. SVG assets retain geometry rather than cached raster screenshots.
+The geometry, use/marker, text, images, opacity/clip/projection and column
+references use independent ordinary rectangles and real font text. Equation
+references explicitly position geometric font glyphs and a fractional rule
+primitive, with dimensions derived from the original CC0 font's documented
+1000-unit metrics and layout equations; they contain no MathML.
+The radial-gradient reference PNGs are original analytic pixel-center distances,
+generated with Python's standard library, separately at scales 1/2.
+All eight pairs are exact; no fuzzy allowance or external browser capture is used.
+The integration suite additionally compares two physical print pages at both
+scales and checks the real CLI demonstration and restricted/oversize failures.
+
+The finite SVG parser uses `svgtypes` (MIT/Apache-2.0), and native coverage uses
+`tiny-skia` (BSD-3-Clause); Cargo.lock retains dependency versions. No new font
+artwork or system-font discovery is introduced. A contract builds an original
+OpenType MATH constants table in memory on the existing CC0 geometric font to
+prove selected-face metrics are used, not a fixture-only math renderer.
+
+SVG presentation paints, local definitions, common paths/text/gradients/patterns/
+markers/use and bounded images execute; full SVG paint CSS, SVG effects references,
+external use, textPath, SMIL and nested image-document I/O do not. Root CSS effects
+still use the common compositor. Recognized unsupported inner effects/text/resource
+constructs diagnose rather than silently returning a successful partial screenshot.
+MathML covers finite token/row, script, fraction, radical, limit and matrix boxes,
+not complete operator dictionaries, font glyph assemblies, accent attachment or
+every Core/table edge case. See 8.21 in [architecture.md](architecture.md) for
+the exact executable surface, diagnostic boundaries and budgets.
 
 Milestone 8.19 adds **five** independent pairs in `tests/reftests-scrolling`:
 root/nested sticky, programmatic snap, styled thin scrollbars and nested fragment

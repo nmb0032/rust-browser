@@ -1,0 +1,14 @@
+<!doctype html>
+<link rel=match href="references/svg-paint-ref.html">
+<style>body{margin:0}svg{display:block}</style>
+<svg width=120 height=40>
+<defs>
+<linearGradient id=g><stop offset=0 stop-color=red /><stop offset=".5" stop-color=red /><stop offset=".5" stop-color=blue /><stop offset=1 stop-color=blue /></linearGradient>
+<pattern id=p patternUnits=userSpaceOnUse width=8 height=8><rect width=8 height=8 fill=red /><rect width=4 height=4 fill=blue /></pattern>
+<radialGradient id=r><stop offset=0 stop-color=red /><stop offset=".5" stop-color=red /><stop offset=".5" stop-color=blue /><stop offset=1 stop-color=blue /></radialGradient>
+</defs>
+<rect width=40 height=20 fill="url(#g)"/>
+<rect x=40 width=16 height=16 fill="url(#p)"/>
+<rect x=80 width=40 height=40 fill="url(#r)"/>
+<g opacity=".5"><rect y=20 width=30 height=20 fill=red /><rect x=10 y=20 width=30 height=20 fill=red /></g>
+</svg>

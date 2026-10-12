@@ -1,7 +1,7 @@
 pub mod compositor;
 mod decoration;
 mod display_list;
-mod rasterizer;
+pub(crate) mod rasterizer;
 
 pub use display_list::DisplayItem;
 #[cfg(test)]

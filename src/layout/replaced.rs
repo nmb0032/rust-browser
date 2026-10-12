@@ -14,12 +14,24 @@ use super::{
 
 const MAX_LAYOUT_DIMENSION: f32 = 1_000_000.0;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(super) struct ImageContent {
     pub(super) data: Option<Arc<DecodedImage>>,
+    pub(super) scene: Option<Arc<crate::vector::Scene>>,
+    source: Option<crate::vector::Source>,
     alt: String,
     natural: Option<(f32, f32)>,
     ratio: Option<f32>,
+}
+
+impl PartialEq for ImageContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
+            && self.scene == other.scene
+            && self.alt == other.alt
+            && self.natural == other.natural
+            && self.ratio == other.ratio
+    }
 }
 
 impl ImageContent {
@@ -31,7 +43,7 @@ impl ImageContent {
                 .unwrap_or(fallback)
         };
         let natural = if let Some(image) = &data {
-            Some((image.width() as f32, image.height() as f32))
+            Some(image.natural_size())
         } else {
             match element.tag_name() {
                 "canvas" => Some((dimension("width", 300.0), dimension("height", 150.0))),
@@ -44,6 +56,8 @@ impl ImageContent {
             .filter(|&(w, h)| w > 0.0 && h > 0.0)
             .map(|(w, h)| w / h);
         Self {
+            scene: data.as_ref().and_then(|image| image.vector().cloned()),
+            source: None,
             data,
             alt: if element.tag_name() == "img" {
                 element.attribute("alt").unwrap_or_default().to_owned()
@@ -53,6 +67,60 @@ impl ImageContent {
             natural,
             ratio,
         }
+    }
+
+    pub(super) fn foreign(source: crate::vector::Source) -> Self {
+        Self {
+            data: None,
+            scene: None,
+            source: Some(source),
+            alt: String::new(),
+            natural: None,
+            ratio: None,
+        }
+    }
+
+    pub(super) fn prepare(
+        &mut self,
+        fonts: &crate::text::FontContext,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(source) = &self.source {
+            let scene = source.compile(fonts, diagnostics);
+            self.natural = Some((scene.width, scene.height));
+            self.ratio =
+                (scene.width > 0.0 && scene.height > 0.0).then_some(scene.width / scene.height);
+            self.scene = Some(scene);
+        }
+    }
+
+    pub(super) fn natural(&self) -> Option<(f32, f32)> {
+        self.natural
+    }
+
+    pub(super) fn viewport(
+        &mut self,
+        fonts: &crate::text::FontContext,
+        diagnostics: &mut Vec<Diagnostic>,
+        width: f32,
+        height: f32,
+    ) {
+        if let Some(source) = &self.source
+            && let Some(scene) = source.svg_viewport(fonts, diagnostics, width, height)
+        {
+            self.scene = Some(scene);
+        }
+    }
+
+    pub(super) fn baseline(&self, height: f32) -> Option<f32> {
+        let scene = self.scene.as_ref()?;
+        scene.baseline.map(|b| {
+            if scene.height > 0.0 {
+                b * height / scene.height
+            } else {
+                0.0
+            }
+        })
     }
 
     pub(super) fn size(
@@ -107,7 +175,12 @@ impl ImageContent {
         node: Option<NodeId>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Option<TextFragment> {
-        if self.data.is_some() || self.alt.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+        if self.data.is_some()
+            || self.scene.is_some()
+            || self.alt.is_empty()
+            || rect.width <= 0.0
+            || rect.height <= 0.0
+        {
             return None;
         }
         let face = font.select(style);
