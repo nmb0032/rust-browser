@@ -3,6 +3,8 @@
 //! their containing-block clips without accidentally clipping fixed boxes.
 use std::collections::HashMap;
 
+use crate::hash::FastMap;
+
 use crate::{
     dom::NodeId,
     style::{Direction, Overflow, Position},
@@ -126,13 +128,17 @@ impl ClipRect {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Most boxes have no transformed clipping ancestry, so plane clips are
+/// shared rather than stored inline; this keeps per-box states cheap to copy.
+pub const MAX_PLANE_CLIPS: usize = 32;
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpatialState {
     /// Translation from layout to visual coordinates, before viewport Y scroll.
     pub offset: ScrollOffset,
     pub clip: ClipRect,
     pub matrix: super::Mat4,
-    pub plane_clips: [Option<PlaneClip>; 32],
+    pub plane_clips: std::sync::Arc<[PlaneClip]>,
     pub hidden: bool,
 }
 
@@ -143,16 +149,16 @@ pub struct PlaneClip {
 }
 
 impl SpatialState {
-    pub fn contains(self, x: f32, y: f32) -> bool {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
         !self.hidden
             && self.clip.contains(x, y)
-            && self.plane_clips.iter().flatten().all(|c| {
+            && self.plane_clips.iter().all(|c| {
                 c.matrix
                     .unproject(x, y)
                     .is_some_and(|(x, y)| c.clip.contains(x, y))
             })
     }
-    pub fn point(self, x: f32, y: f32) -> Option<(f32, f32)> {
+    pub fn point(&self, x: f32, y: f32) -> Option<(f32, f32)> {
         if !self.contains(x, y) {
             return None;
         }
@@ -160,7 +166,7 @@ impl SpatialState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Scrollbar {
     pub(crate) owner: usize,
     pub track: Rect,
@@ -176,11 +182,11 @@ pub struct Scrollbar {
 }
 
 impl Scrollbar {
-    pub fn node_id(self) -> NodeId {
+    pub fn node_id(&self) -> NodeId {
         self.key.node
     }
 
-    fn point(self, x: f32, y: f32, root_scroll: f32) -> (f32, f32) {
+    fn point(&self, x: f32, y: f32, root_scroll: f32) -> (f32, f32) {
         let y = y + if self.coordinate_space == CoordinateSpace::Document {
             root_scroll
         } else {
@@ -192,7 +198,7 @@ impl Scrollbar {
             .unwrap_or((f32::NAN, f32::NAN))
     }
 
-    fn contains(self, x: f32, y: f32, root_scroll: f32) -> bool {
+    fn contains(&self, x: f32, y: f32, root_scroll: f32) -> bool {
         let doc_y = y + if self.coordinate_space == CoordinateSpace::Document {
             root_scroll
         } else {
@@ -207,7 +213,23 @@ impl Scrollbar {
     }
 }
 
-type Definitions<'a> = HashMap<usize, &'a LayoutBox>;
+type Definitions<'a> = FastMap<usize, &'a LayoutBox>;
+/// Per-box spatial states keyed by box id.
+pub(crate) type SpatialStates = FastMap<usize, SpatialState>;
+
+#[derive(Clone, Debug, Default)]
+struct SpatialPrefix {
+    dx: f64,
+    dy: f64,
+    clip: ClipRect,
+    /// Non-finite clip metrics, replayed as each descendant's diagnostics.
+    failures: Vec<&'static str>,
+    containing_block: bool,
+}
+
+/// Keyed by (box id, document coordinate space).
+#[derive(Default)]
+struct SpatialMemo(FastMap<(usize, bool), SpatialPrefix>);
 
 fn boxes(root: &LayoutBox) -> Vec<&LayoutBox> {
     fn walk<'a>(b: &'a LayoutBox, result: &mut Vec<&'a LayoutBox>) {
@@ -228,7 +250,7 @@ fn definitions(root: &LayoutBox) -> Definitions<'_> {
             walk(child, map);
         }
     }
-    let mut map = HashMap::new();
+    let mut map = Definitions::default();
     walk(root, &mut map);
     map
 }
@@ -427,7 +449,7 @@ impl LayoutTree {
                     track,
                     thumb,
                     vertical: is_vertical,
-                    spatial: decoration[&b.box_id],
+                    spatial: decoration[&b.box_id].clone(),
                     coordinate_space: b.coordinate_space,
                     thumb_color,
                     track_color,
@@ -460,10 +482,9 @@ impl LayoutTree {
             .iter()
             .find(|bar| bar.viewport && bar.contains(x, y, root_scroll))
         {
-            return Some(*bar);
+            return Some(bar.clone());
         }
-        let decoration = self.spatial_states(false);
-        let content = self.spatial_states(true);
+        let (decoration, content) = self.spatial_state_pair();
         for (b, phase) in super::paint_order(self).into_iter().rev() {
             let x = x - if document_x && b.coordinate_space == CoordinateSpace::Document {
                 self.viewport_scroll().x
@@ -477,12 +498,12 @@ impl LayoutTree {
                         && self.effect_hit(b, x, y, root_scroll)
                 })
             {
-                return Some(*bar);
+                return Some(bar.clone());
             }
             let state = if matches!(phase, PaintPhase::Content | PaintPhase::Text(_)) {
-                content[&b.box_id]
+                &content[&b.box_id]
             } else {
-                decoration[&b.box_id]
+                &decoration[&b.box_id]
             };
             if b.node_id.is_some() && self.phase_hit(b, phase, state, x, y, root_scroll) {
                 return None;
@@ -492,7 +513,7 @@ impl LayoutTree {
     }
 
     /// Distance into the thumb, or center the thumb for a track click.
-    pub fn scrollbar_grab(&self, bar: Scrollbar, x: f32, y: f32) -> f32 {
+    pub fn scrollbar_grab(&self, bar: &Scrollbar, x: f32, y: f32) -> f32 {
         let (x, y) = bar.point(x, y, self.viewport_scroll().y);
         if !x.is_finite() || !y.is_finite() {
             return 0.0;
@@ -509,7 +530,7 @@ impl LayoutTree {
         }
     }
 
-    pub fn drag_scrollbar(&mut self, bar: Scrollbar, x: f32, y: f32, grab: f32) -> bool {
+    pub fn drag_scrollbar(&mut self, bar: &Scrollbar, x: f32, y: f32, grab: f32) -> bool {
         let Some(bar) = self.scrollbars().into_iter().find(|current| {
             current.key == bar.key
                 && current.vertical == bar.vertical
@@ -593,6 +614,31 @@ impl LayoutTree {
         self.scroll_state.viewport
     }
 
+    /// Carry scrolling performed against an older layout of the same document
+    /// onto this one, clamped to this layout's ranges. Returns whether the
+    /// state changed; a different document's state is ignored.
+    pub fn adopt_scroll_state(&mut self, state: &ScrollState) -> bool {
+        if !self.scroll_state.same_document(state) || *state == self.scroll_state {
+            return false;
+        }
+        let mut next = state.clone();
+        next.viewport = clamped(next.viewport, self.viewport_overflow.range);
+        if !next.nodes.is_empty() {
+            let ranges: HashMap<ScrollKey, ScrollRange> = definitions(&self.root)
+                .values()
+                .filter_map(|b| Some((key(b)?, self.overflow.get(&b.box_id)?.range)))
+                .collect();
+            for (key, offset) in &mut next.nodes {
+                if let Some(range) = ranges.get(key) {
+                    *offset = clamped(*offset, *range);
+                }
+            }
+        }
+        let changed = next != self.scroll_state;
+        self.scroll_state = next;
+        changed
+    }
+
     pub fn viewport_scroll_container(&self) -> ScrollContainer {
         self.viewport_overflow
     }
@@ -656,21 +702,145 @@ impl LayoutTree {
         changed
     }
 
-    pub(crate) fn spatial_states(&self, own: bool) -> HashMap<usize, SpatialState> {
+    pub(crate) fn spatial_states(&self, own: bool) -> SpatialStates {
         let map = definitions(&self.root);
         let sticky = self.sticky_offsets(&map);
+        let mut memo = SpatialMemo::default();
         map.values()
             .map(|b| {
                 (
                     b.box_id,
-                    self.spatial_metrics(b, own, &map, &sticky, &mut Vec::new()),
+                    self.spatial_metrics(b, own, &map, &sticky, &mut memo, &mut Vec::new()),
                 )
             })
             .collect()
     }
 
+    /// `(decoration, content)` states, i.e. `spatial_states(false)` and
+    /// `spatial_states(true)`, sharing one ancestry walk and prefix memo.
+    pub(crate) fn spatial_state_pair(&self) -> (SpatialStates, SpatialStates) {
+        let map = definitions(&self.root);
+        let sticky = self.sticky_offsets(&map);
+        let mut memo = SpatialMemo::default();
+        let mut decoration = SpatialStates::default();
+        let mut content = SpatialStates::default();
+        decoration.reserve(map.len());
+        content.reserve(map.len());
+        for b in map.values() {
+            let reports = &mut Vec::new();
+            decoration.insert(
+                b.box_id,
+                self.spatial_metrics(b, false, &map, &sticky, &mut memo, reports),
+            );
+            content.insert(
+                b.box_id,
+                self.spatial_metrics(b, true, &map, &sticky, &mut memo, reports),
+            );
+        }
+        (decoration, content)
+    }
+
     fn spatial(&self, b: &LayoutBox, own: bool, map: &Definitions<'_>) -> SpatialState {
-        self.spatial_metrics(b, own, map, &self.sticky_offsets(map), &mut Vec::new())
+        self.spatial_metrics(
+            b,
+            own,
+            map,
+            &self.sticky_offsets(map),
+            &mut SpatialMemo::default(),
+            &mut Vec::new(),
+        )
+    }
+
+    /// Fold one lineage member into the accumulated scroll translation and
+    /// clip; `container` is false only for a box excluding its own scrollport.
+    fn fold_ancestor(
+        &self,
+        prefix: &mut SpatialPrefix,
+        ancestor: &LayoutBox,
+        sticky: &HashMap<usize, ScrollOffset>,
+        container: bool,
+    ) {
+        fn metric(value: f64, property: &'static str, failures: &mut Vec<&'static str>) -> f32 {
+            let result = value as f32;
+            if result.is_finite() {
+                result
+            } else {
+                failures.push(property);
+                0.0
+            }
+        }
+        let shift = sticky.get(&ancestor.box_id).copied().unwrap_or_default();
+        prefix.dx += shift.x as f64;
+        prefix.dy += shift.y as f64;
+        prefix.containing_block |= ancestor.style.effects.containing_block();
+        if !container {
+            return;
+        }
+        if let Some(container) = self.overflow.get(&ancestor.box_id) {
+            let r = container.port;
+            let (dx, dy) = (prefix.dx, prefix.dy);
+            let failures = &mut prefix.failures;
+            let x = container.overflow_x.clips().then(|| {
+                (
+                    metric(r.x as f64 + dx, "scroll clip left", failures),
+                    metric(
+                        r.x as f64 + r.width as f64 + dx,
+                        "scroll clip right",
+                        failures,
+                    ),
+                )
+            });
+            let y = container.overflow_y.clips().then(|| {
+                (
+                    metric(r.y as f64 + dy, "scroll clip top", failures),
+                    metric(
+                        r.y as f64 + r.height as f64 + dy,
+                        "scroll clip bottom",
+                        failures,
+                    ),
+                )
+            });
+            prefix.clip = prefix.clip.intersect(ClipRect { x, y });
+            let offset = key(ancestor).map_or(ScrollOffset::default(), |id| self.offset_for(id));
+            prefix.dx -= offset.x as f64;
+            prefix.dy -= offset.y as f64;
+        }
+    }
+
+    /// Accumulated state over `lineage(head, map, true)`, memoized per
+    /// ancestor so every box costs O(1) amortized instead of O(depth).
+    fn spatial_prefix(
+        &self,
+        head: Option<&LayoutBox>,
+        document: bool,
+        map: &Definitions<'_>,
+        sticky: &HashMap<usize, ScrollOffset>,
+        memo: &mut SpatialMemo,
+    ) -> SpatialPrefix {
+        let mut chain = Vec::new();
+        let mut base = None;
+        let mut current = head;
+        while let Some(ancestor) = current {
+            if let Some(prefix) = memo.0.get(&(ancestor.box_id, document)) {
+                base = Some(prefix.clone());
+                break;
+            }
+            chain.push(ancestor);
+            current = next(ancestor).and_then(|id| map.get(&id)).copied();
+        }
+        let mut prefix = base.unwrap_or_else(|| SpatialPrefix {
+            dx: if document {
+                -self.scroll_state.viewport.x as f64
+            } else {
+                0.0
+            },
+            ..SpatialPrefix::default()
+        });
+        for ancestor in chain.into_iter().rev() {
+            self.fold_ancestor(&mut prefix, ancestor, sticky, true);
+            memo.0.insert((ancestor.box_id, document), prefix.clone());
+        }
+        prefix
     }
 
     fn spatial_metrics(
@@ -679,6 +849,7 @@ impl LayoutTree {
         own: bool,
         map: &Definitions<'_>,
         sticky: &HashMap<usize, ScrollOffset>,
+        memo: &mut SpatialMemo,
         reports: &mut Vec<crate::style::Diagnostic>,
     ) -> SpatialState {
         let before = reports.len();
@@ -695,46 +866,28 @@ impl LayoutTree {
             }
         };
         let mut state = SpatialState::default();
-        let mut dx = if b.coordinate_space == CoordinateSpace::Document {
-            -self.scroll_state.viewport.x as f64
+        let document = b.coordinate_space == CoordinateSpace::Document;
+        let head = map.get(&b.box_id).copied();
+        let prefix = if own {
+            self.spatial_prefix(head, document, map, sticky, memo)
         } else {
-            0.0
+            let parent = head.and_then(next).and_then(|id| map.get(&id)).copied();
+            let mut prefix = self.spatial_prefix(parent, document, map, sticky, memo);
+            if let Some(head) = head {
+                self.fold_ancestor(&mut prefix, head, sticky, false);
+            }
+            prefix
         };
-        let mut dy = 0.0f64;
-        for ancestor in lineage(b, map, true) {
-            let shift = sticky.get(&ancestor.box_id).copied().unwrap_or_default();
-            dx += shift.x as f64;
-            dy += shift.y as f64;
-            if !own && ancestor.box_id == b.box_id {
-                continue;
-            }
-            if let Some(container) = self.overflow.get(&ancestor.box_id) {
-                let r = container.port;
-                state.clip = state.clip.intersect(ClipRect {
-                    x: container.overflow_x.clips().then(|| {
-                        (
-                            metric(r.x as f64 + dx, "scroll clip left"),
-                            metric(r.x as f64 + r.width as f64 + dx, "scroll clip right"),
-                        )
-                    }),
-                    y: container.overflow_y.clips().then(|| {
-                        (
-                            metric(r.y as f64 + dy, "scroll clip top"),
-                            metric(r.y as f64 + r.height as f64 + dy, "scroll clip bottom"),
-                        )
-                    }),
-                });
-                let offset =
-                    key(ancestor).map_or(ScrollOffset::default(), |id| self.offset_for(id));
-                dx -= offset.x as f64;
-                dy -= offset.y as f64;
-            }
+        for property in &prefix.failures {
+            metric(f64::INFINITY, property);
         }
+        state.clip = prefix.clip;
+        let (dx, dy) = (prefix.dx, prefix.dy);
         state.offset.x = metric(dx, "scroll translation x");
         state.offset.y = metric(dy, "scroll translation y");
         state.matrix = super::Mat4::translation(dx, dy, 0.0);
-        let path = lineage(b, map, true);
-        if path.iter().any(|a| a.style.effects.containing_block()) {
+        if prefix.containing_block {
+            let path = lineage(b, map, true);
             use crate::style::effects::{Keyword, Property};
             state.clip = ClipRect::default();
             let mut matrix = super::Mat4::translation(
@@ -746,7 +899,7 @@ impl LayoutTree {
                 0.0,
                 0.0,
             );
-            let mut count = 0;
+            let mut plane_clips = Vec::new();
             for ancestor in path {
                 let shift = sticky.get(&ancestor.box_id).copied().unwrap_or_default();
                 matrix = matrix.then(super::Mat4::translation(
@@ -768,7 +921,7 @@ impl LayoutTree {
                 if (own || ancestor.box_id != b.box_id)
                     && let Some(container) = self.overflow.get(&ancestor.box_id)
                 {
-                    if count == state.plane_clips.len() {
+                    if plane_clips.len() == MAX_PLANE_CLIPS {
                         state.hidden = true;
                         metric(
                             f64::INFINITY,
@@ -776,11 +929,10 @@ impl LayoutTree {
                         );
                         break;
                     }
-                    state.plane_clips[count] = Some(PlaneClip {
+                    plane_clips.push(PlaneClip {
                         matrix,
                         clip: clip(*container, ScrollOffset::default()),
                     });
-                    count += 1;
                     let offset =
                         key(ancestor).map_or(ScrollOffset::default(), |id| self.offset_for(id));
                     matrix = matrix.then(super::Mat4::translation(
@@ -799,6 +951,7 @@ impl LayoutTree {
                         matrix.then(effects.perspective(ancestor.rect, ancestor.style.font_size));
                 }
             }
+            state.plane_clips = plane_clips.into();
             state.matrix = matrix;
             state.hidden |= !matrix.finite();
         }
@@ -949,9 +1102,10 @@ impl LayoutTree {
         let map = definitions(&self.root);
         let sticky = self.sticky_offsets(&map);
         let mut reports = Vec::new();
+        let mut memo = SpatialMemo::default();
         for b in map.values() {
             for own in [false, true] {
-                self.spatial_metrics(b, own, &map, &sticky, &mut reports);
+                self.spatial_metrics(b, own, &map, &sticky, &mut memo, &mut reports);
             }
         }
         for report in reports {
@@ -1004,8 +1158,7 @@ impl LayoutTree {
         let mut delta = self.valid_offset(delta, None);
         let mut changed = false;
         let map = definitions(&self.root);
-        let decoration = self.spatial_states(false);
-        let content = self.spatial_states(true);
+        let (decoration, content) = self.spatial_state_pair();
         let target = self
             .scrollbar_at(x, y)
             .map(|bar| map[&bar.owner])
@@ -1015,9 +1168,9 @@ impl LayoutTree {
                     .rev()
                     .find_map(|(b, phase)| {
                         let state = if matches!(phase, PaintPhase::Content | PaintPhase::Text(_)) {
-                            content[&b.box_id]
+                            &content[&b.box_id]
                         } else {
-                            decoration[&b.box_id]
+                            &decoration[&b.box_id]
                         };
                         self.phase_hit(b, phase, state, x, y, self.viewport_scroll().y)
                             .then_some(b)

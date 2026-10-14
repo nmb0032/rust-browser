@@ -455,7 +455,7 @@ pub(crate) fn rasterize_profile(
                 }
             }
             _ if skipped > 0 => {}
-            DisplayItem::Spatial(s) => spatial = **s,
+            DisplayItem::Spatial(s) => spatial = (**s).clone(),
             DisplayItem::CoordinateSpace(s) => space = *s,
             DisplayItem::ObjectClip(r) => object = Some(*r),
             DisplayItem::ObjectClipEnd => object = None,

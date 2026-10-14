@@ -4,6 +4,7 @@ pub mod devtools;
 pub mod display;
 pub mod dom;
 pub mod engine;
+mod hash;
 pub mod html;
 pub mod layout;
 pub mod media;

@@ -35,7 +35,7 @@ struct TextRun<'a> {
     profile: ColorProfile,
 }
 
-pub(crate) fn rasterize_display_list(
+pub fn rasterize_display_list(
     display_list: &[DisplayItem],
     font: &crate::text::FontContext,
     pixels: &mut [u32],
@@ -228,7 +228,7 @@ pub(crate) fn rasterize_rgba_profile(
             }
 
             DisplayItem::ObjectClipEnd => object_clip = None,
-            DisplayItem::Spatial(state) => spatial = **state,
+            DisplayItem::Spatial(state) => spatial = (**state).clone(),
             DisplayItem::CoordinateSpace(space) => {
                 item_scroll = if *space == crate::layout::CoordinateSpace::Document {
                     scroll_offset
@@ -300,7 +300,7 @@ pub(crate) fn rasterize_rgba_profile(
             }
             DisplayItem::Image { x, y, w, h, image } => {
                 if let Some(scene) = image.vector() {
-                    let mut clipped = spatial;
+                    let mut clipped = spatial.clone();
                     clipped.clip.x = Some((clip.left as f32 / scale, clip.right as f32 / scale));
                     clipped.clip.y = Some((clip.top as f32 / scale, clip.bottom as f32 / scale));
                     rasterize_rgba_profile(

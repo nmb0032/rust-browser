@@ -101,7 +101,7 @@ impl PartialEq for Typography {
         self.0
             .keys()
             .chain(other.0.keys())
-            .all(|&p| self.get(p) == other.get(p))
+            .all(|&p| self.same(other, p))
     }
 }
 
@@ -144,20 +144,33 @@ impl Typography {
     pub fn contains(&self, p: Property) -> bool {
         self.0.contains_key(&p)
     }
+    /// Whether both used values of `p` agree; an explicit initial value equals
+    /// an absent one. Only materializes the initial value when one side is unset.
+    pub fn same(&self, other: &Self, p: Property) -> bool {
+        match (self.0.get(&p), other.0.get(&p)) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a == b,
+            (Some(v), None) | (None, Some(v)) => *v == initial(p),
+        }
+    }
     pub fn get(&self, property: Property) -> Value {
-        self.0
-            .get(&property)
-            .cloned()
-            .unwrap_or_else(|| initial(property))
+        self.value(property).into_owned()
+    }
+    /// The used value without cloning a specified one.
+    pub fn value(&self, property: Property) -> std::borrow::Cow<'_, Value> {
+        self.0.get(&property).map_or_else(
+            || std::borrow::Cow::Owned(initial(property)),
+            std::borrow::Cow::Borrowed,
+        )
     }
     pub fn keyword(&self, property: Property) -> Keyword {
-        match self.get(property) {
+        match *self.value(property) {
             Value::Keyword(k) => k,
             _ => Keyword::Normal,
         }
     }
     pub fn length(&self, property: Property, size: f32) -> f32 {
-        match self.get(property) {
+        match &*self.value(property) {
             Value::Length(l) => l.resolve(size, size),
             _ => 0.0,
         }
@@ -169,7 +182,7 @@ impl Typography {
         }
     }
     pub fn lines(&self) -> u8 {
-        match self.get(Property::DecorationLine) {
+        match *self.value(Property::DecorationLine) {
             Value::Lines(v) => v,
             _ => 0,
         }

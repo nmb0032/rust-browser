@@ -439,8 +439,8 @@ fn styled_scrollbar_geometry_inverse_drag_none_and_root_overlay() {
     assert_eq!(bar.track_color.to_srgb8().0, 0x0000ff);
     let r = bar.spatial.matrix.bounds(bar.thumb).unwrap();
     assert_eq!(t.scrollbar_at(r.x + 1.0, r.y + 1.0).unwrap().node_id(), p);
-    let grab = t.scrollbar_grab(bar, r.x + 1.0, r.y + 1.0);
-    assert!(t.drag_scrollbar(bar, r.x + 1.0, r.y + 120.0, grab));
+    let grab = t.scrollbar_grab(&bar, r.x + 1.0, r.y + 1.0);
+    assert!(t.drag_scrollbar(&bar, r.x + 1.0, r.y + 120.0, grab));
     assert!(t.scroll_offset(p).y > 100.0);
     let (_f, mut t) = page(
         "html{scrollbar-color:red blue;scrollbar-width:thin}#tail{height:500px}",
@@ -448,7 +448,7 @@ fn styled_scrollbar_geometry_inverse_drag_none_and_root_overlay() {
     );
     assert!(t.scrollbars().iter().any(|b| b.viewport));
     let bar = t.scrollbar_at(298.0, 50.0).unwrap();
-    assert!(t.drag_scrollbar(bar, 298.0, 160.0, 0.0));
+    assert!(t.drag_scrollbar(&bar, 298.0, 160.0, 0.0));
     assert!(t.viewport_scroll().y > 200.0);
     let (f, mut t) = page(
         "#p{width:100px;height:100px;overflow:auto;scrollbar-width:none}#c{height:400px}",

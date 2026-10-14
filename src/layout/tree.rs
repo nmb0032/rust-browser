@@ -84,6 +84,54 @@ pub struct InlineFragment {
     pub last: bool,
 }
 
+/// Memoized min/max-content inline sizes for one box. Nested flex, grid,
+/// table and shrink-to-fit containers otherwise re-measure the same subtree
+/// at every ancestor level. The entry is keyed by the style allocation, the
+/// child list and the percentage reference, so clones that restyle or
+/// restructure a box (writing-mode proxies, table fixup, fragmentation) miss.
+type IntrinsicEntry = ((usize, usize, usize, u32), (f32, f32));
+
+/// Survives `reset`: intrinsic sizes do not depend on used geometry.
+#[derive(Clone, Default)]
+pub(super) struct IntrinsicMemo(std::cell::Cell<Option<IntrinsicEntry>>);
+
+impl IntrinsicMemo {
+    fn key(b: &LayoutBox, reference: f32) -> (usize, usize, usize, u32) {
+        (
+            std::ptr::from_ref::<ComputedStyle>(&b.style) as usize,
+            b.children.as_ptr() as usize,
+            b.children.len(),
+            reference.to_bits(),
+        )
+    }
+
+    pub(super) fn get(b: &LayoutBox, reference: f32) -> Option<(f32, f32)> {
+        let key = Self::key(b, reference);
+        b.intrinsic_memo
+            .0
+            .get()
+            .and_then(|(stored, value)| (stored == key).then_some(value))
+    }
+
+    pub(super) fn set(b: &LayoutBox, reference: f32, value: (f32, f32)) {
+        b.intrinsic_memo
+            .0
+            .set(Some((Self::key(b, reference), value)));
+    }
+}
+
+impl PartialEq for IntrinsicMemo {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for IntrinsicMemo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IntrinsicMemo")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutBox {
     pub(super) fragment: Option<super::fragmentation::Fragment>,
@@ -100,6 +148,7 @@ pub struct LayoutBox {
     /// retained on the document tree or used as a paintable substitute.
     pub(super) axis_measurement: Option<Rect>,
     pub(super) intrinsic_sizes: Option<super::sizing::IntrinsicSizes>,
+    pub(super) intrinsic_memo: IntrinsicMemo,
     pub(super) definite_height: Option<f32>,
     pub(super) definite_width: bool,
     pub(super) inline_line: Option<usize>,
@@ -490,8 +539,7 @@ impl LayoutTree {
         if let Some(bar) = self.scrollbar_at_in_space(x, y, scroll, document_x) {
             return Some(bar.node_id());
         }
-        let decoration = self.spatial_states(false);
-        let content = self.spatial_states(true);
+        let (decoration, content) = self.spatial_state_pair();
         for (layout_box, phase) in super::paint_order(self).into_iter().rev() {
             let Some(node_id) = layout_box.node_id else {
                 continue;
@@ -500,9 +548,9 @@ impl LayoutTree {
                 phase,
                 super::PaintPhase::Content | super::PaintPhase::Text(_)
             ) {
-                content[&layout_box.box_id]
+                &content[&layout_box.box_id]
             } else {
-                decoration[&layout_box.box_id]
+                &decoration[&layout_box.box_id]
             };
             let x = x - if document_x && layout_box.coordinate_space == CoordinateSpace::Document {
                 self.viewport_scroll().x
@@ -520,7 +568,7 @@ impl LayoutTree {
         &self,
         layout_box: &LayoutBox,
         phase: super::PaintPhase,
-        state: super::SpatialState,
+        state: &super::SpatialState,
         x: f32,
         y: f32,
         scroll: f32,
@@ -1415,6 +1463,7 @@ fn finish_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_memo: IntrinsicMemo::default(),
         intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,
@@ -1533,6 +1582,7 @@ fn finish_box(
             coordinate_space: CoordinateSpace::Document,
             flow_width: 0.0,
             axis_measurement: None,
+            intrinsic_memo: IntrinsicMemo::default(),
             intrinsic_sizes: None,
             definite_height: None,
             definite_width: false,
@@ -1668,6 +1718,7 @@ fn flush_inline_run(parent: &mut LayoutBox, run: &mut Vec<LayoutBox>, identity: 
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_memo: IntrinsicMemo::default(),
         intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,
@@ -1818,6 +1869,7 @@ fn generated_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_memo: IntrinsicMemo::default(),
         intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,
@@ -1873,6 +1925,7 @@ fn generated_box(
         coordinate_space: CoordinateSpace::Document,
         flow_width: 0.0,
         axis_measurement: None,
+        intrinsic_memo: IntrinsicMemo::default(),
         intrinsic_sizes: None,
         definite_height: None,
         definite_width: false,

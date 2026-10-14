@@ -649,6 +649,138 @@ fn sibling_slices(document: &Document, node_id: NodeId) -> (&[NodeId], &[NodeId]
     }
 }
 
+const HOVER: u8 = 1;
+const ACTIVE: u8 = 2;
+const FOCUS: u8 = 4;
+const FOCUS_VISIBLE: u8 = 8;
+const FOCUS_WITHIN: u8 = 16;
+const TARGET: u8 = 32;
+
+/// Compounds that test interaction state, reduced to their context-free
+/// tag/id/class/attribute parts. A compound `C = rest ∧ state` can only change
+/// its result on an element whose state changed and which matches `rest`;
+/// nested selectors (`:is`, `:not`, `:has`, `&`, ...) are indexed the same way.
+/// If no trigger fires, every selector match is unchanged.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StateTriggers {
+    compounds: Vec<(Compound, u8)>,
+}
+
+impl StateTriggers {
+    pub(crate) fn add(&mut self, selector: &Selector) {
+        for compound in &selector.compounds {
+            self.add_compound(compound);
+        }
+    }
+
+    fn add_compound(&mut self, compound: &Compound) {
+        let mut mask = 0;
+        for simple in &compound.simple {
+            match simple {
+                SimpleSelector::Pseudo(PseudoClass::State(state)) => {
+                    mask |= match state {
+                        states::State::Hover => HOVER,
+                        states::State::Active => ACTIVE,
+                        states::State::Focus => FOCUS,
+                        states::State::FocusVisible => FOCUS_VISIBLE,
+                        states::State::FocusWithin => FOCUS_WITHIN,
+                        states::State::Target => TARGET,
+                        _ => 0,
+                    }
+                }
+                SimpleSelector::Pseudo(
+                    PseudoClass::Not(inner)
+                    | PseudoClass::Is(inner)
+                    | PseudoClass::Where(inner)
+                    | PseudoClass::Has(inner),
+                ) => inner.iter().for_each(|s| self.add(s)),
+                SimpleSelector::Pseudo(PseudoClass::Nth(nth)) => {
+                    nth.of.iter().for_each(|s| self.add(s))
+                }
+                SimpleSelector::Pseudo(PseudoClass::Parent(inner)) => {
+                    inner.iter().for_each(|s| self.add(s))
+                }
+                _ => {}
+            }
+        }
+        if mask == 0 {
+            return;
+        }
+        let rest = Compound {
+            tag: compound.tag.clone(),
+            namespace: compound.namespace.clone(),
+            simple: compound
+                .simple
+                .iter()
+                .filter(|s| !matches!(s, SimpleSelector::Pseudo(_)))
+                .cloned()
+                .collect(),
+        };
+        if !self
+            .compounds
+            .last()
+            .is_some_and(|(r, m)| *m == mask && *r == rest)
+        {
+            self.compounds.push((rest, mask));
+        }
+    }
+
+    /// Whether changing `old` to `new` can change any indexed selector match.
+    pub fn affected(
+        &self,
+        document: &Document,
+        old: &InteractionState,
+        new: &InteractionState,
+    ) -> bool {
+        let chain = |mut id: Option<NodeId>| {
+            let mut out = Vec::new();
+            while let Some(node) = id {
+                out.push(node);
+                id = document.node(node).and_then(|n| n.parent());
+            }
+            out
+        };
+        let diff = |a: Vec<NodeId>, b: Vec<NodeId>| {
+            let mut out: Vec<NodeId> = a.iter().filter(|id| !b.contains(id)).copied().collect();
+            out.extend(b.iter().filter(|id| !a.contains(id)));
+            out
+        };
+        let single = |a: Option<NodeId>, b: Option<NodeId>| {
+            if a == b {
+                Vec::new()
+            } else {
+                a.into_iter().chain(b).collect()
+            }
+        };
+        let mut changed: Vec<(u8, Vec<NodeId>)> = Vec::new();
+        if old.hovered != new.hovered {
+            changed.push((HOVER, diff(chain(old.hovered), chain(new.hovered))));
+        }
+        if old.active != new.active {
+            changed.push((ACTIVE, diff(chain(old.active), chain(new.active))));
+        }
+        if old.focused != new.focused {
+            changed.push((FOCUS, single(old.focused, new.focused)));
+            changed.push((FOCUS_WITHIN, diff(chain(old.focused), chain(new.focused))));
+        }
+        let visible = |s: &InteractionState| s.focused.filter(|_| s.focus_visible);
+        changed.push((FOCUS_VISIBLE, single(visible(old), visible(new))));
+        changed.push((TARGET, single(old.target, new.target)));
+        let state = InteractionState::default();
+        let remaining = Cell::new(usize::MAX);
+        let context = MatchContext {
+            scope: None,
+            state: &state,
+            remaining: &remaining,
+        };
+        self.compounds.iter().any(|(rest, mask)| {
+            changed.iter().any(|(bit, nodes)| {
+                mask & bit != 0 && nodes.iter().any(|&id| rest.matches(document, id, context))
+            })
+        })
+    }
+}
+
 fn equal(actual: &str, expected: &str, insensitive: bool) -> bool {
     if insensitive {
         actual.eq_ignore_ascii_case(expected)

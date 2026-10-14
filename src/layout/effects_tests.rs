@@ -276,7 +276,7 @@ fn transformed_scrollbar_drag_wheel_and_rebuild_share_the_physical_plane() {
         )
         .unwrap();
     assert_eq!(t.scrollbar_at(point.0, point.1).unwrap().node_id(), id);
-    let grab = t.scrollbar_grab(bar, point.0, point.1);
+    let grab = t.scrollbar_grab(&bar, point.0, point.1);
     let next = bar
         .spatial
         .matrix
@@ -286,7 +286,7 @@ fn transformed_scrollbar_drag_wheel_and_rebuild_share_the_physical_plane() {
         )
         .unwrap();
     assert!(
-        t.drag_scrollbar(bar, next.0, next.1, grab),
+        t.drag_scrollbar(&bar, next.0, next.1, grab),
         "drag outside the track still inversely projects"
     );
     assert_eq!(

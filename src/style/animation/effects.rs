@@ -324,6 +324,16 @@ impl Engine {
     pub(crate) fn begin(&mut self) {
         self.seen.clear();
     }
+    /// No retained targets: a cascade without active motion samples nothing.
+    pub(crate) fn has_targets(&self) -> bool {
+        !self.targets.is_empty()
+    }
+    /// Some running, pending or filling effect may override a base value.
+    pub(crate) fn has_effects(&self) -> bool {
+        self.targets
+            .values()
+            .any(|t| !t.effects.is_empty() || !t.transitions.is_empty())
+    }
     pub(in crate::style) fn rendered(&mut self, target: Target, style: &ComputedStyle) {
         if let Some(state) = self.targets.get_mut(&target) {
             for (&p, v) in &mut state.rendered {

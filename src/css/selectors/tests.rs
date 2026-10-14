@@ -610,3 +610,58 @@ fn nesting_limit_is_enforced_and_long_combinator_chains_do_not_recurse() {
     assert!(!matches(&document, parent, &format!("div>{source}")));
     assert!(matches(&document, parent, &nested(MAX_SELECTOR_NESTING)));
 }
+
+#[test]
+fn state_triggers_fire_only_for_changed_elements_matching_the_state_compound() {
+    let mut document = Document::new();
+    let root = document.root_id();
+    let html = append(&mut document, root, "html", &[]);
+    let body = append(&mut document, html, "body", &[]);
+    let link = append(&mut document, body, "a", &[("class", "nav")]);
+    let para = append(&mut document, body, "p", &[]);
+    let span = append(&mut document, para, "span", &[]);
+    let triggers = |source: &str| {
+        let mut triggers = StateTriggers::default();
+        for selector in parse(source).unwrap() {
+            triggers.add(&selector);
+        }
+        triggers
+    };
+    let hover = |id| InteractionState {
+        hovered: Some(id),
+        ..InteractionState::default()
+    };
+    let none = InteractionState::default();
+
+    let links = triggers("a.nav:hover, .menu:focus span");
+    assert!(!links.affected(&document, &hover(span), &hover(para)));
+    assert!(links.affected(&document, &hover(span), &hover(link)));
+    assert!(!links.affected(&document, &none, &hover(para)));
+    // Shared ancestors keep their hover state; only the differing chains count.
+    assert!(!triggers("body:hover").affected(&document, &hover(span), &hover(link)));
+    assert!(triggers("body:hover").affected(&document, &none, &hover(span)));
+    // Nested and relative state selectors are indexed by their inner compounds.
+    assert!(triggers("p:has(span:hover)").affected(&document, &none, &hover(span)));
+    assert!(!triggers("p:not(a:hover)").affected(&document, &none, &hover(span)));
+    assert!(triggers(":is(:hover) > em").affected(&document, &none, &hover(span)));
+    assert!(triggers("*:focus-visible").affected(
+        &document,
+        &InteractionState {
+            focused: Some(link),
+            ..none.clone()
+        },
+        &InteractionState {
+            focused: Some(link),
+            focus_visible: true,
+            ..none.clone()
+        }
+    ));
+    assert!(!triggers("a:hover").affected(
+        &document,
+        &none,
+        &InteractionState {
+            focused: Some(link),
+            ..none.clone()
+        }
+    ));
+}

@@ -8,6 +8,7 @@ mod navigation;
 mod printing;
 pub(crate) mod resource_policy;
 mod resources;
+mod timing;
 mod urls;
 mod web_fonts;
 
@@ -17,4 +18,5 @@ pub(crate) use loader::load_local_page;
 pub use loader::{LoadOptions, load_page};
 pub use navigation::{LoadEvent, Navigation};
 pub use printing::{PrintLayout, PrintOptions, PrintedPage};
+pub use timing::{StageTimings, frame_trace_enabled};
 pub use urls::{document_base_url, link_url, resolve_reference};

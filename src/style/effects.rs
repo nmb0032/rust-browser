@@ -249,6 +249,11 @@ impl Effects {
             _ => Blend::Normal,
         }
     }
+    // The predicates below borrow specified values: every initial value is
+    // inert for them, so an absent property never triggers.
+    fn has_filters(&self, p: Property) -> bool {
+        matches!(self.0.get(&p), Some(Value::Filters(v)) if !v.is_empty())
+    }
     pub fn transformed(&self) -> bool {
         [
             Property::Transform,
@@ -257,30 +262,31 @@ impl Effects {
             Property::Scale,
         ]
         .into_iter()
-        .any(|p| !self.transforms(p).is_empty())
+        .any(|p| matches!(self.0.get(&p), Some(Value::Transforms(v)) if !v.is_empty()))
     }
     pub fn containing_block(&self) -> bool {
-        self.transformed()
-            || matches!(self.get(Property::Perspective), Value::Length(_))
-            || !self.filters(Property::Filter).is_empty()
-            || !self.filters(Property::BackdropFilter).is_empty()
+        !self.0.is_empty()
+            && (self.transformed()
+                || matches!(self.0.get(&Property::Perspective), Some(Value::Length(_)))
+                || self.has_filters(Property::Filter)
+                || self.has_filters(Property::BackdropFilter))
     }
     pub fn context(&self) -> bool {
-        self.containing_block()
-            || self.number(Property::Opacity) < 1.0
-            || self.blend() != Blend::Normal
-            || self.keyword(Property::Isolation) == Keyword::Isolate
-            || matches!(self.get(Property::ClipPath), Value::Shape(Some(_)))
-            || matches!(self.get(Property::MaskImage), Value::Images(v) if v.iter().any(|i| *i != MaskImage::None))
+        self.containing_block() || self.grouped()
     }
     pub fn grouped(&self) -> bool {
-        self.number(Property::Opacity) < 1.0
-            || !self.filters(Property::Filter).is_empty()
-            || !self.filters(Property::BackdropFilter).is_empty()
-            || self.blend() != Blend::Normal
-            || self.keyword(Property::Isolation) == Keyword::Isolate
-            || matches!(self.get(Property::ClipPath), Value::Shape(Some(_)))
-            || matches!(self.get(Property::MaskImage), Value::Images(v) if v.iter().any(|i| *i != MaskImage::None))
+        let get = |p| self.0.get(&p);
+        !self.0.is_empty()
+            && (matches!(get(Property::Opacity), Some(Value::Number(n)) if *n < 1.0)
+                || self.has_filters(Property::Filter)
+                || self.has_filters(Property::BackdropFilter)
+                || matches!(get(Property::Blend), Some(Value::Blend(b)) if *b != Blend::Normal)
+                || matches!(
+                    get(Property::Isolation),
+                    Some(Value::Keyword(Keyword::Isolate))
+                )
+                || matches!(get(Property::ClipPath), Some(Value::Shape(Some(_))))
+                || matches!(get(Property::MaskImage), Some(Value::Images(v)) if v.iter().any(|i| *i != MaskImage::None)))
     }
     pub fn urls(&self) -> Vec<String> {
         match self.get(Property::MaskImage) {

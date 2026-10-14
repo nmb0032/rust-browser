@@ -93,7 +93,7 @@ pub(crate) fn load_bundled_font() -> Result<crate::text::FontContext, Box<dyn st
     Ok(crate::text::FontContext::bundled())
 }
 
-pub(crate) fn build_display_list(
+pub fn build_display_list(
     layout: &LayoutTree,
     viewport_width: f32,
     viewport_height: f32,
@@ -133,28 +133,53 @@ pub(crate) fn build_display_list(
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
     }
 
-    let decoration = layout.spatial_states(false);
-    let content = layout.spatial_states(true);
+    let (decoration, content) = layout.spatial_state_pair();
     let scrollbars = layout.scrollbars();
     let mut space = CoordinateSpace::Document;
     let mut spatial = crate::layout::SpatialState::default();
-    let mut definitions = std::collections::HashMap::new();
-    fn collect<'a>(b: &'a LayoutBox, map: &mut std::collections::HashMap<usize, &'a LayoutBox>) {
+    let mut definitions = crate::hash::FastMap::default();
+    fn collect<'a>(b: &'a LayoutBox, map: &mut crate::hash::FastMap<usize, &'a LayoutBox>) {
         map.entry(b.box_id).or_insert(b);
         for c in b.children() {
             collect(c, map);
         }
     }
     collect(layout.root(), &mut definitions);
+    // Nearest grouped ancestor-or-self per box, so each paint item walks
+    // only the grouped boxes above it.
+    let mut nearest_group: crate::hash::FastMap<usize, Option<usize>> =
+        crate::hash::FastMap::default();
+    let mut group_of = |id: usize| -> Option<usize> {
+        let mut chain = Vec::new();
+        let mut candidate = Some(id);
+        let mut found = None;
+        while let Some(current) = candidate {
+            if let Some(&known) = nearest_group.get(&current) {
+                found = known;
+                break;
+            }
+            let Some(b) = definitions.get(&current) else {
+                break;
+            };
+            chain.push(current);
+            if b.style().effects.grouped() {
+                found = Some(current);
+                break;
+            }
+            candidate = b.semantic_parent();
+        }
+        for visited in chain {
+            nearest_group.insert(visited, found);
+        }
+        found
+    };
     let mut groups: Vec<usize> = Vec::new();
     for (layout_box, phase) in crate::layout::paint_order(layout) {
         let mut path = Vec::new();
-        let mut candidate = Some(layout_box.box_id);
-        while let Some(b) = candidate.and_then(|id| definitions.get(&id)) {
-            if b.style().effects.grouped() {
-                path.push(b.box_id);
-            }
-            candidate = b.semantic_parent();
+        let mut candidate = group_of(layout_box.box_id);
+        while let Some(id) = candidate {
+            path.push(id);
+            candidate = definitions[&id].semantic_parent().and_then(&mut group_of);
         }
         path.reverse();
         let common = groups.iter().zip(&path).take_while(|(a, b)| a == b).count();
@@ -182,7 +207,7 @@ pub(crate) fn build_display_list(
                             .max(0.0),
                     },
                     color: b.style().text_color,
-                    spatial: decoration[id],
+                    spatial: decoration[id].clone(),
                     space: b.coordinate_space(),
                     images: layout.effect_images.clone(),
                 },
@@ -194,13 +219,13 @@ pub(crate) fn build_display_list(
             display_list.push(DisplayItem::CoordinateSpace(space));
         }
         let next = if matches!(phase, PaintPhase::Content | PaintPhase::Text(_)) {
-            content[&layout_box.box_id]
+            &content[&layout_box.box_id]
         } else {
-            decoration[&layout_box.box_id]
+            &decoration[&layout_box.box_id]
         };
-        if spatial != next {
-            spatial = next;
-            display_list.push(DisplayItem::Spatial(Box::new(spatial)));
+        if spatial != *next {
+            spatial = next.clone();
+            display_list.push(DisplayItem::Spatial(Box::new(spatial.clone())));
         }
         if phase != PaintPhase::Scrollbars {
             append_box_items(
@@ -215,8 +240,8 @@ pub(crate) fn build_display_list(
                 .iter()
                 .filter(|bar| bar.owner == layout_box.box_id && !bar.viewport)
             {
-                display_list.push(DisplayItem::Spatial(Box::new(bar.spatial)));
-                spatial = bar.spatial;
+                display_list.push(DisplayItem::Spatial(Box::new(bar.spatial.clone())));
+                spatial = bar.spatial.clone();
                 for (rect, color) in [(bar.track, bar.track_color), (bar.thumb, bar.thumb_color)] {
                     display_list.push(rect_item(DisplayItem::ColorRect {
                         x: rect.x,
@@ -234,7 +259,7 @@ pub(crate) fn build_display_list(
     }
     for bar in scrollbars.iter().filter(|b| b.viewport) {
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Viewport));
-        display_list.push(DisplayItem::Spatial(Box::new(bar.spatial)));
+        display_list.push(DisplayItem::Spatial(Box::new(bar.spatial.clone())));
         for (r, color) in [(bar.track, bar.track_color), (bar.thumb, bar.thumb_color)] {
             display_list.push(DisplayItem::ColorRect {
                 x: r.x,
@@ -249,19 +274,19 @@ pub(crate) fn build_display_list(
         display_list.push(DisplayItem::CoordinateSpace(CoordinateSpace::Document));
         fn outlines(
             b: &LayoutBox,
-            decoration: &std::collections::HashMap<usize, crate::layout::SpatialState>,
-            content: &std::collections::HashMap<usize, crate::layout::SpatialState>,
+            decoration: &crate::layout::SpatialStates,
+            content: &crate::layout::SpatialStates,
             list: &mut Vec<DisplayItem>,
         ) {
             list.push(DisplayItem::CoordinateSpace(b.coordinate_space()));
             list.push(DisplayItem::Spatial(Box::new(
                 if b.kind() == BoxKind::Text {
-                    content[&b.box_id]
+                    content[&b.box_id].clone()
                 } else {
-                    decoration[&b.box_id]
+                    decoration[&b.box_id].clone()
                 },
             )));
-            append_own_outline(b, content[&b.box_id], list);
+            append_own_outline(b, &content[&b.box_id], list);
             for child in b.children() {
                 outlines(child, decoration, content, list);
             }
@@ -621,7 +646,7 @@ fn text_item(item: DisplayItem) -> DisplayItem {
 
 fn append_own_outline(
     layout_box: &LayoutBox,
-    content: crate::layout::SpatialState,
+    content: &crate::layout::SpatialState,
     display_list: &mut Vec<DisplayItem>,
 ) {
     let mut outline = |rect: Rect, color| {
@@ -649,7 +674,7 @@ fn append_own_outline(
     } else {
         outline(layout_box.rect(), OUTLINE_COLOR);
     }
-    display_list.push(DisplayItem::Spatial(Box::new(content)));
+    display_list.push(DisplayItem::Spatial(Box::new(content.clone())));
     for line in layout_box.line_boxes() {
         let rect = line.rect;
         if rect.width > 0.0 && rect.height > 0.0 {

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use url::Url;
 
@@ -44,8 +44,12 @@ pub struct Frame {
     // so repeated restyles do not append the same errors to previous results.
     collected_stylesheets: StylesheetCollection,
     fonts: crate::text::FontContext,
+    /// Fonts of the latest eager restyle while `author_styles` still matches
+    /// the first container pass (no snapshot). Consumed by the next layout.
+    eager_fonts: Option<crate::text::FontContext>,
     pub(super) web_fonts: super::web_fonts::WebFonts,
     pub(crate) resource_policy: super::resource_policy::ResourcePolicy,
+    timings: super::StageTimings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,8 +103,10 @@ impl Frame {
             scroll_state: layout::ScrollState::default(),
             collected_stylesheets,
             fonts: crate::text::FontContext::bundled(),
+            eager_fonts: None,
             web_fonts: super::web_fonts::WebFonts::default(),
             resource_policy: super::resource_policy::ResourcePolicy::default(),
+            timings: super::StageTimings::default(),
         };
         frame.refresh_target();
         frame
@@ -160,7 +166,15 @@ impl Frame {
         if state == self.interaction_state {
             return false;
         }
-        self.interaction_state = state;
+        let old = std::mem::replace(&mut self.interaction_state, state);
+        // No state selector can match a changed element: styles, layout, and
+        // paint are unchanged, so skip the restyle.
+        if !self
+            .styles
+            .state_affected(&self.document, &old, &self.interaction_state)
+        {
+            return false;
+        }
         self.set_stylesheets(self.collected_stylesheets.clone());
         true
     }
@@ -399,29 +413,47 @@ impl Frame {
         font: &crate::text::FontContext,
         limit: usize,
     ) -> LayoutTree {
+        let started = Instant::now();
+        let mut timings = super::StageTimings {
+            eager_restyle: self.timings.eager_restyle,
+            ..Default::default()
+        };
+        let tree = self.layout_container_passes(font, limit, &mut timings);
+        timings.total = started.elapsed();
+        self.timings = timings;
+        if super::frame_trace_enabled() {
+            eprintln!("[frame] {}", timings.summary());
+        }
+        tree
+    }
+
+    fn layout_container_passes(
+        &mut self,
+        font: &crate::text::FontContext,
+        limit: usize,
+        timings: &mut super::StageTimings,
+    ) -> LayoutTree {
         self.fonts = self.web_fonts.context(self, font);
         let font = self.fonts.clone();
         let mut snapshot = style::ContainerSnapshot::default();
         let mut last = None;
         let animation_base = self.animations.clone();
+        let mut eager = self.eager_fonts.take().filter(|fonts| fonts.same(&font));
         for _ in 0..limit.max(1) {
-            let mut sheets = self.collected_stylesheets.clone();
-            sheets
-                .diagnostics
-                .extend(self.web_fonts.diagnostics().iter().cloned());
-            let resolution = style::resolve_with_fonts(
-                &self.document,
-                sheets,
-                self.media_environment,
-                &self.interaction_state,
-                &snapshot,
-                &font,
-            );
-            self.author_styles = resolution.styles.clone();
-            self.stylesheets = resolution.stylesheets;
-            self.styles = resolution.styles;
+            timings.passes += 1;
+            let stage = Instant::now();
             self.animations = animation_base.clone();
-            {
+            let reuse = eager.take().is_some()
+                && !self.author_styles.has_motion()
+                && !self.animations.has_targets();
+            if reuse {
+                // Without motion or retained targets the animated cascade
+                // equals the eager base cascade; only the engine bookkeeping
+                // of a resolution remains.
+                self.animations.begin();
+                self.animations.end();
+                self.styles = self.author_styles.clone();
+            } else {
                 let resolution = style::resolve_animated(
                     &self.document,
                     self.collected_stylesheets.clone(),
@@ -438,13 +470,39 @@ impl Frame {
                         self.stylesheets.diagnostics.push(d.clone());
                     }
                 }
-                for d in self.animations.diagnostics() {
-                    if !self.stylesheets.diagnostics.contains(d) {
-                        self.stylesheets.diagnostics.push(d.clone());
-                    }
+            }
+            for d in self.animations.diagnostics() {
+                if !self.stylesheets.diagnostics.contains(d) {
+                    self.stylesheets.diagnostics.push(d.clone());
                 }
             }
+            timings.animated_cascade += stage.elapsed();
+            let stage = Instant::now();
+            if !reuse {
+                if self.animations.has_effects() {
+                    let mut sheets = self.collected_stylesheets.clone();
+                    sheets
+                        .diagnostics
+                        .extend(self.web_fonts.diagnostics().iter().cloned());
+                    self.author_styles = style::resolve_with_fonts(
+                        &self.document,
+                        sheets,
+                        self.media_environment,
+                        &self.interaction_state,
+                        &snapshot,
+                        &font,
+                    )
+                    .styles;
+                } else {
+                    // No sampled effect: the base cascade is identical.
+                    self.author_styles = self.styles.clone();
+                }
+            }
+            timings.cascade += stage.elapsed();
+            let stage = Instant::now();
             let mut tree = self.layout_tree();
+            timings.box_build += stage.elapsed();
+            let stage = Instant::now();
             if self.media_environment.media_type == crate::css::media::MediaType::Print {
                 tree.layout_page_area(
                     self.media_environment.viewport_width,
@@ -458,14 +516,19 @@ impl Frame {
                     &font,
                 );
             }
+            timings.layout += stage.elapsed();
+            let stage = Instant::now();
             let next = style::ContainerSnapshot::from_layout(&tree, self.media_environment);
             if next == snapshot {
                 if let Err(error) = tree.sample_scrolling(self.animations.time()) {
                     eprintln!("Scroll clock: {error}");
                 }
                 self.retain_scroll_state(&tree);
-                return self.sample_scroll_animations(tree, &font);
+                let tree = self.sample_scroll_animations(tree, &font);
+                timings.feedback += stage.elapsed();
+                return tree;
             }
+            timings.feedback += stage.elapsed();
             snapshot = next;
             last = Some(tree);
         }
@@ -478,12 +541,15 @@ impl Frame {
             node_id: None,
             message,
         });
+        let stage = Instant::now();
         let mut tree = last.expect("at least one feedback layout pass");
         if let Err(error) = tree.sample_scrolling(self.animations.time()) {
             eprintln!("Scroll clock: {error}");
         }
         self.retain_scroll_state(&tree);
-        self.sample_scroll_animations(tree, &font)
+        let tree = self.sample_scroll_animations(tree, &font);
+        timings.feedback += stage.elapsed();
+        tree
     }
 
     pub(super) fn set_stylesheets(&mut self, stylesheets: StylesheetCollection) {
@@ -519,7 +585,18 @@ impl Frame {
         Ok(())
     }
 
+    /// Timings of the latest eager restyle and `layout_with_container_queries`.
+    pub fn stage_timings(&self) -> super::StageTimings {
+        self.timings
+    }
+
     pub(super) fn refresh_fonts(&mut self) {
+        let started = Instant::now();
+        self.refresh_fonts_untimed();
+        self.timings.eager_restyle = started.elapsed();
+    }
+
+    fn refresh_fonts_untimed(&mut self) {
         self.fonts = self.web_fonts.context(self, &self.fonts);
         let mut sheets = self.collected_stylesheets.clone();
         sheets
@@ -536,6 +613,7 @@ impl Frame {
         self.stylesheets = resolution.stylesheets;
         self.author_styles = resolution.styles.clone();
         self.styles = resolution.styles;
+        self.eager_fonts = Some(self.fonts.clone());
     }
 
     pub fn error_page(url: Url, message: String) -> Self {

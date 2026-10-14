@@ -284,6 +284,27 @@ pub(super) fn report_message(
 }
 
 pub(super) fn resolve(
+    parent: &Arc<Environment>,
+    specified: &BTreeMap<String, Value>,
+    budget: &mut Budget,
+    node_id: NodeId,
+    diagnostics: &mut Vec<Diagnostic>,
+    registrations: &Registrations,
+) -> Arc<Environment> {
+    if specified.is_empty() && registrations.is_empty() {
+        return Arc::clone(parent);
+    }
+    Arc::new(resolve_owned(
+        parent,
+        specified,
+        budget,
+        node_id,
+        diagnostics,
+        registrations,
+    ))
+}
+
+fn resolve_owned(
     parent: &Environment,
     specified: &BTreeMap<String, Value>,
     budget: &mut Budget,

@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fmt, fs,
+    hash::{Hash, Hasher},
     ops::Deref,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -14,6 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     css::values::{FamilyName, FontStyle},
+    hash::FastHasher,
     layout::Rect,
     style::ComputedStyle,
 };
@@ -25,10 +27,33 @@ const MAX_FONT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FACES: usize = 16;
 const MAX_REQUESTS: usize = 128;
+/// Shaped-run cache bound per generation. A large article shapes thousands
+/// of paragraphs and re-measures each one for intrinsic sizing and for every
+/// relayout, so the working set of one page must fit. Two generations give
+/// least-recently-used behavior without per-entry bookkeeping.
+const MAX_RUNS: usize = 16_384;
+const MAX_RUN_BYTES: usize = 24 * 1024 * 1024;
+const MAX_FONT_KEYS: usize = 4096;
 const MAX_GLYPHS: usize = 200_000;
 const MAX_COVERAGE_PROBES: usize = 8192;
 
+type PlanKey = (
+    rustybuzz::Direction,
+    Option<rustybuzz::Script>,
+    Option<rustybuzz::Language>,
+    Vec<rustybuzz::Feature>,
+);
+
+const MAX_PLANS_PER_FACE: usize = 64;
+
 pub struct FontFace {
+    /// Parsed shaping tables (GSUB/GPOS lookup accelerators) borrowing
+    /// `bytes`. Parsing them costs far more than shaping a short run, so it
+    /// happens once per face. Declared before `bytes` so it drops first.
+    shaping: std::sync::OnceLock<rustybuzz::Face<'static>>,
+    /// Shape plans for the default instance, keyed by segment properties
+    /// and user features.
+    plans: Mutex<Vec<(PlanKey, Arc<rustybuzz::ShapePlan>)>>,
     pub name: String,
     pub index: u32,
     pub weight: u16,
@@ -95,7 +120,7 @@ impl Deref for FontFace {
 
 impl FontFace {
     pub(crate) fn format_diagnostics(&self) -> Vec<String> {
-        let face = self.shaper();
+        let face = self.shaping();
         let mut messages = Vec::new();
         if let Some(colr) = face
             .raw_face()
@@ -278,6 +303,8 @@ impl FontFace {
             })
             .flatten();
         Ok(Self {
+            shaping: std::sync::OnceLock::new(),
+            plans: Mutex::new(Vec::new()),
             name,
             index,
             weight,
@@ -297,9 +324,51 @@ impl FontFace {
         })
     }
 
+    /// An owned shaping face, for callers that set variations.
     pub fn shaper(&self) -> rustybuzz::Face<'_> {
-        // Validated once on loading; the immutable bytes and index never change.
-        rustybuzz::Face::from_slice(&self.bytes, self.index).expect("validated font face")
+        self.shaping().clone()
+    }
+
+    /// The shared default-instance shaping face.
+    pub fn shaping(&self) -> &rustybuzz::Face<'_> {
+        self.shaping.get_or_init(|| {
+            // SAFETY: `bytes` is an immutable `Arc` allocation owned by `self`
+            // whose address never changes, and `shaping` drops before it. The
+            // `'static` face is only handed out shortened to `&self`'s lifetime.
+            let data: &'static [u8] = unsafe { &*std::ptr::from_ref::<[u8]>(&self.bytes) };
+            // Validated once on loading; the immutable bytes and index never change.
+            rustybuzz::Face::from_slice(data, self.index).expect("validated font face")
+        })
+    }
+
+    fn plan(
+        &self,
+        direction: rustybuzz::Direction,
+        script: Option<rustybuzz::Script>,
+        language: Option<rustybuzz::Language>,
+        features: &[rustybuzz::Feature],
+    ) -> Arc<rustybuzz::ShapePlan> {
+        let mut plans = self.plans.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, plan)) = plans.iter().find(|((d, s, l, f), _)| {
+            *d == direction && *s == script && *l == language && f.as_slice() == features
+        }) {
+            return plan.clone();
+        }
+        let plan = Arc::new(rustybuzz::ShapePlan::new(
+            self.shaping(),
+            direction,
+            script,
+            language.as_ref(),
+            features,
+        ));
+        if plans.len() >= MAX_PLANS_PER_FACE {
+            plans.clear();
+        }
+        plans.push((
+            (direction, script, language, features.to_vec()),
+            plan.clone(),
+        ));
+        plan
     }
 
     fn covers(&self, text: &str) -> bool {
@@ -313,7 +382,7 @@ impl FontFace {
 
     pub fn lookup_glyph_index(&self, c: char) -> u16 {
         self.raster.as_ref().map_or_else(
-            || self.shaper().glyph_index(c).map_or(0, |g| g.0),
+            || self.shaping().glyph_index(c).map_or(0, |g| g.0),
             |raster| raster.lookup_glyph_index(c),
         )
     }
@@ -339,7 +408,7 @@ impl FontFace {
         if let Some(raster) = &self.raster {
             return raster.horizontal_line_metrics(size);
         }
-        let face = self.shaper();
+        let face = self.shaping();
         let scale = size / self.units_per_em;
         let ascent = face.ascender() as f32 * scale;
         let descent = face.descender() as f32 * scale;
@@ -722,16 +791,139 @@ pub fn bundled_face() -> Arc<FontFace> {
     .clone()
 }
 
+/// The font-selection inputs of a style, interned to a small id so that
+/// selection and run caches never format or clone style data per lookup.
+struct FontKey {
+    family: crate::css::values::FontFamily,
+    weight: u32,
+    style: FontStyle,
+    typography: crate::style::typography::Typography,
+}
+
+impl FontKey {
+    /// Typography is deliberately not hashed: an explicit initial value
+    /// equals an absent one, so it is only compared within a bucket.
+    fn hash(style: &ComputedStyle) -> u64 {
+        let mut hasher = FastHasher::default();
+        style.font_family.hash(&mut hasher);
+        style.font_weight.0.to_bits().hash(&mut hasher);
+        style.font_style.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn matches(&self, style: &ComputedStyle) -> bool {
+        self.weight == style.font_weight.0.to_bits()
+            && self.style == style.font_style
+            && self.family == style.font_family
+            && self.typography == style.typography
+    }
+}
+
+/// Owned shaping-cache key; built only when a run is inserted.
+struct RunKey {
+    font: u32,
+    size: u32,
+    language: Option<String>,
+    bold: bool,
+    italic: bool,
+    writing_mode: crate::style::WritingMode,
+    text_orientation: crate::style::TextOrientation,
+    line_height: Option<u32>,
+    rtl: Option<bool>,
+    boundaries: Vec<usize>,
+    before: String,
+    after: String,
+    text: String,
+}
+
+impl RunKey {
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.language.as_ref().map_or(0, String::len)
+            + self.boundaries.len() * std::mem::size_of::<usize>()
+            + self.before.len()
+            + self.after.len()
+            + self.text.len()
+    }
+}
+
+/// Borrowed view of a [`RunKey`] so cache hits allocate nothing.
+#[derive(Hash)]
+struct RunQuery<'a> {
+    font: u32,
+    size: u32,
+    language: Option<&'a str>,
+    bold: bool,
+    italic: bool,
+    writing_mode: crate::style::WritingMode,
+    text_orientation: crate::style::TextOrientation,
+    line_height: Option<u32>,
+    rtl: Option<bool>,
+    boundaries: &'a [usize],
+    before: &'a str,
+    after: &'a str,
+    text: &'a str,
+}
+
+impl RunQuery<'_> {
+    fn hash(&self) -> u64 {
+        let mut hasher = FastHasher::default();
+        Hash::hash(self, &mut hasher);
+        hasher.finish()
+    }
+
+    fn matches(&self, key: &RunKey) -> bool {
+        self.font == key.font
+            && self.size == key.size
+            && self.language == key.language.as_deref()
+            && self.bold == key.bold
+            && self.italic == key.italic
+            && self.writing_mode == key.writing_mode
+            && self.text_orientation == key.text_orientation
+            && self.line_height == key.line_height
+            && self.rtl == key.rtl
+            && self.boundaries == key.boundaries.as_slice()
+            && self.before == key.before
+            && self.after == key.after
+            && self.text == key.text
+    }
+
+    fn to_key(&self) -> RunKey {
+        RunKey {
+            font: self.font,
+            size: self.size,
+            language: self.language.map(str::to_owned),
+            bold: self.bold,
+            italic: self.italic,
+            writing_mode: self.writing_mode,
+            text_orientation: self.text_orientation,
+            line_height: self.line_height,
+            rtl: self.rtl,
+            boundaries: self.boundaries.to_vec(),
+            before: self.before.to_owned(),
+            after: self.after.to_owned(),
+            text: self.text.to_owned(),
+        }
+    }
+}
+
+type RunBuckets = HashMap<u64, Vec<(RunKey, Arc<ShapedText>)>>;
+
 #[derive(Default)]
 struct Cache {
     faces: HashMap<fontdb::ID, Option<Arc<FontFace>>>,
-    requests: HashMap<String, Arc<FontFace>>,
+    font_keys: HashMap<u64, Vec<(FontKey, u32)>>,
+    font_key_count: u32,
+    requests: HashMap<u32, Arc<FontFace>>,
     sources: HashMap<String, Arc<[u8]>>,
     bytes: usize,
     glyphs: usize,
     messages: Vec<String>,
-    runs: HashMap<String, Arc<ShapedText>>,
+    runs: RunBuckets,
+    run_count: usize,
     run_bytes: usize,
+    previous_runs: RunBuckets,
+    previous_run_count: usize,
     missing: Vec<String>,
 }
 
@@ -877,6 +1069,11 @@ impl FontContext {
         }))
     }
 
+    /// Identical discovery, author faces and caches.
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     pub(crate) fn same_discovery(&self, other: &Self) -> bool {
         Arc::ptr_eq(
             &self.0.parent.as_ref().unwrap_or(self).0,
@@ -888,7 +1085,7 @@ impl FontContext {
     /// silently resolve a different weight or collection index.
     pub(crate) fn local(&self, name: &str) -> Option<Arc<FontFace>> {
         fn matches(face: &FontFace, name: &str) -> bool {
-            face.shaper()
+            face.shaping()
                 .names()
                 .into_iter()
                 .filter(|n| matches!(n.name_id, 4 | 6))
@@ -1171,16 +1368,52 @@ impl FontContext {
         }
     }
 
+    /// Interned id of `style`'s font-selection inputs, or `None` when they
+    /// are too large to cache or the bounded table is full.
+    fn font_key(&self, style: &ComputedStyle) -> Option<u32> {
+        let bytes = style.font_family.0.iter().try_fold(0usize, |sum, family| {
+            let (FamilyName::Named(name) | FamilyName::Generic(name)) = family;
+            sum.checked_add(name.len() + 4)
+        })?;
+        if bytes > 4096 || style.font_language.as_ref().is_some_and(|s| s.len() > 64) {
+            return None;
+        }
+        let hash = FontKey::hash(style);
+        let mut cache = self.0.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&(_, id)) = cache
+            .font_keys
+            .get(&hash)
+            .and_then(|bucket| bucket.iter().find(|(key, _)| key.matches(style)))
+        {
+            return Some(id);
+        }
+        if cache.font_key_count as usize >= MAX_FONT_KEYS {
+            return None;
+        }
+        let id = cache.font_key_count;
+        cache.font_key_count += 1;
+        cache.font_keys.entry(hash).or_default().push((
+            FontKey {
+                family: style.font_family.clone(),
+                weight: style.font_weight.0.to_bits(),
+                style: style.font_style,
+                typography: style.typography.clone(),
+            },
+            id,
+        ));
+        Some(id)
+    }
+
     pub fn select(&self, style: &ComputedStyle) -> Arc<FontFace> {
-        let key = style_key(style);
-        if let Some(key) = &key
+        let key = self.font_key(style);
+        if let Some(key) = key
             && let Some(face) = self
                 .0
                 .cache
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .requests
-                .get(key)
+                .get(&key)
         {
             return face.clone();
         }
@@ -1370,6 +1603,16 @@ impl FontContext {
         }
         let before = &before[before.char_indices().rev().nth(15).map_or(0, |(i, _)| i)..];
         let after = &after[..after.char_indices().nth(16).map_or(after.len(), |(i, _)| i)];
+        // Shaping reads only the nearest non-transparent context character on
+        // each side (joining) and whether pre-context is empty. Whitespace is
+        // never joining-transparent, so context beyond it cannot change the
+        // result; trimming it lets repeated words share cache entries.
+        let before = before
+            .rfind(char::is_whitespace)
+            .map_or(before, |i| &before[i..]);
+        let after = after.find(char::is_whitespace).map_or(after, |i| {
+            &after[..i + after[i..].chars().next().map_or(0, char::len_utf8)]
+        });
         let key = if text.len() <= 1024 && paint_boundaries.len() <= 32 {
             let line_height = if style.line_height == crate::css::values::LineHeight::Normal {
                 None
@@ -1381,20 +1624,29 @@ impl FontContext {
                         .to_bits(),
                 )
             };
-            style_key(style).map(|key| format!("{key}:{}:{:?}:{}:{}:{line_height:?}:{rtl:?}:{:?}:{:?}:{paint_boundaries:?}:{before:?}:{after:?}:{text}", style.font_size, style.font_language, style.bold, style.italic, style.writing_mode, style.text_orientation))
+            self.font_key(style).map(|font| RunQuery {
+                font,
+                size: style.font_size.to_bits(),
+                language: style.font_language.as_deref(),
+                bold: style.bold,
+                italic: style.italic,
+                writing_mode: style.writing_mode,
+                text_orientation: style.text_orientation,
+                line_height,
+                rtl,
+                boundaries: paint_boundaries,
+                before,
+                after,
+                text,
+            })
         } else {
             None
         };
-        if let Some(key) = &key
-            && let Some(run) = self
-                .0
-                .cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .runs
-                .get(key)
+        let hash = key.as_ref().map(RunQuery::hash);
+        if let (Some(key), Some(hash)) = (&key, hash)
+            && let Some(run) = self.cached_run(key, hash)
         {
-            return run.clone();
+            return run;
         }
         let primary = self.select(style);
         let size = if style.font_size.is_finite() {
@@ -1485,16 +1737,48 @@ impl FontContext {
             glyph.source = source.clone();
         }
         let result = Arc::new(result);
-        if let Some(key) = key {
-            let bytes =
-                key.len() + result.glyphs.len() * std::mem::size_of::<ShapedGlyph>() + text.len();
+        if let (Some(key), Some(hash)) = (key, hash) {
+            let key = key.to_key();
+            let bytes = key.bytes() + result.glyphs.len() * std::mem::size_of::<ShapedGlyph>();
             let mut cache = self.0.cache.lock().unwrap_or_else(|e| e.into_inner());
-            if cache.runs.len() < MAX_REQUESTS && cache.run_bytes + bytes <= 2_097_152 {
-                cache.run_bytes += bytes;
-                cache.runs.insert(key, result.clone());
-            }
+            Self::insert_run(&mut cache, hash, key, bytes, result.clone());
         }
         result
+    }
+
+    fn cached_run(&self, query: &RunQuery<'_>, hash: u64) -> Option<Arc<ShapedText>> {
+        let mut cache = self.0.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(run) = cache
+            .runs
+            .get(&hash)
+            .and_then(|bucket| bucket.iter().find(|(key, _)| query.matches(key)))
+        {
+            return Some(run.1.clone());
+        }
+        let bucket = cache.previous_runs.get_mut(&hash)?;
+        let index = bucket.iter().position(|(key, _)| query.matches(key))?;
+        let (key, run) = bucket.swap_remove(index);
+        if bucket.is_empty() {
+            cache.previous_runs.remove(&hash);
+        }
+        cache.previous_run_count -= 1;
+        let bytes = key.bytes() + run.glyphs.len() * std::mem::size_of::<ShapedGlyph>();
+        Self::insert_run(&mut cache, hash, key, bytes, run.clone());
+        Some(run)
+    }
+
+    fn insert_run(cache: &mut Cache, hash: u64, key: RunKey, bytes: usize, run: Arc<ShapedText>) {
+        if bytes > MAX_RUN_BYTES {
+            return;
+        }
+        if cache.run_count >= MAX_RUNS || cache.run_bytes + bytes > MAX_RUN_BYTES {
+            cache.previous_runs = std::mem::take(&mut cache.runs);
+            cache.previous_run_count = std::mem::take(&mut cache.run_count);
+            cache.run_bytes = 0;
+        }
+        cache.run_bytes += bytes;
+        cache.run_count += 1;
+        cache.runs.entry(hash).or_default().push((key, run));
     }
 }
 
@@ -1594,20 +1878,6 @@ impl fmt::Debug for ShapedGlyph {
     }
 }
 
-fn style_key(style: &ComputedStyle) -> Option<String> {
-    let bytes = style.font_family.0.iter().try_fold(0usize, |sum, family| {
-        let (FamilyName::Named(name) | FamilyName::Generic(name)) = family;
-        sum.checked_add(name.len() + 4)
-    })?;
-    if bytes > 4096 || style.font_language.as_ref().is_some_and(|s| s.len() > 64) {
-        return None;
-    }
-    Some(format!(
-        "{}:{}:{:?}:{:?}",
-        style.font_family, style.font_weight.0, style.font_style, style.typography
-    ))
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapedText {
     pub glyphs: Vec<ShapedGlyph>,
@@ -1690,17 +1960,24 @@ fn shape_face(
     paint_boundaries: &[usize],
     resolved_rtl: Option<bool>,
 ) -> ShapedText {
-    let mut shaper = face.shaper();
     let coordinates: Arc<[([u8; 4], f32)]> = face.coordinates(style).into();
-    shaper.set_variations(
-        &coordinates
-            .iter()
-            .map(|&(tag, value)| rustybuzz::Variation {
-                tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
-                value,
-            })
-            .collect::<Vec<_>>(),
-    );
+    let varied;
+    let shaper = if coordinates.is_empty() {
+        face.shaping()
+    } else {
+        let mut instance = face.shaper();
+        instance.set_variations(
+            &coordinates
+                .iter()
+                .map(|&(tag, value)| rustybuzz::Variation {
+                    tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
+                    value,
+                })
+                .collect::<Vec<_>>(),
+        );
+        varied = instance;
+        &varied
+    };
     let mut buffer = UnicodeBuffer::new();
     for (offset, c) in text.char_indices() {
         if paint_boundaries.contains(&(base + offset))
@@ -1803,7 +2080,19 @@ fn shape_face(
             }
         }
     }
-    let output = rustybuzz::shape(&shaper, &features, buffer);
+    let output = if coordinates.is_empty() {
+        buffer.guess_segment_properties();
+        let plan = face.plan(
+            buffer.direction(),
+            // `rustybuzz::shape` plans an undetected script as `None`.
+            Some(buffer.script()).filter(|&s| s != rustybuzz::script::UNKNOWN),
+            buffer.language(),
+            &features,
+        );
+        rustybuzz::shape_with_plan(shaper, &plan, buffer)
+    } else {
+        rustybuzz::shape(shaper, &features, buffer)
+    };
     if upright
         && style.text_orientation == crate::style::TextOrientation::Mixed
         && text.chars().all(|c| {

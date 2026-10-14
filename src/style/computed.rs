@@ -40,7 +40,7 @@ pub enum UnicodeBidi {
     Plaintext,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum WritingMode {
     #[default]
     HorizontalTb,
@@ -59,7 +59,7 @@ impl WritingMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextOrientation {
     #[default]
     Mixed,
@@ -598,7 +598,9 @@ pub struct ComputedStyle {
     pub specified_colors: BTreeMap<String, Color>,
     /// Case-sensitive names and computed component tokens. `None` is the
     /// guaranteed-invalid value; absence has the same substitution semantics.
-    pub custom_properties: BTreeMap<String, Option<Arc<[TokenKind]>>>,
+    /// Shared with the parent when an element declares no custom properties,
+    /// so inheritance and style clones stay O(1).
+    pub custom_properties: Arc<BTreeMap<String, Option<Arc<[TokenKind]>>>>,
     pub display: Display,
     pub position: Position,
     pub float: Float,
@@ -705,7 +707,7 @@ impl Default for ComputedStyle {
             specified_lengths: BTreeMap::new(),
             specified_margins: BTreeMap::new(),
             specified_colors: BTreeMap::new(),
-            custom_properties: BTreeMap::new(),
+            custom_properties: Arc::default(),
             display: Display::Inline,
             position: Position::Static,
             float: Float::None,
@@ -852,12 +854,29 @@ impl ComputedStyle {
 
 #[derive(Clone, Debug)]
 pub struct ComputedStyles {
-    pub(super) nodes: HashMap<NodeId, ComputedStyle>,
-    pub(super) pseudos: HashMap<(NodeId, PseudoElement), ComputedStyle>,
+    pub(super) nodes: Arc<HashMap<NodeId, ComputedStyle>>,
+    pub(super) pseudos: Arc<HashMap<(NodeId, PseudoElement), ComputedStyle>>,
     pub(crate) counter_styles: Arc<crate::css::counter_style::CounterStyles>,
+    /// Some element or pseudo-element declares an animation or transition.
+    pub(crate) motion: bool,
+    pub(crate) state_triggers: Arc<crate::css::selectors::StateTriggers>,
 }
 
 impl ComputedStyles {
+    pub(crate) fn has_motion(&self) -> bool {
+        self.motion
+    }
+
+    /// Whether an interaction-state change can alter these styles.
+    pub(crate) fn state_affected(
+        &self,
+        document: &crate::dom::Document,
+        old: &crate::css::selectors::InteractionState,
+        new: &crate::css::selectors::InteractionState,
+    ) -> bool {
+        self.state_triggers.affected(document, old, new)
+    }
+
     pub fn get(&self, node_id: NodeId) -> Option<&ComputedStyle> {
         self.nodes.get(&node_id)
     }

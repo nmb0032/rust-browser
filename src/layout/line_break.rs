@@ -69,7 +69,8 @@ fn han_or_kana(c: char) -> bool {
 }
 
 fn normalize(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(tokens.len());
+    let mut space: Option<(usize, f32)> = None;
     for token in tokens {
         let Token::Text(id, text, _, source) = token else {
             result.push(token);
@@ -91,9 +92,13 @@ fn normalize(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Token> {
                     c,
                     if c == '\t' && mode.preserves_spaces() {
                         0.0
+                    } else if let Some((_, width)) = space.filter(|&(owner, _)| owner == id) {
+                        width
                     } else {
-                        assembly.font.shape(&b.style, " ").width
-                            + b.style.typography.length(P::WordSpacing, b.style.font_size)
+                        let width = assembly.font.shape(&b.style, " ").width
+                            + b.style.typography.length(P::WordSpacing, b.style.font_size);
+                        space = Some((id, width));
+                        width
                     },
                     mode.preserves_spaces(),
                 ),
@@ -264,6 +269,9 @@ fn automatic_hyphens(tokens: Vec<Token>, assembly: &mut Assembly<'_>) -> Vec<Tok
 }
 
 fn same_font(a: &ComputedStyle, b: &ComputedStyle) -> bool {
+    if std::ptr::eq(a, b) {
+        return true;
+    }
     a.font_size == b.font_size
         && a.font_family == b.font_family
         && a.font_weight == b.font_weight
@@ -286,7 +294,7 @@ fn same_font(a: &ComputedStyle, b: &ComputedStyle) -> bool {
             crate::style::typography::Property::LineBreak,
         ]
         .into_iter()
-        .all(|p| a.typography.get(p) == b.typography.get(p))
+        .all(|p| a.typography.same(&b.typography, p))
 }
 
 fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: &mut Assembly<'_>) {
@@ -447,15 +455,25 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
             after,
             Some(level.is_rtl()),
         );
-        let mut run = shaped.as_ref().clone();
+        let run = shaped.as_ref();
         let original: std::sync::Arc<str> = std::sync::Arc::from(source.as_str());
-        for glyph in &mut run.glyphs {
-            glyph.cluster = map_start(glyph.cluster);
+        let mut widths = vec![0.0; positions.len()];
+        let mut glyphs = vec![Vec::new(); positions.len()];
+        let mut cluster_advance = vec![0.0; positions.len()];
+        let mut cluster_end = vec![0; positions.len()];
+        let mut unsafe_after = vec![false; positions.len()];
+        let mut spans: Vec<crate::text::SourceSpan> = Vec::new();
+        for shaped_glyph in &run.glyphs {
+            let cluster = map_start(shaped_glyph.cluster);
+            let first = positions.partition_point(|p| p.1 < cluster);
+            if first >= positions.len() {
+                continue;
+            }
+            let mut glyph = shaped_glyph.clone();
+            glyph.cluster = cluster;
             glyph.cluster_end = map_end(glyph.cluster_end);
-            glyph.source = original.clone();
-            let first = positions.partition_point(|p| p.1 < glyph.cluster);
             let end = positions.partition_point(|p| p.1 < glyph.cluster_end);
-            let mut spans: Vec<crate::text::SourceSpan> = Vec::new();
+            spans.clear();
             for span in source_positions[first..end].iter().flatten() {
                 if let Some(last) = spans.last_mut()
                     && last.node_id == span.node_id
@@ -467,21 +485,18 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
                     spans.push(span.clone());
                 }
             }
-            glyph.source_spans = spans.into();
-        }
-        let mut widths = vec![0.0; positions.len()];
-        let mut glyphs = vec![Vec::new(); positions.len()];
-        let mut cluster_advance = vec![0.0; positions.len()];
-        let mut cluster_end = vec![0; positions.len()];
-        let mut unsafe_after = vec![false; positions.len()];
-        for glyph in &run.glyphs {
-            let first = positions.partition_point(|p| p.1 < glyph.cluster);
-            if first >= positions.len() {
-                continue;
+            glyph.source_spans = spans.as_slice().into();
+            // Glyphs address their first DOM source span when one exists.
+            if let Some(span) = spans.first() {
+                glyph.source = span.source.clone();
+                glyph.cluster = span.start;
+                glyph.cluster_end = span.end;
+            } else {
+                glyph.source = original.clone();
             }
             cluster_advance[first] += glyph.advance;
-            cluster_end[first] = positions.partition_point(|p| p.1 < glyph.cluster_end);
-            glyphs[first].push(glyph.clone());
+            cluster_end[first] = end;
+            glyphs[first].push(glyph);
         }
         for first in 0..positions.len() {
             if cluster_end[first] == 0 {
@@ -604,11 +619,6 @@ fn shape_tokens(tokens: &mut [Token], levels: &[unicode_bidi::Level], assembly: 
                 .into_iter()
                 .map(|mut g| {
                     g.x -= group_origin + logical_x;
-                    if let Some(span) = g.source_spans.first() {
-                        g.source = span.source.clone();
-                        g.cluster = span.start;
-                        g.cluster_end = span.end;
-                    }
                     g
                 })
                 .collect();
@@ -947,6 +957,7 @@ impl Measure {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit(
     tokens: &[Token],
     levels: &[unicode_bidi::Level],
@@ -954,6 +965,7 @@ fn emit(
     soft: bool,
     tab: f64,
     half_ch: f64,
+    reuse_shaping: bool,
     assembly: &mut Assembly<'_>,
 ) {
     let mut tokens = tokens.to_vec();
@@ -966,7 +978,9 @@ fn emit(
     } else {
         None
     };
-    reshape(&mut tokens, levels, hyphen_at, assembly);
+    if hyphen_at.is_some() || !reuse_shaping {
+        reshape(&mut tokens, levels, hyphen_at, assembly);
+    }
     let saved_align = assembly.align;
     assembly.align = if soft {
         saved_align
@@ -1125,6 +1139,26 @@ fn reshape(
     shape_tokens(tokens, levels, assembly);
 }
 
+/// Whether a line's paragraph-level shaping equals re-shaping it alone. True
+/// when both edges sit on whitespace (only bidi controls between), so runs
+/// never cross the edge and the dropped context lies beyond whitespace, which
+/// is neither joining-transparent nor case-ignorable.
+fn reusable_shaping(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    line_levels: &[unicode_bidi::Level],
+    levels: &[unicode_bidi::Level],
+) -> bool {
+    let at_space = |mut iter: std::iter::Rev<std::slice::Iter<'_, Token>>| {
+        iter.find(|t| !matches!(t, Token::Begin(_) | Token::End(_)))
+            .is_none_or(|t| matches!(t, Token::Space(..)))
+    };
+    line_levels == &levels[start..end]
+        && at_space(tokens[..start].iter().rev())
+        && (end == tokens.len() || at_space(tokens[..end].iter().rev()))
+}
+
 pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut Assembly<'_>) {
     let mut tokens = normalize(tokens, assembly);
     bound_paragraph(&mut tokens, assembly);
@@ -1237,13 +1271,16 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
             if block.unicode_bidi == crate::style::UnicodeBidi::Plaintext {
                 assembly.direction = paragraph.direction(&bidi, start);
             }
+            let line_levels = paragraph.levels(&bidi, start..measured_to, true);
+            let reuse = reusable_shaping(&tokens, start, measured_to, &line_levels, &levels);
             emit(
                 &tokens[start..measured_to],
-                &paragraph.levels(&bidi, start..measured_to, true),
+                &line_levels,
                 last,
                 true,
                 tab,
                 half_ch,
+                reuse,
                 assembly,
             );
             start = measured_to;
@@ -1271,13 +1308,16 @@ pub(super) fn layout(tokens: Vec<Token>, block: &ComputedStyle, assembly: &mut A
             if block.unicode_bidi == crate::style::UnicodeBidi::Plaintext {
                 assembly.direction = paragraph.direction(&bidi, start);
             }
+            let line_levels = paragraph.levels(&bidi, start..boundary.end, true);
+            let reuse = reusable_shaping(&tokens, start, boundary.end, &line_levels, &levels);
             emit(
                 &tokens[start..boundary.end],
-                &paragraph.levels(&bidi, start..boundary.end, true),
+                &line_levels,
                 boundary,
                 false,
                 tab,
                 half_ch,
+                reuse,
                 assembly,
             );
             start = boundary.end;

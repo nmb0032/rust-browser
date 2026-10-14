@@ -870,7 +870,8 @@ fn cache_caps_and_unsupported_outline_format_fail_explicitly() {
         );
     }
     let cache = fonts.0.cache.lock().unwrap();
-    assert!(cache.runs.len() <= MAX_REQUESTS && cache.run_bytes <= 2_097_152);
+    assert!(cache.run_count <= MAX_RUNS && cache.run_bytes <= MAX_RUN_BYTES);
+    assert!(cache.previous_run_count <= MAX_RUNS);
     assert!(
         cache.faces.len() <= MAX_FACES
             && cache.bytes <= MAX_SOURCE_BYTES

@@ -228,6 +228,12 @@ impl PartialEq for Motion {
     }
 }
 impl Motion {
+    /// Declares a named animation or a positive transition duration; otherwise
+    /// the animation engine never creates a target for the element.
+    pub(crate) fn active(&self) -> bool {
+        matches!(self.0.get(&Property::Name), Some(Value::AnimationNames(names)) if names.iter().any(|n| matches!(n, AnimationName::Name(_))))
+            || matches!(self.0.get(&Property::TransitionDuration), Some(Value::Times(v)) if v.iter().any(|t| t.is_some_and(|t| t > 0.0)))
+    }
     pub fn get(&self, p: Property) -> Value {
         self.0.get(&p).cloned().unwrap_or_else(|| initial(p))
     }

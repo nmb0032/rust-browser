@@ -395,7 +395,7 @@ pub fn format_style(document: &Document, styles: &crate::style::ComputedStyles) 
         }
         writeln!(output, "  background-color: {:?}", color(style.background)).unwrap();
         writeln!(output, "  background-image: {:?}", style.background_image).unwrap();
-        for (name, value) in &style.custom_properties {
+        for (name, value) in style.custom_properties.iter() {
             let preview_name: String = name.chars().take(80).collect();
             let name = if name.chars().count() > 80 {
                 format!("{preview_name}…")

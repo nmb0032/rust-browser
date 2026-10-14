@@ -46,7 +46,7 @@ fn clean_style(source: &str) -> ComputedStyle {
 }
 
 fn without_custom(mut style: ComputedStyle) -> ComputedStyle {
-    style.custom_properties.clear();
+    style.custom_properties = Default::default();
     style
 }
 

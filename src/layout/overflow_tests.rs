@@ -441,21 +441,21 @@ fn scrollbar_tracks_drag_and_hit_the_same_clipped_context_order() {
     let p = id(&doc, "p");
     let bars = tree.scrollbars();
     assert_eq!(bars.len(), 2);
-    let vertical = *bars.iter().find(|b| b.vertical).unwrap();
+    let vertical = bars.iter().find(|b| b.vertical).unwrap();
     let x = vertical.track.x + 2.0;
     assert!(tree.scrollbar_at(x, 30.0).is_none()); // High z context covers it.
     assert_eq!(pixels(&tree, 1.0, false)[30 * 300 + x as usize], 0x0000ff);
     let y = vertical.track.y + vertical.track.height - 2.0;
     let bar = tree.scrollbar_at(x, y).unwrap();
     assert_eq!(tree.hit_test(x, y), Some(p));
-    let grab = tree.scrollbar_grab(bar, x, y);
-    assert!(tree.drag_scrollbar(bar, x, y, grab));
+    let grab = tree.scrollbar_grab(&bar, x, y);
+    assert!(tree.drag_scrollbar(&bar, x, y, grab));
     assert_eq!(
         tree.scroll_offset(p).y,
         tree.scroll_container(p).unwrap().range.max.y
     );
-    assert!(!tree.drag_scrollbar(bar, x, 5000.0, grab)); // Already bounded at end.
-    assert!(tree.drag_scrollbar(bar, x, -5000.0, grab));
+    assert!(!tree.drag_scrollbar(&bar, x, 5000.0, grab)); // Already bounded at end.
+    assert!(tree.drag_scrollbar(&bar, x, -5000.0, grab));
     assert_eq!(tree.scroll_offset(p).y, 0.0);
     let (doc, mut tree) = page(
         "#outer{height:30px;overflow:hidden}#p{height:60px;width:100px;overflow:scroll}#content{height:200px}",
@@ -724,7 +724,12 @@ fn pseudo_scroll_identity_is_separate_and_clamps_even_with_same_origin_text_boxe
     let mut tree = frame.layout_with_container_queries(&font);
     assert!(tree.scroll_wheel(35.0, 30.0, ScrollOffset { x: 20.0, y: 0.0 }));
     assert_eq!(tree.scroll_offset(owner), ScrollOffset::default());
-    let bar = *tree.scrollbars().iter().find(|b| !b.vertical).unwrap();
+    let bar = tree
+        .scrollbars()
+        .iter()
+        .find(|b| !b.vertical)
+        .unwrap()
+        .clone();
     assert!(bar.thumb.x > bar.track.x);
     tree.set_scroll_offset(owner, ScrollOffset { x: 30.0, y: 40.0 });
     frame.retain_scroll_state(&tree);
@@ -733,7 +738,12 @@ fn pseudo_scroll_identity_is_separate_and_clamps_even_with_same_origin_text_boxe
         rebuilt.scroll_offset(owner),
         ScrollOffset { x: 30.0, y: 40.0 }
     );
-    let bar = *rebuilt.scrollbars().iter().find(|b| !b.vertical).unwrap();
+    let bar = rebuilt
+        .scrollbars()
+        .iter()
+        .find(|b| !b.vertical)
+        .unwrap()
+        .clone();
     assert!(bar.thumb.x > bar.track.x);
     frame.set_media_environment(MediaEnvironment::new(240.0, 200.0));
     assert!(
@@ -744,7 +754,12 @@ fn pseudo_scroll_identity_is_separate_and_clamps_even_with_same_origin_text_boxe
     );
     frame.set_media_environment(MediaEnvironment::new(300.0, 200.0));
     let restored = frame.layout_with_container_queries(&font);
-    let bar = *restored.scrollbars().iter().find(|b| !b.vertical).unwrap();
+    let bar = restored
+        .scrollbars()
+        .iter()
+        .find(|b| !b.vertical)
+        .unwrap()
+        .clone();
     assert_eq!(bar.thumb.x, bar.track.x);
 }
 

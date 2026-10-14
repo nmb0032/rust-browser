@@ -39,6 +39,7 @@ mod typography_tests;
 mod writing;
 
 pub use geometry::{ActualRect, Rect};
+pub(crate) use overflow::SpatialStates;
 pub use overflow::{
     ClipRect, ScrollBehavior, ScrollContainer, ScrollOffset, ScrollRange, ScrollState, Scrollbar,
     SpatialState,

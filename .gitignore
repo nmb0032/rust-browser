@@ -1,3 +1,5 @@
 /target
 /fuzz/target
 /fuzz/artifacts
+/tests/fixtures/perf/*
+!/tests/fixtures/perf/README.md

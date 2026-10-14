@@ -114,13 +114,13 @@ impl LineHeight {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FamilyName {
     Generic(String),
     Named(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FontFamily(pub Vec<FamilyName>);
 
 impl Default for FontFamily {

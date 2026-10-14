@@ -660,6 +660,20 @@ pub(super) fn intrinsic_content(
     if b.style.container_type != crate::css::container::ContainerType::Normal {
         return (0.0, 0.0);
     }
+    if let Some(widths) = super::tree::IntrinsicMemo::get(b, reference) {
+        return widths;
+    }
+    let widths = intrinsic_content_uncached(b, reference, font, diagnostics);
+    super::tree::IntrinsicMemo::set(b, reference, widths);
+    widths
+}
+
+fn intrinsic_content_uncached(
+    b: &LayoutBox,
+    reference: f32,
+    font: &crate::text::FontContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (f32, f32) {
     if b.style.display.is_flex() {
         return super::flex::intrinsic_widths(b, reference, font, diagnostics);
     }

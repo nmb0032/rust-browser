@@ -164,11 +164,18 @@ fn collect(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let id = boxes.len();
-    let mut projected = layout.style.as_ref().clone();
-    projected.writing_mode = mode;
-    let mut flow_style = super::writing::inline_style(&projected);
-    flow_style.writing_mode = layout.style.writing_mode;
-    let style = &flow_style;
+    let flow_style;
+    // A horizontal projection leaves the style unchanged.
+    let style = if mode.vertical() {
+        let mut projected = layout.style.as_ref().clone();
+        projected.writing_mode = mode;
+        let mut projected = super::writing::inline_style(&projected);
+        projected.writing_mode = layout.style.writing_mode;
+        flow_style = projected;
+        &flow_style
+    } else {
+        layout.style.as_ref()
+    };
     let metrics = font_metrics(font, style, layout.node_id, diagnostics);
     let is_inline = layout.kind == BoxKind::Inline;
     if is_inline

@@ -1003,14 +1003,35 @@ fn resolve_internal_fonts<const MODE: u8>(
             counter_styles.insert(c.clone());
         }
     }
+    let mut state_triggers = css::selectors::StateTriggers::default();
+    for sheet in std::iter::once(user_agent)
+        .chain(user_rules.iter())
+        .chain(author_rules.iter())
+    {
+        for rule in &sheet.rules {
+            for styled in &rule.selectors {
+                state_triggers.add(&styled.selector);
+            }
+            for scope in &rule.scopes {
+                for selector in scope.roots.iter().flatten().chain(&scope.limits) {
+                    state_triggers.add(selector);
+                }
+            }
+        }
+    }
     StyleResolution {
         styles: ComputedStyles {
+            state_triggers: Arc::new(state_triggers),
             counter_styles: Arc::new(counter_styles),
-            pseudos,
-            nodes: nodes
-                .into_iter()
-                .map(|(id, node)| (id, node.style))
-                .collect(),
+            motion: nodes.values().any(|node| node.style.motion.active())
+                || pseudos.values().any(|style| style.motion.active()),
+            pseudos: Arc::new(pseudos),
+            nodes: Arc::new(
+                nodes
+                    .into_iter()
+                    .map(|(id, node)| (id, node.style))
+                    .collect(),
+            ),
         },
         stylesheets,
     }
