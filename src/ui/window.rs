@@ -79,6 +79,8 @@ pub fn run_with_view(
         animation_deadline: None,
         page_zoom,
         pointer_dirty: false,
+        scroll_dirty: false,
+        cursor_icon: None,
         pending_snapshot: None,
         next_snapshot_at: None,
         snapshot_forced: false,
@@ -123,6 +125,11 @@ struct BrowserWindow {
     /// Pointer moved since the last flush; hover and drags apply once per
     /// event-loop turn rather than once per `CursorMoved`.
     pointer_dirty: bool,
+    /// The retained layout scrolled since the last flush; the display list,
+    /// hover and cursor catch up once per event-loop turn, not per wheel event.
+    scroll_dirty: bool,
+    /// Last icon sent to the window, so unchanged cursors skip the platform call.
+    cursor_icon: Option<CursorIcon>,
     /// Latest loader snapshot not yet rendered; intermediate ones are dropped.
     pending_snapshot: Option<(Arc<Frame>, bool)>,
     /// Earliest time the next loader snapshot may be rendered.
@@ -390,11 +397,10 @@ impl BrowserWindow {
             );
         }
         self.update_title();
-        self.update_cursor();
         self.request_redraw();
         // Geometry-dependent hover rules can move the hit target; reconcile
         // against the new layout with a bounded number of follow-up renders.
-        self.reconcile_interaction(InteractionEvent::Pointer, true);
+        self.update_pointer_feedback(true);
         self.pump_render();
     }
 
@@ -418,7 +424,7 @@ impl BrowserWindow {
             Ok(true) => {
                 self.animation_deadline = None;
                 self.fragment_scroll_pending = false;
-                self.repaint_scrolled();
+                self.mark_scrolled();
             }
             Ok(false) => {}
             Err(error) => eprintln!("Keyboard scroll: {error}"),
@@ -448,6 +454,23 @@ impl BrowserWindow {
         Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
         if changed || sampled {
             self.fragment_scroll_pending = false;
+            self.mark_scrolled();
+        }
+    }
+
+    /// The retained layout scrolled. Scroll offsets and frame state follow
+    /// immediately (input and render submission read them); the repaint and
+    /// pointer feedback are deferred to `flush_scroll`, so a burst of wheel
+    /// events costs one display list and one hit test.
+    fn mark_scrolled(&mut self) {
+        self.scroll_offset = self.layout_tree.viewport_scroll().y;
+        Arc::make_mut(&mut self.frame).retain_scroll_state(&self.layout_tree);
+        self.scroll_dirty = true;
+        self.request_redraw();
+    }
+
+    fn flush_scroll(&mut self) {
+        if std::mem::take(&mut self.scroll_dirty) {
             self.repaint_scrolled();
         }
     }
@@ -456,8 +479,7 @@ impl BrowserWindow {
     /// tree unless scroll-driven effects need a restyle.
     fn repaint_scrolled(&mut self) {
         self.repaint_list();
-        self.update_cursor();
-        self.update_interaction(InteractionEvent::Pointer);
+        self.update_pointer_feedback(false);
         self.request_redraw();
     }
 
@@ -500,12 +522,18 @@ impl BrowserWindow {
             let Some((x, y)) = self.cursor else { return };
             let (x, y) = input::document_point(x, y, self.effective_scale(), 0.0);
             if self.layout_tree.drag_scrollbar(&bar, x, y, grab) {
-                self.repaint_scrolled();
+                self.mark_scrolled();
             }
             return;
         }
-        self.update_interaction(InteractionEvent::Pointer);
-        self.update_cursor();
+        self.update_pointer_feedback(false);
+    }
+
+    /// Apply all deferred input: scrolling first, so hover and cursor see
+    /// the latest offsets, then pointer movement.
+    fn flush_input(&mut self) {
+        self.flush_scroll();
+        self.flush_pointer();
     }
 
     fn request_redraw(&self) {
@@ -589,45 +617,66 @@ impl BrowserWindow {
         }
     }
 
-    fn cursor_link(&self) -> Result<Option<url::Url>, Box<dyn std::error::Error>> {
+    /// Node under the pointer in the presented layout.
+    fn cursor_hit(&self) -> Option<NodeId> {
         let (Some(_), Some((x, y))) = (&self.window, self.cursor) else {
-            return Ok(None);
+            return None;
         };
         let (x, y) = input::document_point(x, y, self.effective_scale(), 0.0);
-        let Some(node) = self.layout_tree.hit_test_viewport(x, y, self.scroll_offset) else {
-            return Ok(None);
-        };
-        link_url(&self.frame.document, node, &self.frame.url)
+        self.layout_tree.hit_test_viewport(x, y, self.scroll_offset)
     }
 
-    fn update_cursor(&self) {
-        if let Some(window) = &self.window {
-            window.set_cursor(if matches!(self.cursor_link(), Ok(Some(_))) {
-                CursorIcon::Pointer
-            } else {
-                CursorIcon::Default
-            });
+    fn link_at(&self, hit: Option<NodeId>) -> Result<Option<url::Url>, Box<dyn std::error::Error>> {
+        match hit {
+            Some(node) => link_url(&self.frame.document, node, &self.frame.url),
+            None => Ok(None),
         }
     }
 
-    fn update_interaction(&mut self, event: InteractionEvent) {
-        self.reconcile_interaction(event, false);
+    fn update_cursor(&mut self) {
+        let hit = self.cursor_hit();
+        self.update_cursor_at(hit);
     }
 
-    /// Hit-test the presented layout and request a render only if a state
-    /// selector can observe the change. `feedback` marks re-checks after a
-    /// render, which are capped so oscillating hover rules settle.
-    fn reconcile_interaction(&mut self, event: InteractionEvent, feedback: bool) {
-        let point = self
-            .window
-            .as_ref()
-            .zip(self.cursor)
-            .map(|(_, (x, y))| input::document_point(x, y, self.effective_scale(), 0.0));
-        let next = next_interaction_state(
+    fn update_cursor_at(&mut self, hit: Option<NodeId>) {
+        let icon = if matches!(self.link_at(hit), Ok(Some(_))) {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        };
+        if let Some(window) = &self.window
+            && self.cursor_icon != Some(icon)
+        {
+            window.set_cursor(icon);
+            self.cursor_icon = Some(icon);
+        }
+    }
+
+    /// Cursor icon and hover from a single hit test of the presented layout.
+    fn update_pointer_feedback(&mut self, feedback: bool) {
+        let hit = self.cursor_hit();
+        self.update_cursor_at(hit);
+        self.reconcile_interaction_at(InteractionEvent::Pointer, hit, feedback);
+    }
+
+    fn update_interaction(&mut self, event: InteractionEvent) {
+        let hit = self.cursor_hit();
+        self.reconcile_interaction_at(event, hit, false);
+    }
+
+    /// Apply `event` at the hit-tested node and request a render only if a
+    /// state selector can observe the change. `feedback` marks re-checks
+    /// after a render, which are capped so oscillating hover rules settle.
+    fn reconcile_interaction_at(
+        &mut self,
+        event: InteractionEvent,
+        hit: Option<NodeId>,
+        feedback: bool,
+    ) {
+        let next = next_interaction_state_at(
             &self.frame,
             &self.layout_tree,
-            point,
-            self.scroll_offset,
+            hit,
             event,
             &self.requested_interaction,
         );
@@ -721,6 +770,7 @@ fn update_interaction_for_window_scrolled(
 
 /// Pure input step: the state `event` at `point` produces from `current`,
 /// hit-testing `tree`, which must lay out `frame`'s document.
+#[cfg(test)]
 fn next_interaction_state(
     frame: &Frame,
     tree: &LayoutTree,
@@ -729,8 +779,19 @@ fn next_interaction_state(
     event: InteractionEvent,
     current: &InteractionState,
 ) -> InteractionState {
+    let hit = point.and_then(|(x, y)| tree.hit_test_viewport(x, y, scroll));
+    next_interaction_state_at(frame, tree, hit, event, current)
+}
+
+/// `next_interaction_state` for an already hit-tested node of `tree`.
+fn next_interaction_state_at(
+    frame: &Frame,
+    tree: &LayoutTree,
+    mut hit: Option<NodeId>,
+    event: InteractionEvent,
+    current: &InteractionState,
+) -> InteractionState {
     let mut state = current.clone();
-    let mut hit = point.and_then(|(x, y)| tree.hit_test_viewport(x, y, scroll));
     while let Some(id) = hit {
         let node = frame
             .document
@@ -947,6 +1008,7 @@ impl ApplicationHandler for BrowserWindow {
             .expect("failed to create software surface");
 
         self.window = Some(window);
+        self.cursor_icon = None;
         self.surface = Some(surface);
         self.resize_surface(size.width, size.height);
         self.update_title();
@@ -961,9 +1023,6 @@ impl ApplicationHandler for BrowserWindow {
         if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
             return;
         }
-        let __t = Instant::now();
-        let __name = format!("{:?}", event).chars().take(40).collect::<String>();
-        let _g = Guard(__t, __name);
 
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
@@ -983,7 +1042,7 @@ impl ApplicationHandler for BrowserWindow {
                 button: MouseButton::Left,
                 ..
             } => {
-                self.flush_pointer();
+                self.flush_input();
                 if state == ElementState::Released && self.scrollbar_drag.take().is_some() {
                     self.update_interaction(InteractionEvent::Pointer);
                     return;
@@ -1003,17 +1062,22 @@ impl ApplicationHandler for BrowserWindow {
                         self.scrollbar_drag = Some((bar.clone(), grab));
                         self.pressed_link = None;
                         if self.layout_tree.drag_scrollbar(&bar, x, y, grab) {
-                            self.repaint_scrolled();
+                            self.mark_scrolled();
                         }
                         return;
                     }
                 }
-                let link = self.cursor_link();
-                self.update_interaction(if state == ElementState::Pressed {
-                    InteractionEvent::Press
-                } else {
-                    InteractionEvent::Release
-                });
+                let hit = self.cursor_hit();
+                let link = self.link_at(hit);
+                self.reconcile_interaction_at(
+                    if state == ElementState::Pressed {
+                        InteractionEvent::Press
+                    } else {
+                        InteractionEvent::Release
+                    },
+                    hit,
+                    false,
+                );
                 match link {
                     Ok(link) if state == ElementState::Pressed => self.pressed_link = link,
                     Ok(Some(link)) if self.pressed_link.take().as_ref() == Some(&link) => {
@@ -1071,7 +1135,7 @@ impl ApplicationHandler for BrowserWindow {
                     || phase == winit::event::TouchPhase::Cancelled
                 {
                     self.layout_tree.finish_scroll_gesture();
-                    self.repaint_scrolled();
+                    self.mark_scrolled();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
@@ -1118,6 +1182,7 @@ impl ApplicationHandler for BrowserWindow {
                 }
             }
             WindowEvent::RedrawRequested => {
+                self.flush_scroll();
                 let scale_factor = self.effective_scale();
                 if let Err(error) = crate::display::ViewScale::new(
                     self.window.as_ref().expect("active window").scale_factor(),
@@ -1166,10 +1231,9 @@ impl ApplicationHandler for BrowserWindow {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let _g = Guard(Instant::now(), "about_to_wait".into());
         self.receive_render_results();
         self.receive_load_events();
-        self.flush_pointer();
+        self.flush_input();
         if (self.frame.animations().needs_tick() || self.frame.scroll_state().needs_tick())
             && self.window.is_some()
         {
@@ -1193,7 +1257,7 @@ impl ApplicationHandler for BrowserWindow {
                     if let Err(error) = self.layout_tree.sample_scrolling(seconds) {
                         eprintln!("Scroll clock: {error}");
                     }
-                    self.repaint_scrolled();
+                    self.mark_scrolled();
                 }
                 self.animation_deadline = if self.frame.animations().needs_tick()
                     || self.frame.scroll_state().has_animations()
@@ -1209,6 +1273,7 @@ impl ApplicationHandler for BrowserWindow {
         } else {
             self.animation_deadline = None;
         }
+        self.flush_scroll();
         // Fetch from the newest document state only: never while a loader
         // snapshot is still waiting to be rendered.
         if !self.is_loading
@@ -1830,6 +1895,3 @@ mod tests {
         assert_eq!(frame.media_environment().viewport_width, 500.0);
     }
 }
-
-struct Guard(Instant, String);
-impl Drop for Guard { fn drop(&mut self) { let e = self.0.elapsed(); if e.as_secs_f64() > 0.0005 { eprintln!("[tmp] {} {:.2}ms", self.1, e.as_secs_f64()*1e3); } } }
