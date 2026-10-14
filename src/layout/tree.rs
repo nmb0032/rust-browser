@@ -536,28 +536,21 @@ impl LayoutTree {
     }
 
     fn hit_test_point(&self, x: f32, y: f32, scroll: f32, document_x: bool) -> Option<NodeId> {
-        if let Some(bar) = self.scrollbar_at_in_space(x, y, scroll, document_x) {
+        let mut context = None;
+        if let Some(bar) = self.scrollbar_at_with(x, y, scroll, document_x, &mut context) {
             return Some(bar.node_id());
         }
-        let (decoration, content) = self.spatial_state_pair();
+        let context = context.unwrap_or_else(|| self.hit_context());
         for (layout_box, phase) in super::paint_order(self).into_iter().rev() {
             let Some(node_id) = layout_box.node_id else {
                 continue;
-            };
-            let state = if matches!(
-                phase,
-                super::PaintPhase::Content | super::PaintPhase::Text(_)
-            ) {
-                &content[&layout_box.box_id]
-            } else {
-                &decoration[&layout_box.box_id]
             };
             let x = x - if document_x && layout_box.coordinate_space == CoordinateSpace::Document {
                 self.viewport_scroll().x
             } else {
                 0.0
             };
-            if self.phase_hit(layout_box, phase, state, x, y, scroll) {
+            if self.phase_hit(layout_box, phase, &context, x, y, scroll) {
                 return Some(node_id);
             }
         }
@@ -568,7 +561,7 @@ impl LayoutTree {
         &self,
         layout_box: &LayoutBox,
         phase: super::PaintPhase,
-        state: &super::SpatialState,
+        context: &super::overflow::HitContext<'_>,
         x: f32,
         y: f32,
         scroll: f32,
@@ -581,9 +574,8 @@ impl LayoutTree {
                 && y >= rect.y
                 && y < rect.y + rect.height
         }
-        if !self.effect_hit(layout_box, x, y, scroll) {
-            return false;
-        }
+        // Cheap geometry first; the ancestor effect walk only for real hits.
+        let (viewport_x, viewport_y) = (x, y);
         let y = y + if layout_box.coordinate_space == CoordinateSpace::Document {
             scroll
         } else {
@@ -592,7 +584,7 @@ impl LayoutTree {
         if !x.is_finite() || !y.is_finite() {
             return false;
         }
-        let Some((x, y)) = state.point(x, y) else {
+        let Some((x, y)) = context.state(layout_box, phase).point(x, y) else {
             return false;
         };
         let text_hit = |fragment: &TextFragment| {
@@ -609,7 +601,7 @@ impl LayoutTree {
                         y,
                     )
         };
-        match phase {
+        let hit = match phase {
             super::PaintPhase::TableBorders => layout_box
                 .table_borders
                 .iter()
@@ -648,7 +640,8 @@ impl LayoutTree {
                         )
                     })
             }
-        }
+        };
+        hit && self.effect_hit(layout_box, viewport_x, viewport_y, scroll, context)
     }
 
     /// Bounds of all real boxes for a node, including block-in-inline

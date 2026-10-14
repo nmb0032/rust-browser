@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         BUDGET.as_secs()
     );
     println!(
-        "full = restyle-free layout+display list from a fresh snapshot; hover = interaction restyle + render; scroll = display list + raster at a new offset.\n"
+        "full = restyle-free layout+display list from a fresh snapshot; hover = interaction restyle + render; scroll = display list + raster at a new offset;\nhit test/wheel = UI-thread input handling on the retained layout.\n"
     );
 
     let mut pages = synthetic_pages()?;
@@ -155,7 +155,31 @@ fn report_page(name: &str, frame: Frame, load: Duration, font: &FontContext) {
         );
         started.elapsed()
     });
-    println!("  scroll repaint         {}\n", scroll.show());
+    println!("  scroll repaint         {}", scroll.show());
+
+    // UI-thread input: pointer hit test (hover/cursor) and a wheel step.
+    let (cx, cy) = (WIDTH as f32 * 0.3, HEIGHT as f32 * 0.4);
+    let hit = sample(|| {
+        let started = Instant::now();
+        black_box(scrolled.hit_test_viewport(cx, cy, scrolled.viewport_scroll().y));
+        started.elapsed()
+    });
+    println!("  pointer hit test       {}", hit.show());
+    let mut direction = 1.0;
+    let wheel = sample(|| {
+        direction = -direction;
+        let started = Instant::now();
+        black_box(scrolled.scroll_wheel(
+            cx,
+            cy,
+            ScrollOffset {
+                x: 0.0,
+                y: 120.0 * direction,
+            },
+        ));
+        started.elapsed()
+    });
+    println!("  wheel step             {}\n", wheel.show());
 }
 
 /// An early in-content element for hover: an `<a>` (sites style `a:hover`)

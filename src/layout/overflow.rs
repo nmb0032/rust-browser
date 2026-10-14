@@ -227,6 +227,24 @@ struct SpatialPrefix {
     containing_block: bool,
 }
 
+/// Per-tree state shared by every candidate of one hit test, so probing a
+/// paint item never rebuilds the box map or spatial states.
+pub(crate) struct HitContext<'a> {
+    map: Definitions<'a>,
+    pub(crate) decoration: SpatialStates,
+    pub(crate) content: SpatialStates,
+}
+
+impl HitContext<'_> {
+    pub(crate) fn state(&self, b: &LayoutBox, phase: PaintPhase) -> &SpatialState {
+        if matches!(phase, PaintPhase::Content | PaintPhase::Text(_)) {
+            &self.content[&b.box_id]
+        } else {
+            &self.decoration[&b.box_id]
+        }
+    }
+}
+
 /// Keyed by (box id, document coordinate space).
 #[derive(Default)]
 struct SpatialMemo(FastMap<(usize, bool), SpatialPrefix>);
@@ -474,6 +492,46 @@ impl LayoutTree {
         root_scroll: f32,
         document_x: bool,
     ) -> Option<Scrollbar> {
+        let mut context = None;
+        self.scrollbar_at_with(x, y, root_scroll, document_x, &mut context)
+    }
+
+    pub(crate) fn hit_context(&self) -> HitContext<'_> {
+        let map = definitions(&self.root);
+        let sticky = self.sticky_offsets(&map);
+        let mut memo = SpatialMemo::default();
+        let mut decoration = SpatialStates::default();
+        let mut content = SpatialStates::default();
+        decoration.reserve(map.len());
+        content.reserve(map.len());
+        for b in map.values() {
+            let reports = &mut Vec::new();
+            decoration.insert(
+                b.box_id,
+                self.spatial_metrics(b, false, &map, &sticky, &mut memo, reports),
+            );
+            content.insert(
+                b.box_id,
+                self.spatial_metrics(b, true, &map, &sticky, &mut memo, reports),
+            );
+        }
+        HitContext {
+            map,
+            decoration,
+            content,
+        }
+    }
+
+    /// `scrollbar_at_in_space`, building `context` only when a non-viewport
+    /// bar needs the paint-order probe; callers reuse it for their own hits.
+    pub(crate) fn scrollbar_at_with<'a>(
+        &'a self,
+        x: f32,
+        y: f32,
+        root_scroll: f32,
+        document_x: bool,
+        context: &mut Option<HitContext<'a>>,
+    ) -> Option<Scrollbar> {
         let bars = self.scrollbars();
         if bars.is_empty() {
             return None;
@@ -484,7 +542,10 @@ impl LayoutTree {
         {
             return Some(bar.clone());
         }
-        let (decoration, content) = self.spatial_state_pair();
+        if bars.iter().all(|bar| bar.viewport) {
+            return None;
+        }
+        let context = context.get_or_insert_with(|| self.hit_context());
         for (b, phase) in super::paint_order(self).into_iter().rev() {
             let x = x - if document_x && b.coordinate_space == CoordinateSpace::Document {
                 self.viewport_scroll().x
@@ -495,17 +556,12 @@ impl LayoutTree {
                 && let Some(bar) = bars.iter().rev().find(|bar| {
                     bar.owner == b.box_id
                         && bar.contains(x, y, root_scroll)
-                        && self.effect_hit(b, x, y, root_scroll)
+                        && self.effect_hit(b, x, y, root_scroll, context)
                 })
             {
                 return Some(bar.clone());
             }
-            let state = if matches!(phase, PaintPhase::Content | PaintPhase::Text(_)) {
-                &content[&b.box_id]
-            } else {
-                &decoration[&b.box_id]
-            };
-            if b.node_id.is_some() && self.phase_hit(b, phase, state, x, y, root_scroll) {
+            if b.node_id.is_some() && self.phase_hit(b, phase, context, x, y, root_scroll) {
                 return None;
             }
         }
@@ -719,25 +775,8 @@ impl LayoutTree {
     /// `(decoration, content)` states, i.e. `spatial_states(false)` and
     /// `spatial_states(true)`, sharing one ancestry walk and prefix memo.
     pub(crate) fn spatial_state_pair(&self) -> (SpatialStates, SpatialStates) {
-        let map = definitions(&self.root);
-        let sticky = self.sticky_offsets(&map);
-        let mut memo = SpatialMemo::default();
-        let mut decoration = SpatialStates::default();
-        let mut content = SpatialStates::default();
-        decoration.reserve(map.len());
-        content.reserve(map.len());
-        for b in map.values() {
-            let reports = &mut Vec::new();
-            decoration.insert(
-                b.box_id,
-                self.spatial_metrics(b, false, &map, &sticky, &mut memo, reports),
-            );
-            content.insert(
-                b.box_id,
-                self.spatial_metrics(b, true, &map, &sticky, &mut memo, reports),
-            );
-        }
-        (decoration, content)
+        let context = self.hit_context();
+        (context.decoration, context.content)
     }
 
     fn spatial(&self, b: &LayoutBox, own: bool, map: &Definitions<'_>) -> SpatialState {
@@ -1157,27 +1196,21 @@ impl LayoutTree {
     pub fn scroll_wheel(&mut self, x: f32, y: f32, delta: ScrollOffset) -> bool {
         let mut delta = self.valid_offset(delta, None);
         let mut changed = false;
-        let map = definitions(&self.root);
-        let (decoration, content) = self.spatial_state_pair();
-        let target = self
-            .scrollbar_at(x, y)
-            .map(|bar| map[&bar.owner])
-            .or_else(|| {
-                super::paint_order(self)
-                    .into_iter()
-                    .rev()
-                    .find_map(|(b, phase)| {
-                        let state = if matches!(phase, PaintPhase::Content | PaintPhase::Text(_)) {
-                            &content[&b.box_id]
-                        } else {
-                            &decoration[&b.box_id]
-                        };
-                        self.phase_hit(b, phase, state, x, y, self.viewport_scroll().y)
-                            .then_some(b)
-                    })
-            });
+        let mut context = None;
+        let root_scroll = self.viewport_scroll().y;
+        let bar = self.scrollbar_at_with(x, y, root_scroll, false, &mut context);
+        let context = context.unwrap_or_else(|| self.hit_context());
+        let target = bar.map(|bar| context.map[&bar.owner]).or_else(|| {
+            super::paint_order(self)
+                .into_iter()
+                .rev()
+                .find_map(|(b, phase)| {
+                    self.phase_hit(b, phase, &context, x, y, root_scroll)
+                        .then_some(b)
+                })
+        });
         let nodes: Vec<_> = target
-            .map(|b| lineage(b, &map, true))
+            .map(|b| lineage(b, &context.map, true))
             .unwrap_or_default()
             .into_iter()
             .rev()
@@ -1229,13 +1262,19 @@ impl LayoutTree {
         changed
     }
 
-    pub(super) fn effect_hit(&self, b: &LayoutBox, x: f32, y: f32, scroll: f32) -> bool {
+    pub(super) fn effect_hit(
+        &self,
+        b: &LayoutBox,
+        x: f32,
+        y: f32,
+        scroll: f32,
+        context: &HitContext<'_>,
+    ) -> bool {
         use crate::style::effects::{Keyword, Property, Value};
-        let map = definitions(&self.root);
         let mut candidate = Some(b.box_id);
-        while let Some(a) = candidate.and_then(|id| map.get(&id)) {
+        while let Some(a) = candidate.and_then(|id| context.map.get(&id)) {
             candidate = a.parent_box;
-            let state = self.spatial(a, false, &map);
+            let state = &context.decoration[&a.box_id];
             if state.hidden {
                 return false;
             }
