@@ -961,6 +961,9 @@ impl ApplicationHandler for BrowserWindow {
         if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
             return;
         }
+        let __t = Instant::now();
+        let __name = format!("{:?}", event).chars().take(40).collect::<String>();
+        let _g = Guard(__t, __name);
 
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
@@ -1163,6 +1166,7 @@ impl ApplicationHandler for BrowserWindow {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let _g = Guard(Instant::now(), "about_to_wait".into());
         self.receive_render_results();
         self.receive_load_events();
         self.flush_pointer();
@@ -1826,3 +1830,6 @@ mod tests {
         assert_eq!(frame.media_environment().viewport_width, 500.0);
     }
 }
+
+struct Guard(Instant, String);
+impl Drop for Guard { fn drop(&mut self) { let e = self.0.elapsed(); if e.as_secs_f64() > 0.0005 { eprintln!("[tmp] {} {:.2}ms", self.1, e.as_secs_f64()*1e3); } } }
